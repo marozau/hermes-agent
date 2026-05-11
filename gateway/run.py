@@ -12792,8 +12792,14 @@ class GatewayRunner:
                 # Strip ANSI escape codes for clean display
                 output = re.sub(r'\x1b\[[0-9;]*m', '', output).strip()
                 if output:
+                    # Show the *beginning* where errors appear (git, pip failures),
+                    # plus a small tail for the final status. The old behaviour
+                    # (output[-3500:]) showed irrelevant pip install progress.
                     if len(output) > 3500:
-                        output = "…" + output[-3500:]
+                        head = output[:3000]
+                        tail = output[-500:]
+                        # Only add tail if it's not already contained in head
+                        output = head + "\n…\n" + tail
                     if exit_code == 0:
                         msg = f"✅ Hermes update finished.\n\n```\n{output}\n```"
                     else:
