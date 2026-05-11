@@ -1,14 +1,21 @@
 """Mem0 memory plugin — MemoryProvider interface.
 
-Server-side LLM fact extraction, semantic search with reranking, and
-automatic deduplication via the Mem0 Platform API.
+Supports two modes, auto-detected:
 
-Original PR #2933 by kartik-mem0, adapted to MemoryProvider ABC.
+  Cloud mode — MEM0_API_KEY is set to a real Platform key;
+               uses MemoryClient → api.mem0.ai
+
+  Local mode — MEM0_API_KEY is empty or set to "local";
+               uses Memory.from_config() with local Qdrant +
+               bring-your-own LLM (DeepSeek) and embedder
+               (OpenRouter text-embedding-3-small, 1536-dim).
 
 Config via environment variables:
-  MEM0_API_KEY       — Mem0 Platform API key (required)
-  MEM0_USER_ID       — User identifier (default: hermes-user)
-  MEM0_AGENT_ID      — Agent identifier (default: hermes)
+
+  Cloud:  MEM0_API_KEY, MEM0_USER_ID, MEM0_AGENT_ID
+  Local:  DEEPSEEK_API_KEY, OPENROUTER_API_KEY, and
+          optional MEM0_LOCAL_QDRANT_PATH (default:
+          $HERMES_HOME/mem0_data)
 
 Or via $HERMES_HOME/mem0.json.
 """
@@ -40,11 +47,13 @@ _BREAKER_COOLDOWN_SECS = 120
 def _load_config() -> dict:
     """Load config from env vars, with $HERMES_HOME/mem0.json overrides.
 
-    Environment variables provide defaults; mem0.json (if present) overrides
-    individual keys.  This avoids a silent failure when the JSON file exists
-    but is missing fields like ``api_key`` that the user set in ``.env``.
+    Detects cloud vs local mode: if MEM0_API_KEY is empty or "local",
+    returns a local-mode config dict for Memory.from_config().
+    Otherwise returns a cloud-mode config dict for MemoryClient.
     """
     from hermes_constants import get_hermes_home
+
+    hermes_home = get_hermes_home()
 
     config = {
         "api_key": os.environ.get("MEM0_API_KEY", ""),
@@ -54,7 +63,7 @@ def _load_config() -> dict:
         "keyword_search": False,
     }
 
-    config_path = get_hermes_home() / "mem0.json"
+    config_path = hermes_home / "mem0.json"
     if config_path.exists():
         try:
             file_cfg = json.loads(config_path.read_text(encoding="utf-8"))
@@ -62,6 +71,63 @@ def _load_config() -> dict:
                            if v is not None and v != ""})
         except Exception:
             pass
+
+    # Detect mode
+    api_key = config.get("api_key", "")
+    if api_key and api_key != "local":
+        config["mode"] = "cloud"
+        return config
+
+    # Local mode — build Memory.from_config() compatible config
+    deepseek_key = os.environ.get("DEEPSEEK_API_KEY", "")
+    openrouter_key = os.environ.get("OPENROUTER_API_KEY", "")
+
+    # Prefer Qdrant server mode (MEM0_QDRANT_URL) over file mode
+    qdrant_url = os.environ.get("MEM0_QDRANT_URL", "")
+    if qdrant_url:
+        from urllib.parse import urlparse
+        parsed = urlparse(qdrant_url)
+        qdrant_host = parsed.hostname or "localhost"
+        qdrant_port = parsed.port or 6333
+        vector_config = {
+            "host": qdrant_host,
+            "port": qdrant_port,
+            "collection_name": "mem0",
+            "embedding_model_dims": 1536,
+        }
+    else:
+        qdrant_path = os.environ.get(
+            "MEM0_LOCAL_QDRANT_PATH",
+            str(hermes_home / "mem0_data"),
+        )
+        vector_config = {
+            "path": qdrant_path,
+            "collection_name": "mem0",
+            "embedding_model_dims": 1536,
+        }
+
+    config["mode"] = "local"
+    config["local_config"] = {
+        "vector_store": {
+            "provider": "qdrant",
+            "config": vector_config,
+        },
+        "llm": {
+            "provider": "deepseek",
+            "config": {
+                "model": "deepseek-chat",
+                "api_key": deepseek_key,
+            },
+        },
+        "embedder": {
+            "provider": "openai",
+            "config": {
+                "model": "text-embedding-3-small",
+                "api_key": openrouter_key,
+                "openai_base_url": "https://openrouter.ai/api/v1",
+            },
+        },
+    }
 
     return config
 
@@ -141,7 +207,15 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def is_available(self) -> bool:
         cfg = _load_config()
-        return bool(cfg.get("api_key"))
+        api_key = cfg.get("api_key", "")
+        if api_key and api_key != "local":
+            return True  # cloud mode — has real API key
+        # local mode — need LLM + embedder keys
+        local = cfg.get("local_config", {})
+        return bool(
+            local.get("llm", {}).get("config", {}).get("api_key") and
+            local.get("embedder", {}).get("config", {}).get("api_key")
+        )
 
     def save_config(self, values, hermes_home):
         """Write config to $HERMES_HOME/mem0.json."""
@@ -166,13 +240,21 @@ class Mem0MemoryProvider(MemoryProvider):
         ]
 
     def _get_client(self):
-        """Thread-safe client accessor with lazy initialization."""
+        """Thread-safe client accessor with lazy initialization.
+
+        Cloud mode: creates MemoryClient(api_key=...) for api.mem0.ai.
+        Local mode: creates Memory.from_config(local_config) for local Qdrant.
+        """
         with self._client_lock:
             if self._client is not None:
                 return self._client
             try:
-                from mem0 import MemoryClient
-                self._client = MemoryClient(api_key=self._api_key)
+                if self._mode == "local":
+                    from mem0 import Memory
+                    self._client = Memory.from_config(self._local_config)
+                else:
+                    from mem0 import MemoryClient
+                    self._client = MemoryClient(api_key=self._api_key)
                 return self._client
             except ImportError:
                 raise RuntimeError("mem0 package not installed. Run: pip install mem0ai")
@@ -202,10 +284,12 @@ class Mem0MemoryProvider(MemoryProvider):
 
     def initialize(self, session_id: str, **kwargs) -> None:
         self._config = _load_config()
+        self._mode = self._config.get("mode", "cloud")
         self._api_key = self._config.get("api_key", "")
+        self._local_config = self._config.get("local_config", {})
         # Prefer gateway-provided user_id for per-user memory scoping;
         # fall back to config/env default for CLI (single-user) sessions.
-        self._user_id = kwargs.get("user_id") or self._config.get("user_id", "hermes-user")
+        self._user_id = self._config.get("user_id") or kwargs.get("user_id") or self._config.get("user_id", "hermes-user")
         self._agent_id = self._config.get("agent_id", "hermes")
         self._rerank = self._config.get("rerank", True)
 
