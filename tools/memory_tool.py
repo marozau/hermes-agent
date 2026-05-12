@@ -264,6 +264,21 @@ class MemoryStore:
             self._set_entries(target, entries)
             self.save_to_disk(target)
 
+            # ── Story 1.5: Also write through canonical typed-memory writer ──
+            try:
+                from lib.hermes_memory import add_entry
+                memory_dir = get_memory_dir() / "typed"
+                source_label = "user-correction" if target == "user" else "self-derived"
+                entry_type = "preference" if target == "user" else "fact"
+                add_entry(
+                    type=entry_type,
+                    body=content,
+                    source=source_label,
+                    memory_dir=str(memory_dir),
+                )
+            except Exception:
+                pass  # Non-blocking: legacy path still works
+
         return self._success_response(target, "Entry added.")
 
     def replace(self, target: str, old_text: str, new_content: str) -> Dict[str, Any]:
