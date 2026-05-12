@@ -305,6 +305,13 @@ CREATE TRIGGER IF NOT EXISTS messages_fts_trigram_update AFTER UPDATE ON message
 END;
 """
 
+# Story 2.2: Raw-layer FTS5 for searchable immutable audit log (FR-10)
+RAW_FTS_SQL = """
+CREATE VIRTUAL TABLE IF NOT EXISTS raw_layer_fts USING fts5(
+    content
+);
+"""
+
 
 class SessionDB:
     """
@@ -674,6 +681,12 @@ class SessionDB:
             cursor.execute("SELECT * FROM messages_fts_trigram LIMIT 0")
         except sqlite3.OperationalError:
             cursor.executescript(FTS_TRIGRAM_SQL)
+
+        # Story 2.2: raw-layer FTS5 index
+        try:
+            cursor.execute("SELECT * FROM raw_layer_fts LIMIT 0")
+        except sqlite3.OperationalError:
+            cursor.executescript(RAW_FTS_SQL)
 
         self._conn.commit()
 
@@ -1877,6 +1890,81 @@ class SessionDB:
         """Count CJK characters in text."""
         return sum(1 for ch in text if cls._is_cjk_codepoint(ord(ch)))
 
+
+    # ── Story 2.2: raw-layer indexing (FR-10) ──
+
+    def index_raw_files(self, raw_dir: str = None) -> int:
+        """Index raw-layer JSONL files into raw_layer_fts (FR-10).
+
+        Scans <raw_dir>/<project>/<role>/*.jsonl and inserts each line's
+        content field into the FTS5 index. Skips already-indexed lines
+        via raw_index_state tracking table.
+
+        Returns the number of new lines indexed.
+        """
+        import json as _json
+        from pathlib import Path as _Path
+
+        raw_root = _Path(raw_dir) if raw_dir else _Path(
+            os.environ.get("HERMES_RAW_DIR",
+                          os.path.join(os.environ.get("HERMES_HOME",
+                                       os.path.join(os.path.expanduser("~"), ".hermes")),
+                                       "raw"))
+        )
+        if not raw_root.exists():
+            return 0
+
+        def _ensure_tracking(conn):
+            conn.execute("""
+                CREATE TABLE IF NOT EXISTS raw_index_state (
+                    raw_file TEXT NOT NULL,
+                    line_offset INTEGER NOT NULL,
+                    PRIMARY KEY (raw_file, line_offset)
+                )
+            """)
+        self._execute_write(_ensure_tracking)
+
+        indexed_count = 0
+        jsonl_files = sorted(raw_root.rglob("*.jsonl"))
+
+        for jsonl_path in jsonl_files:
+            rel_path = str(jsonl_path.relative_to(raw_root))
+            try:
+                lines = jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+            except (OSError, UnicodeDecodeError):
+                continue
+
+            def _index_lines(conn):
+                nonlocal indexed_count
+                for offset, line in enumerate(lines):
+                    if not line.strip():
+                        continue
+                    existing = conn.execute(
+                        "SELECT 1 FROM raw_index_state WHERE raw_file = ? AND line_offset = ?",
+                        (rel_path, offset)
+                    ).fetchone()
+                    if existing:
+                        continue
+                    try:
+                        obj = _json.loads(line)
+                        searchable = obj.get("content", "")
+                    except _json.JSONDecodeError:
+                        searchable = line
+                    conn.execute(
+                        "INSERT INTO raw_layer_fts(rowid, content) VALUES (NULL, ?)",
+                        (searchable,)
+                    )
+                    conn.execute(
+                        "INSERT OR IGNORE INTO raw_index_state(raw_file, line_offset) VALUES (?, ?)",
+                        (rel_path, offset)
+                    )
+                    indexed_count += 1
+
+            self._execute_write(_index_lines)
+
+        return indexed_count
+
+
     def search_messages(
         self,
         query: str,
@@ -1927,6 +2015,7 @@ class SessionDB:
         where_sql = " AND ".join(where_clauses)
         params.extend([limit, offset])
 
+        # Story 2.2: include raw-layer results via UNION ALL (FR-10)
         sql = f"""
             SELECT
                 m.id,
@@ -1943,9 +2032,28 @@ class SessionDB:
             JOIN messages m ON m.id = messages_fts.rowid
             JOIN sessions s ON s.id = m.session_id
             WHERE {where_sql}
+
+            UNION ALL
+
+            SELECT
+                NULL AS id,
+                NULL AS session_id,
+                'raw' AS role,
+                snippet(raw_layer_fts, 0, '>>>', '<<<', '...', 40) AS snippet,
+                raw_layer_fts.content,
+                NULL AS timestamp,
+                NULL AS tool_name,
+                'raw' AS source,
+                NULL AS model,
+                NULL AS session_started
+            FROM raw_layer_fts
+            WHERE raw_layer_fts MATCH ?
+
             ORDER BY rank
             LIMIT ? OFFSET ?
         """
+        params.append(query)  # raw layer query param
+        params.extend([limit, offset])  # raw layer LIMIT/OFFSET
 
         # CJK queries bypass the unicode61 FTS5 table.  The default tokenizer
         # splits CJK characters into individual tokens, so "大别山项目" becomes
