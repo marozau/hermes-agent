@@ -232,6 +232,25 @@ class MemoryStore:
         if scan_error:
             return {"success": False, "error": scan_error}
 
+        # P1 / NFR-16: also run the canonical typed-memory secret scanner BEFORE
+        # any disk write. The legacy scanner above and the typed scanner below
+        # have different rule sets; we honour the union, fail-closed.
+        try:
+            from lib.hermes_memory import _scan_for_secrets as _typed_secret_scan
+            typed_hit = _typed_secret_scan(content)
+            if typed_hit:
+                return {
+                    "success": False,
+                    "error": (
+                        f"Memory write aborted: body contains suspected secret "
+                        f"({typed_hit}). Remove the credential and retry."
+                    ),
+                }
+        except ImportError:
+            # lib.hermes_memory unavailable (e.g. during early bootstrap); fall
+            # back to the legacy scanner only.
+            _typed_secret_scan = None  # noqa: F841
+
         with self._file_lock(self._path_for(target)):
             # Re-read from disk under lock to pick up writes from other sessions
             self._reload_target(target)
@@ -264,20 +283,27 @@ class MemoryStore:
             self._set_entries(target, entries)
             self.save_to_disk(target)
 
-            # ── Story 1.5: Also write through canonical typed-memory writer ──
+            # ── Story 1.5: mirror to canonical typed-memory writer ──
+            # The pre-scan above already enforced NFR-16 across both scanners;
+            # any remaining failure here is a real bug worth surfacing, not a
+            # silent fallback (P1). Only ImportError is non-fatal — lib/ may
+            # not be reachable from every entrypoint yet.
+            # FR-3 follow-up: full removal of the legacy direct write
+            # (self._set_entries / save_to_disk) is tracked as a Story 1.5
+            # follow-up; for now we mirror.
             try:
-                from lib.hermes_memory import add_entry
-                memory_dir = get_memory_dir() / "typed"
+                from lib.hermes_memory import add_entry as _typed_add_entry
+            except ImportError:
+                _typed_add_entry = None
+            if _typed_add_entry is not None:
                 source_label = "user-correction" if target == "user" else "self-derived"
                 entry_type = "preference" if target == "user" else "fact"
-                add_entry(
+                _typed_add_entry(
                     type=entry_type,
                     body=content,
                     source=source_label,
-                    memory_dir=str(memory_dir),
+                    memory_dir=str(get_memory_dir() / "typed"),
                 )
-            except Exception:
-                pass  # Non-blocking: legacy path still works
 
         return self._success_response(target, "Entry added.")
 
