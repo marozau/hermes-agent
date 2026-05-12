@@ -2943,3 +2943,82 @@ class TestFTS5ToolCallMigration:
         finally:
             session_db.close()
 
+
+
+# =========================================================================
+# Epic 2 / Story 2.2 — raw-layer FTS5 UNION (P1/P2/P3/P4/P16/P20)
+# =========================================================================
+
+class TestEpic2RawLayerUnion:
+    """search_messages UNIONs sessions and raw-layer FTS5 rows."""
+
+    def test_session_only_search_still_works(self, db):
+        """P1: non-CJK search must not return [] due to param-count drift."""
+        db.create_session(session_id="s1", source="cli")
+        db.append_message("s1", role="user", content="single source test")
+        results = db.search_messages("single source test")
+        assert len(results) >= 1, "P1: non-CJK session-only search must succeed"
+
+    def test_search_results_carry_result_kind(self, db):
+        """P4 / Story 2.2 AC #2: every row carries result_kind discriminator."""
+        db.create_session(session_id="s1", source="cli")
+        db.append_message("s1", role="user", content="discriminator-test-phrase")
+        results = db.search_messages("discriminator-test-phrase")
+        assert all("result_kind" in r for r in results)
+        assert all(r["result_kind"] in ("session", "raw") for r in results)
+
+    def test_raw_layer_indexed_and_searchable(self, db, tmp_path, monkeypatch):
+        """P3 + P16: index_raw_files runs lazily, raw rows include traceability."""
+        import json
+        # Set up raw layer
+        raw_dir = tmp_path / "raw"
+        day_dir = raw_dir / "default" / "engineer"
+        day_dir.mkdir(parents=True)
+        jsonl = day_dir / "2026-05-12.jsonl"
+        jsonl.write_text(json.dumps({
+            "ts": "2026-05-12T10:00:00+00:00",
+            "entry_id": "01JTESTENTRY00000000000001",
+            "project": "default",
+            "role": "engineer",
+            "model": None,
+            "kind": "fact",
+            "content": "kubernetes-rawlayer-keyword",
+            "evidence": None,
+        }) + "\n", encoding="utf-8")
+        monkeypatch.setenv("HERMES_RAW_DIR", str(raw_dir))
+
+        # Force the rate-limited indexer to run by clearing the debounce flag
+        if hasattr(db, "_raw_index_last_run_s"):
+            db._raw_index_last_run_s = 0.0
+        n = db.index_raw_files()
+        assert n >= 1, "Should index the new raw line"
+
+        # Now search — must find via the raw branch with full traceability columns
+        results = db.search_messages("kubernetes-rawlayer-keyword")
+        raw_hits = [r for r in results if r.get("result_kind") == "raw"]
+        assert raw_hits, "P3: indexed raw line must be searchable via search_messages"
+        hit = raw_hits[0]
+        # P16: traceability columns
+        assert hit["entry_id"] == "01JTESTENTRY00000000000001"
+        assert hit["raw_file"] == "default/engineer/2026-05-12.jsonl"
+        assert hit["line_offset"] == 0
+        assert hit["source"] == "raw"
+
+    def test_index_raw_files_idempotent(self, db, tmp_path, monkeypatch):
+        """P19: re-indexing same raw_file does not duplicate FTS rows."""
+        import json
+        raw_dir = tmp_path / "raw"
+        day_dir = raw_dir / "default" / "engineer"
+        day_dir.mkdir(parents=True)
+        (day_dir / "2026-05-12.jsonl").write_text(json.dumps({
+            "ts": "2026-05-12T10:00:00+00:00",
+            "entry_id": "01JTESTDUPLICATETEST000001",
+            "project": "default", "role": "engineer", "model": None,
+            "kind": "fact", "content": "idempotent-marker-xyz", "evidence": None,
+        }) + "\n", encoding="utf-8")
+        monkeypatch.setenv("HERMES_RAW_DIR", str(raw_dir))
+
+        n1 = db.index_raw_files()
+        n2 = db.index_raw_files()
+        assert n1 == 1
+        assert n2 == 0, "Second index pass must skip already-tracked lines"

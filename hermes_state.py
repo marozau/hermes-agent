@@ -16,6 +16,7 @@ Key design decisions:
 
 import json
 import logging
+import os
 import random
 import re
 import sqlite3
@@ -305,10 +306,27 @@ CREATE TRIGGER IF NOT EXISTS messages_fts_trigram_update AFTER UPDATE ON message
 END;
 """
 
-# Story 2.2: Raw-layer FTS5 for searchable immutable audit log (FR-10)
+# Story 2.2: Raw-layer FTS5 for searchable immutable audit log (FR-10).
+# P16: include entry_id / raw_file / line_offset as UNINDEXED columns so a
+# search hit can be traced back to its source line.
 RAW_FTS_SQL = """
 CREATE VIRTUAL TABLE IF NOT EXISTS raw_layer_fts USING fts5(
-    content
+    content,
+    entry_id UNINDEXED,
+    raw_file UNINDEXED,
+    line_offset UNINDEXED
+);
+"""
+
+# P18: raw_index_state at init (was lazily created inside index_raw_files).
+# Includes a raw_root fingerprint so a HERMES_RAW_DIR swap forces re-indexing
+# instead of silently colliding on stale relative paths (E3 / P19).
+RAW_INDEX_STATE_SQL = """
+CREATE TABLE IF NOT EXISTS raw_index_state (
+    raw_root_fp TEXT NOT NULL,
+    raw_file TEXT NOT NULL,
+    line_offset INTEGER NOT NULL,
+    PRIMARY KEY (raw_root_fp, raw_file, line_offset)
 );
 """
 
@@ -682,11 +700,20 @@ class SessionDB:
         except sqlite3.OperationalError:
             cursor.executescript(FTS_TRIGRAM_SQL)
 
-        # Story 2.2: raw-layer FTS5 index
+        # Story 2.2: raw-layer FTS5 index.
+        # P16: schema includes entry_id / raw_file / line_offset. If a pre-P16
+        # version exists, drop and recreate (table is purely a derived index).
         try:
-            cursor.execute("SELECT * FROM raw_layer_fts LIMIT 0")
+            cursor.execute("SELECT entry_id FROM raw_layer_fts LIMIT 0")
         except sqlite3.OperationalError:
+            try:
+                cursor.execute("DROP TABLE IF EXISTS raw_layer_fts")
+            except sqlite3.OperationalError:
+                pass
             cursor.executescript(RAW_FTS_SQL)
+
+        # P18: raw_index_state DDL at init (was lazy inside index_raw_files).
+        cursor.executescript(RAW_INDEX_STATE_SQL)
 
         self._conn.commit()
 
@@ -1893,12 +1920,32 @@ class SessionDB:
 
     # ── Story 2.2: raw-layer indexing (FR-10) ──
 
+    _RAW_INDEX_DEBOUNCE_S = 60.0
+
+    def _maybe_index_raw_layer(self) -> None:
+        """P3: rate-limited opportunistic raw-layer indexing from search_messages.
+
+        Any failure is swallowed — search should never fail because the raw
+        layer is unreachable.
+        """
+        import time as _t
+        last = getattr(self, "_raw_index_last_run_s", 0.0)
+        now = _t.monotonic()
+        if (now - last) < self._RAW_INDEX_DEBOUNCE_S:
+            return
+        self._raw_index_last_run_s = now
+        try:
+            self.index_raw_files()
+        except Exception as e:
+            logger.debug("index_raw_files failed (non-fatal): %s", e)
+
     def index_raw_files(self, raw_dir: str = None) -> int:
         """Index raw-layer JSONL files into raw_layer_fts (FR-10).
 
         Scans <raw_dir>/<project>/<role>/*.jsonl and inserts each line's
-        content field into the FTS5 index. Skips already-indexed lines
-        via raw_index_state tracking table.
+        content field (plus traceability columns — P16) into the FTS5 index.
+        Skips already-indexed lines via raw_index_state, keyed by the
+        raw-root fingerprint (P19 — HERMES_RAW_DIR swap forces re-index).
 
         Returns the number of new lines indexed.
         """
@@ -1906,23 +1953,23 @@ class SessionDB:
         from pathlib import Path as _Path
 
         raw_root = _Path(raw_dir) if raw_dir else _Path(
-            os.environ.get("HERMES_RAW_DIR",
-                          os.path.join(os.environ.get("HERMES_HOME",
-                                       os.path.join(os.path.expanduser("~"), ".hermes")),
-                                       "raw"))
+            os.environ.get(
+                "HERMES_RAW_DIR",
+                os.path.join(
+                    os.environ.get("HERMES_HOME", os.path.join(os.path.expanduser("~"), ".hermes")),
+                    "raw",
+                ),
+            )
         )
         if not raw_root.exists():
             return 0
 
-        def _ensure_tracking(conn):
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS raw_index_state (
-                    raw_file TEXT NOT NULL,
-                    line_offset INTEGER NOT NULL,
-                    PRIMARY KEY (raw_file, line_offset)
-                )
-            """)
-        self._execute_write(_ensure_tracking)
+        # P19: raw_root fingerprint — absolute resolved path. A repointed
+        # HERMES_RAW_DIR yields a different fingerprint, so old rel_path
+        # tracking rows don't collide with new ones.
+        raw_root_fp = str(raw_root.resolve())
+
+        # P18: schema lives at init now (RAW_INDEX_STATE_SQL); no lazy DDL here.
 
         indexed_count = 0
         jsonl_files = sorted(raw_root.rglob("*.jsonl"))
@@ -1930,33 +1977,39 @@ class SessionDB:
         for jsonl_path in jsonl_files:
             rel_path = str(jsonl_path.relative_to(raw_root))
             try:
-                lines = jsonl_path.read_text(encoding="utf-8").strip().split("\n")
+                # Stream line-by-line; defer large-file streaming concern (D3)
+                # for now but at least don't .strip() the file globally.
+                lines = jsonl_path.read_text(encoding="utf-8").split("\n")
             except (OSError, UnicodeDecodeError):
                 continue
 
-            def _index_lines(conn):
+            # P17: pass loop-locals as default args to defeat late-binding closure.
+            def _index_lines(conn, _rel_path=rel_path, _lines=lines, _fp=raw_root_fp):
                 nonlocal indexed_count
-                for offset, line in enumerate(lines):
+                for offset, line in enumerate(_lines):
                     if not line.strip():
                         continue
                     existing = conn.execute(
-                        "SELECT 1 FROM raw_index_state WHERE raw_file = ? AND line_offset = ?",
-                        (rel_path, offset)
+                        "SELECT 1 FROM raw_index_state WHERE raw_root_fp = ? AND raw_file = ? AND line_offset = ?",
+                        (_fp, _rel_path, offset),
                     ).fetchone()
                     if existing:
                         continue
                     try:
                         obj = _json.loads(line)
                         searchable = obj.get("content", "")
+                        entry_id = obj.get("entry_id", "")
                     except _json.JSONDecodeError:
                         searchable = line
+                        entry_id = ""
                     conn.execute(
-                        "INSERT INTO raw_layer_fts(rowid, content) VALUES (NULL, ?)",
-                        (searchable,)
+                        "INSERT INTO raw_layer_fts(rowid, content, entry_id, raw_file, line_offset) "
+                        "VALUES (NULL, ?, ?, ?, ?)",
+                        (searchable, entry_id, _rel_path, offset),
                     )
                     conn.execute(
-                        "INSERT OR IGNORE INTO raw_index_state(raw_file, line_offset) VALUES (?, ?)",
-                        (rel_path, offset)
+                        "INSERT OR IGNORE INTO raw_index_state(raw_root_fp, raw_file, line_offset) VALUES (?, ?, ?)",
+                        (_fp, _rel_path, offset),
                     )
                     indexed_count += 1
 
@@ -1993,6 +2046,12 @@ class SessionDB:
         if not query:
             return []
 
+        # P3 / Story 2.2 AC #1: opportunistically index the raw layer so new
+        # raw lines become searchable. Rate-limited to once per 60s per
+        # SessionDB instance; any failure is non-fatal (search must still work
+        # even if the raw layer is unreachable).
+        self._maybe_index_raw_layer()
+
         # Build WHERE clauses dynamically
         where_clauses = ["messages_fts MATCH ?"]
         params: list = [query]
@@ -2013,21 +2072,38 @@ class SessionDB:
             params.extend(role_filter)
 
         where_sql = " AND ".join(where_clauses)
-        params.extend([limit, offset])
+        # P1: do NOT extend [limit, offset] here — the outer UNION has its own
+        # single trailing LIMIT/OFFSET below. The pre-UNION extend was left
+        # over from the pre-Epic-2 schema; combined with the post-UNION extend
+        # it produced 6 params for 4 placeholders, raising sqlite3.OperationalError
+        # which the caller's catch silently turned into [].
 
-        # Story 2.2: include raw-layer results via UNION ALL (FR-10)
+        # Story 2.2: include raw-layer results via UNION ALL (FR-10).
+        # P2: project a `rank` column in both branches so the outer ORDER BY
+        # works. messages_fts.rank exists natively; raw_layer_fts.rank too.
+        # P4 / Story 2.2 AC #2: the session branch's `source` is the
+        # originating channel (cli/telegram/...). Add a separate `result_kind`
+        # column ('session' | 'raw') that callers can use as the discriminator
+        # the AC asks for.
+        # P16: project entry_id / raw_file / line_offset for raw rows so
+        # callers can trace a hit back to its source line.
         sql = f"""
             SELECT
-                m.id,
-                m.session_id,
-                m.role,
+                m.id              AS id,
+                m.session_id      AS session_id,
+                m.role            AS role,
                 snippet(messages_fts, 0, '>>>', '<<<', '...', 40) AS snippet,
-                m.content,
-                m.timestamp,
-                m.tool_name,
-                s.source,
-                s.model,
-                s.started_at AS session_started
+                m.content         AS content,
+                m.timestamp       AS timestamp,
+                m.tool_name       AS tool_name,
+                s.source          AS source,
+                s.model           AS model,
+                s.started_at      AS session_started,
+                'session'         AS result_kind,
+                NULL              AS entry_id,
+                NULL              AS raw_file,
+                NULL              AS line_offset,
+                messages_fts.rank AS rank
             FROM messages_fts
             JOIN messages m ON m.id = messages_fts.rowid
             JOIN sessions s ON s.id = m.session_id
@@ -2036,24 +2112,29 @@ class SessionDB:
             UNION ALL
 
             SELECT
-                NULL AS id,
-                NULL AS session_id,
-                'raw' AS role,
+                NULL                  AS id,
+                NULL                  AS session_id,
+                'raw'                 AS role,
                 snippet(raw_layer_fts, 0, '>>>', '<<<', '...', 40) AS snippet,
-                raw_layer_fts.content,
-                NULL AS timestamp,
-                NULL AS tool_name,
-                'raw' AS source,
-                NULL AS model,
-                NULL AS session_started
+                raw_layer_fts.content AS content,
+                NULL                  AS timestamp,
+                NULL                  AS tool_name,
+                'raw'                 AS source,
+                NULL                  AS model,
+                NULL                  AS session_started,
+                'raw'                 AS result_kind,
+                raw_layer_fts.entry_id    AS entry_id,
+                raw_layer_fts.raw_file    AS raw_file,
+                raw_layer_fts.line_offset AS line_offset,
+                raw_layer_fts.rank    AS rank
             FROM raw_layer_fts
             WHERE raw_layer_fts MATCH ?
 
             ORDER BY rank
             LIMIT ? OFFSET ?
         """
-        params.append(query)  # raw layer query param
-        params.extend([limit, offset])  # raw layer LIMIT/OFFSET
+        params.append(query)              # raw layer MATCH ?
+        params.extend([limit, offset])    # outer LIMIT ? OFFSET ?
 
         # CJK queries bypass the unicode61 FTS5 table.  The default tokenizer
         # splits CJK characters into individual tokens, so "大别山项目" becomes
