@@ -354,7 +354,11 @@ class Mem0MemoryProvider(MemoryProvider):
         self._prefetch_thread.start()
 
     def sync_turn(self, user_content: str, assistant_content: str, *, session_id: str = "") -> None:
-        """Send the turn to Mem0 for server-side fact extraction (non-blocking)."""
+        """Send the turn to Mem0 for server-side fact extraction (non-blocking).
+        In local mode, this is a no-op — local Mem0 cannot infer facts from messages.
+        """
+        if self._mode == "local":
+            return
         if self._is_breaker_open():
             return
 
@@ -365,7 +369,7 @@ class Mem0MemoryProvider(MemoryProvider):
                     {"role": "user", "content": user_content},
                     {"role": "assistant", "content": assistant_content},
                 ]
-                client.add(messages, **self._write_filters())
+                client.add(messages, user_id=self._user_id, agent_id=self._agent_id)
                 self._record_success()
             except Exception as e:
                 self._record_failure()
@@ -433,7 +437,8 @@ class Mem0MemoryProvider(MemoryProvider):
             try:
                 client.add(
                     [{"role": "user", "content": conclusion}],
-                    **self._write_filters(),
+                    user_id=self._user_id,
+                    agent_id=self._agent_id,
                     infer=False,
                 )
                 self._record_success()
