@@ -944,6 +944,11 @@ def load_gateway_config() -> GatewayConfig:
                     if isinstance(ignored_threads, list):
                         ignored_threads = ",".join(str(v) for v in ignored_threads)
                     os.environ["TELEGRAM_IGNORED_THREADS"] = str(ignored_threads)
+                allowed_threads = telegram_cfg.get("allowed_threads")
+                if allowed_threads is not None and not os.getenv("TELEGRAM_ALLOWED_THREADS"):
+                    if isinstance(allowed_threads, list):
+                        allowed_threads = ",".join(str(v) for v in allowed_threads)
+                    os.environ["TELEGRAM_ALLOWED_THREADS"] = str(allowed_threads)
                 if "reactions" in telegram_cfg and not os.getenv("TELEGRAM_REACTIONS"):
                     os.environ["TELEGRAM_REACTIONS"] = str(telegram_cfg["reactions"]).lower()
                 if "proxy_url" in telegram_cfg and not os.getenv("TELEGRAM_PROXY"):

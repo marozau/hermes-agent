@@ -3555,6 +3555,35 @@ class TelegramAdapter(BasePlatformAdapter):
                 logger.warning("[%s] Ignoring invalid Telegram thread id: %r", self.name, value)
         return ignored
 
+    def _telegram_allowed_threads(self) -> set[int] | None:
+        """Return whitelisted thread IDs, or None if whitelist is not configured.
+
+        When set, only these threads are processed — takes precedence over ignored_threads.
+        Use ``0`` for the General topic (message_thread_id=None).
+        """
+        raw = self.config.extra.get("allowed_threads")
+        if raw is None:
+            raw = os.getenv("TELEGRAM_ALLOWED_THREADS", "")
+
+        if isinstance(raw, list):
+            values = raw
+        else:
+            raw_str = str(raw).strip()
+            if not raw_str:
+                return None  # not configured — fall through to ignored_threads
+            values = raw_str.split(",")
+
+        allowed: set[int] = set()
+        for value in values:
+            text = str(value).strip()
+            if not text:
+                continue
+            try:
+                allowed.add(int(text))
+            except (TypeError, ValueError):
+                logger.warning("[%s] Ignoring invalid Telegram allowed thread id: %r", self.name, value)
+        return allowed if allowed else None
+
     def _compile_mention_patterns(self) -> List[re.Pattern]:
         """Compile optional regex wake-word patterns for group triggers."""
         patterns = self.config.extra.get("mention_patterns")
@@ -3714,7 +3743,13 @@ class TelegramAdapter(BasePlatformAdapter):
         thread_id = getattr(message, "message_thread_id", None)
         if thread_id is not None:
             try:
-                if int(thread_id) in self._telegram_ignored_threads():
+                tid = int(thread_id)
+                # Whitelist takes precedence — if configured, only allow listed threads
+                allowed = self._telegram_allowed_threads()
+                if allowed is not None:
+                    if tid not in allowed:
+                        return False
+                elif tid in self._telegram_ignored_threads():
                     return False
             except (TypeError, ValueError):
                 logger.warning("[%s] Ignoring non-numeric Telegram message_thread_id: %r", self.name, thread_id)
