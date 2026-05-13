@@ -11789,6 +11789,22 @@ class AIAgent:
         _plugin_user_context = ""
         try:
             from hermes_cli.plugins import invoke_hook as _invoke_hook
+            # Build session_search_fn so preflight can FTS5-search trajectories (Epic 7)
+            _session_search_fn = None
+            try:
+                from tools.session_search_tool import session_search as _session_search_impl
+                _db = getattr(self, "_db", None)
+                _sid = getattr(self, "session_id", None)
+                def _search_wrapper(query: str, limit: int = 20):
+                    import json as _json
+                    raw = _session_search_impl(query, limit=limit, db=_db, current_session_id=_sid)
+                    try:
+                        return _json.loads(raw) if isinstance(raw, str) else raw
+                    except _json.JSONDecodeError:
+                        return []
+                _session_search_fn = _search_wrapper
+            except Exception:
+                pass
             _pre_results = _invoke_hook(
                 "pre_llm_call",
                 session_id=self.session_id,
@@ -11798,6 +11814,7 @@ class AIAgent:
                 model=self.model,
                 platform=getattr(self, "platform", None) or "",
                 sender_id=getattr(self, "_user_id", None) or "",
+                session_search_fn=_session_search_fn,
             )
             _ctx_parts: list[str] = []
             for r in _pre_results:
