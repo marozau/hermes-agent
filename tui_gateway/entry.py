@@ -216,6 +216,13 @@ def main():
         except Exception:
             pass
 
+    # Load user plugins so hooks (pre_llm_call for preflight, etc.) are registered
+    try:
+        from hermes_cli.plugins import discover_plugins
+        discover_plugins()
+    except Exception:
+        pass
+
     if not write_json({
         "jsonrpc": "2.0",
         "method": "event",
