@@ -11792,16 +11792,26 @@ class AIAgent:
             # Build session_search_fn so preflight can FTS5-search trajectories (Epic 7)
             _session_search_fn = None
             try:
-                from tools.session_search_tool import session_search as _session_search_impl
-                _db = getattr(self, "_db", None)
-                _sid = getattr(self, "session_id", None)
+                from hermes_state import SessionDB
+                _db = SessionDB()
                 def _search_wrapper(query: str, limit: int = 20):
-                    import json as _json
-                    raw = _session_search_impl(query, limit=limit, db=_db, current_session_id=_sid)
-                    try:
-                        return _json.loads(raw) if isinstance(raw, str) else raw
-                    except _json.JSONDecodeError:
-                        return []
+                    """Return structured FTS5 results for retrieve_trajectories."""
+                    results = _db.search_messages(
+                        query, role_filter=["assistant"], limit=limit,
+                    )
+                    return [
+                        {
+                            "id": r.get("id", ""),
+                            "content": r.get("content", "") or r.get("snippet", ""),
+                            "snippet": r.get("snippet", ""),
+                            "timestamp": r.get("timestamp", 0),
+                            "rank": r.get("rank", 0),
+                            "session_id": r.get("session_id", ""),
+                            "role": r.get("role", ""),
+                        }
+                        for r in (results or [])
+                        if r.get("content") or r.get("snippet")
+                    ]
                 _session_search_fn = _search_wrapper
             except Exception:
                 pass
