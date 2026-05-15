@@ -1032,16 +1032,19 @@ def _call_judge_with_tool_choice(
             ), None
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
-            # Only retry on errors that look like the provider rejecting the
-            # tool_choice shape. Network errors etc. should bail immediately.
             msg = str(exc).lower()
-            if not any(token in msg for token in (
+            # Retry on tool_choice rejection (DeepSeek reasoner rejects
+            # function/required format) and on rate limits (429).
+            if any(token in msg for token in (
                 "tool_choice", "tool choice", "required", "function call",
                 "unsupported", "not supported", "invalid", "400",
+                "429", "rate limit", "rate_limit", "try again",
             )):
-                return None, last_err
-            logger.debug("goal judge: tool_choice=%r rejected (%s); falling back", choice, exc)
-            continue
+                logger.debug("goal judge: tool_choice=%r rejected/rate-limited (%s); falling back", choice, exc)
+                if "429" in msg or "rate" in msg:
+                    time.sleep(2)  # brief backoff for rate limits
+                continue
+            return None, last_err
     return None, last_err or "all tool_choice fallbacks failed"
 
 
