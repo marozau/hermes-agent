@@ -1246,11 +1246,21 @@ def evaluate_checklist(
             # the user sees WHY the judge made its decisions.
             args = update_tc["arguments"]
             if isinstance(args, dict) and not str(args.get("reason", "")).strip():
+                # Try msg.reasoning first (OpenRouter model_extra), then
+                # model_extra directly (some SDK versions surface it
+                # differently), then reasoning_details text.
                 reasoning = getattr(msg, "reasoning", None)
+                if not reasoning:
+                    me = getattr(msg, "model_extra", None) or {}
+                    reasoning = me.get("reasoning") if isinstance(me, dict) else None
+                if not reasoning:
+                    rd = getattr(msg, "reasoning_details", None) or []
+                    if rd and isinstance(rd, list) and len(rd) > 0:
+                        reasoning = " ".join(
+                            r.get("text", "") for r in rd
+                            if isinstance(r, dict) and r.get("type") == "reasoning.text"
+                        )
                 if reasoning and isinstance(reasoning, str) and reasoning.strip():
-                    # Truncate to a reasonable display length — full
-                    # reasoning is preserved in the conversation dump
-                    # and future ACP exposure.
                     truncated = reasoning.strip()[:500]
                     args["reason"] = truncated
             parsed = _normalize_update_args(args)
@@ -1302,9 +1312,29 @@ def evaluate_checklist(
             reads_left -= 1
             continue
 
-        # Neither tool was called. Try parsing the content body as a last-
-        # ditch backstop, then bail.
+        # Neither tool was called. The model produced text instead of a
+        # tool call — common with reasoning models that get absorbed in
+        # their chain of thought and ignore tool_choice.  Give it one
+        # retry with an explicit nudge before giving up.
         content = getattr(msg, "content", "") or ""
+        if content.strip() and iteration < reads_left + 1:
+            messages.append({
+                "role": "assistant",
+                "content": content,
+            })
+            messages.append({
+                "role": "user",
+                "content": (
+                    "You must call update_checklist to issue your verdict. "
+                    "Do not explain your reasoning in text — put it in the "
+                    "reason field of the update_checklist call."
+                ),
+            })
+            logger.debug("goal judge: nudging model to call a tool (iteration=%d)", iteration)
+            continue
+
+        # Neither tool was called after nudge. Try parsing the content
+        # as a last-ditch backstop, then bail.
         if content.strip():
             parsed, parse_failed = _parse_evaluate_response(content)
             if not parse_failed:
