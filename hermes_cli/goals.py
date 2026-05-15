@@ -1326,7 +1326,24 @@ def _normalize_update_args(args: Dict[str, Any]) -> Dict[str, Any]:
     """
     raw_updates = args.get("updates") or []
     raw_new = args.get("new_items") or []
-    reason = str(args.get("reason") or "").strip() or "no reason provided"
+    reason = str(args.get("reason") or "").strip()
+
+    if not reason:
+        # Synthesize a reason from the verdict data when the judge
+        # provides an empty reason field (common with reasoning models
+        # that put all their thinking into the reasoning token stream
+        # rather than the structured tool-call arguments).
+        completed = sum(1 for u in raw_updates if isinstance(u, dict) and u.get("status") == "completed")
+        impossible = sum(1 for u in raw_updates if isinstance(u, dict) and u.get("status") == "impossible")
+        if completed > 0 or impossible > 0:
+            parts = []
+            if completed:
+                parts.append(f"{completed} completed")
+            if impossible:
+                parts.append(f"{impossible} impossible")
+            reason = f"Judge verdict: {', '.join(parts)}"
+        else:
+            reason = "no reason provided (judge returned empty reason field)"
 
     norm_updates: List[Dict[str, Any]] = []
     if isinstance(raw_updates, list):
