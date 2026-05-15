@@ -12678,13 +12678,18 @@ class HermesCLI:
                         # Goal continuation: if a standing goal is active, ask
                         # the judge whether the turn satisfied it. Run BEFORE
                         # the UI refresh so the user never sees a bare prompt
-                        # flash during an active goal — they see the judge
-                        # result (or the next turn's spinner) instead.
+                        # flash during an active goal. Show a spinner message
+                        # while the judge evaluates (API call, 2-10s).
+                        mgr = self._get_goal_manager()
+                        if mgr is not None and mgr.is_active():
+                            self._spinner_text = "\u23f3 Evaluating goal progress\u2026"
+                            app.invalidate()
                         try:
                             self._maybe_continue_goal_after_turn()
                         except Exception as _goal_exc:
                             logging.debug("goal continuation hook failed: %s", _goal_exc)
 
+                        self._spinner_text = ""
                         app.invalidate()  # Refresh status line after goal hook
 
                         # Continuous voice: auto-restart recording after agent responds.
