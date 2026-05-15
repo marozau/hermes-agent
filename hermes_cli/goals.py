@@ -1253,6 +1253,7 @@ def evaluate_checklist(
                 "role": "assistant",
                 "content": getattr(msg, "content", "") or "",
                 "tool_calls": _serialize_assistant_tool_calls(msg),
+                "reasoning_content": getattr(msg, "reasoning_content", None) or " ",
             })
             messages.append({
                 "role": "tool",
