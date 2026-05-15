@@ -895,6 +895,14 @@ def _get_judge_client() -> Tuple[Optional[Any], str]:
     return client, model
 
 
+def _get_judge_model_label() -> str:
+    """Return a compact label like ' [judge: deepseek-v4-pro]' or ''."""
+    _client, model = _get_judge_client()
+    if model:
+        return f" [judge: {model}]"
+    return ""
+
+
 def _extract_tool_call(msg: Any, tool_name: str) -> Optional[Dict[str, Any]]:
     """Find a tool call by name on a chat-completions message. Returns
     ``{"id", "name", "arguments": <dict>}`` or None.
@@ -1641,7 +1649,8 @@ class GoalManager:
                 state.last_verdict = "decompose"
                 state.last_reason = f"decomposed into {len(items)} items"
                 decompose_message = (
-                    f"⊙ Goal checklist created ({len(items)} items). "
+                    f"⊙ Goal checklist created ({len(items)} items)"
+                    f"{_get_judge_model_label()}. "
                     f"Use /subgoal to view or edit it."
                 )
                 save_goal(self.session_id, state)
@@ -1681,7 +1690,7 @@ class GoalManager:
                 "continuation_prompt": None,
                 "verdict": "done",
                 "reason": reason,
-                "message": f"✓ Goal achieved: {reason}",
+                "message": f"✓ Goal achieved{_get_judge_model_label()}: {reason}",
             }
 
         # Auto-pause when the judge model can't produce the expected JSON
@@ -1699,7 +1708,8 @@ class GoalManager:
                 "verdict": "continue",
                 "reason": reason,
                 "message": (
-                    f"\u23f8 Goal paused — the judge ({state.consecutive_parse_failures} turns) "
+                    f"\u23f8 Goal paused — the judge{_get_judge_model_label()}"
+                    f" ({state.consecutive_parse_failures} turns) "
                     "isn't returning the required JSON verdict. "
                     "The current judge model may not be strict enough for "
                     "structured output. Try /goal clear then /goal <text> "
@@ -1730,6 +1740,7 @@ class GoalManager:
         progress = ""
         if cl_total:
             progress = f" — {cl_done + cl_imp}/{cl_total} done"
+        _jmodel = _get_judge_model_label()
         return {
             "status": "active",
             "should_continue": True,
@@ -1737,7 +1748,8 @@ class GoalManager:
             "verdict": "continue",
             "reason": reason,
             "message": (
-                f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}{progress}): {reason}"
+                f"↻ Continuing toward goal ({state.turns_used}/{state.max_turns}{progress})"
+                f"{_jmodel}: {reason}"
             ),
         }
 
