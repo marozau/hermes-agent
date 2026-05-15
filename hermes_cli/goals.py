@@ -1254,13 +1254,21 @@ def evaluate_checklist(
                 "content": getattr(msg, "content", "") or "",
                 "tool_calls": _serialize_assistant_tool_calls(msg),
             }
+            # Preserve reasoning fields for multi-turn continuity.
+            # Direct DeepSeek/Kimi API: reasoning_content (must be echoed,
+            # HTTP 400 if missing).  OpenRouter: reasoning + reasoning_details
+            # (best practice per OpenRouter docs — improves multi-turn
+            # quality by giving the model access to its own chain of thought
+            # from previous turns).
             rc = getattr(msg, "reasoning_content", None)
             if rc is not None:
-                # Preserve reasoning_content for providers that require
-                # echo-back (DeepSeek, Kimi).  On these providers the SDK
-                # response always carries this field; on others (Claude,
-                # Gemini) it is absent and we must NOT inject a spurious key.
                 assistant_msg["reasoning_content"] = rc or " "
+            reasoning = getattr(msg, "reasoning", None)
+            if reasoning:
+                assistant_msg["reasoning"] = reasoning
+            reasoning_details = getattr(msg, "reasoning_details", None)
+            if reasoning_details:
+                assistant_msg["reasoning_details"] = reasoning_details
             messages.append(assistant_msg)
             messages.append({
                 "role": "tool",
