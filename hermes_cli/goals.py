@@ -1249,12 +1249,19 @@ def evaluate_checklist(
                 limit=args.get("limit", _JUDGE_READ_FILE_MAX_LINES),
                 allowed_path=history_path,
             )
-            messages.append({
+            assistant_msg = {
                 "role": "assistant",
                 "content": getattr(msg, "content", "") or "",
                 "tool_calls": _serialize_assistant_tool_calls(msg),
-                "reasoning_content": getattr(msg, "reasoning_content", None) or " ",
-            })
+            }
+            rc = getattr(msg, "reasoning_content", None)
+            if rc is not None:
+                # Preserve reasoning_content for providers that require
+                # echo-back (DeepSeek, Kimi).  On these providers the SDK
+                # response always carries this field; on others (Claude,
+                # Gemini) it is absent and we must NOT inject a spurious key.
+                assistant_msg["reasoning_content"] = rc or " "
+            messages.append(assistant_msg)
             messages.append({
                 "role": "tool",
                 "tool_call_id": read_tc["id"],
