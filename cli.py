@@ -12675,18 +12675,17 @@ class HermesCLI:
                         self._pending_tool_info.clear()
                         self._last_scrollback_tool = ""
 
-                        app.invalidate()  # Refresh status line
-
                         # Goal continuation: if a standing goal is active, ask
-                        # the judge whether the turn satisfied it. If not, and
-                        # there's no real user message already queued, push the
-                        # continuation prompt back into _pending_input so the
-                        # next loop iteration picks it up naturally (and any
-                        # user input that arrives in between still preempts).
+                        # the judge whether the turn satisfied it. Run BEFORE
+                        # the UI refresh so the user never sees a bare prompt
+                        # flash during an active goal — they see the judge
+                        # result (or the next turn's spinner) instead.
                         try:
                             self._maybe_continue_goal_after_turn()
                         except Exception as _goal_exc:
                             logging.debug("goal continuation hook failed: %s", _goal_exc)
+
+                        app.invalidate()  # Refresh status line after goal hook
 
                         # Continuous voice: auto-restart recording after agent responds.
                         # Dispatch to a daemon thread so play_beep (sd.wait) and
