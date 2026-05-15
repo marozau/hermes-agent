@@ -996,7 +996,6 @@ def _call_judge_with_tool_choice(
                 temperature=0,
                 max_tokens=max_tokens,
                 timeout=timeout,
-                response_format={"type": "json_object"},
             ), None
         except Exception as exc:
             last_err = f"{type(exc).__name__}: {exc}"
