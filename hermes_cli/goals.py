@@ -1464,6 +1464,7 @@ class GoalManager:
             return None
         self._state.status = "active"
         self._state.paused_reason = None
+        self._state.consecutive_parse_failures = 0
         if reset_budget:
             self._state.turns_used = 0
         save_goal(self.session_id, self._state)
