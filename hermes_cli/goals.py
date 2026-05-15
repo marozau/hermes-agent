@@ -1239,7 +1239,21 @@ def evaluate_checklist(
         # Did the judge call update_checklist? If yes, we're done.
         update_tc = _extract_tool_call(msg, "update_checklist")
         if update_tc is not None:
-            parsed = _normalize_update_args(update_tc["arguments"])
+            # V4 Pro and other reasoning models put their chain of thought
+            # into reasoning tokens (msg.reasoning via OpenRouter) rather
+            # than the structured tool-call arguments.  When the reason
+            # field is empty, backfill from the SDK reasoning stream so
+            # the user sees WHY the judge made its decisions.
+            args = update_tc["arguments"]
+            if isinstance(args, dict) and not str(args.get("reason", "")).strip():
+                reasoning = getattr(msg, "reasoning", None)
+                if reasoning and isinstance(reasoning, str) and reasoning.strip():
+                    # Truncate to a reasonable display length — full
+                    # reasoning is preserved in the conversation dump
+                    # and future ACP exposure.
+                    truncated = reasoning.strip()[:500]
+                    args["reason"] = truncated
+            parsed = _normalize_update_args(args)
             logger.info(
                 "goal judge (checklist): updates=%d new_items=%d reason=%s",
                 len(parsed.get("updates") or []),
