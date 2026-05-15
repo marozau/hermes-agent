@@ -1246,13 +1246,29 @@ def evaluate_checklist(
             # the user sees WHY the judge made its decisions.
             args = update_tc["arguments"]
             if isinstance(args, dict) and not str(args.get("reason", "")).strip():
-                # Try msg.reasoning first (OpenRouter model_extra), then
-                # model_extra directly (some SDK versions surface it
-                # differently), then reasoning_details text.
-                reasoning = getattr(msg, "reasoning", None)
+                # Extract reasoning from SDK response.  Priority order:
+                # 1. reasoning_content  — LiteLLM / DeepSeek native field
+                # 2. reasoning          — OpenRouter model_extra field
+                # 3. thinking_blocks    — LiteLLM alternative format
+                # 4. reasoning_details  — OpenRouter structured reasoning
+                reasoning = (
+                    getattr(msg, "reasoning_content", None)
+                    or getattr(msg, "reasoning", None)
+                )
                 if not reasoning:
                     me = getattr(msg, "model_extra", None) or {}
-                    reasoning = me.get("reasoning") if isinstance(me, dict) else None
+                    if isinstance(me, dict):
+                        reasoning = me.get("reasoning_content") or me.get("reasoning")
+                if not reasoning:
+                    tb = getattr(msg, "thinking_blocks", None) or []
+                    if not tb and isinstance(me, dict):
+                        tb = me.get("thinking_blocks") or []
+                    if tb and isinstance(tb, list) and len(tb) > 0:
+                        reasoning = " ".join(
+                            b.get("thinking", "") or b.get("text", "")
+                            for b in tb
+                            if isinstance(b, dict)
+                        )
                 if not reasoning:
                     rd = getattr(msg, "reasoning_details", None) or []
                     if rd and isinstance(rd, list) and len(rd) > 0:
@@ -1288,11 +1304,9 @@ def evaluate_checklist(
                 "tool_calls": _serialize_assistant_tool_calls(msg),
             }
             # Preserve reasoning fields for multi-turn continuity.
-            # Direct DeepSeek/Kimi API: reasoning_content (must be echoed,
-            # HTTP 400 if missing).  OpenRouter: reasoning + reasoning_details
-            # (best practice per OpenRouter docs — improves multi-turn
-            # quality by giving the model access to its own chain of thought
-            # from previous turns).
+            # DeepSeek native / LiteLLM: reasoning_content (must be echoed,
+            # HTTP 400 if missing).  OpenRouter: reasoning + reasoning_details.
+            # LiteLLM: thinking_blocks (alternative format for some providers).
             rc = getattr(msg, "reasoning_content", None)
             if rc is not None:
                 assistant_msg["reasoning_content"] = rc or " "
@@ -1302,6 +1316,10 @@ def evaluate_checklist(
             reasoning_details = getattr(msg, "reasoning_details", None)
             if reasoning_details:
                 assistant_msg["reasoning_details"] = reasoning_details
+            # LiteLLM / some providers surface thinking as thinking_blocks
+            thinking_blocks = getattr(msg, "thinking_blocks", None)
+            if thinking_blocks:
+                assistant_msg["thinking_blocks"] = thinking_blocks
             messages.append(assistant_msg)
             messages.append({
                 "role": "tool",
