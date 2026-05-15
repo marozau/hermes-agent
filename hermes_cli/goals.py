@@ -1681,14 +1681,13 @@ class GoalManager:
                 "verdict": "continue",
                 "reason": reason,
                 "message": (
-                    f"⏸ Goal paused — the judge model ({state.consecutive_parse_failures} turns) "
-                    "isn't returning the required JSON verdict. Route the judge to a stricter "
-                    "model in ~/.hermes/config.yaml:\n"
-                    "  auxiliary:\n"
-                    "    goal_judge:\n"
-                    "      provider: openrouter\n"
-                    "      model: google/gemini-3-flash-preview\n"
-                    "Then /goal resume to continue."
+                    f"\u23f8 Goal paused — the judge ({state.consecutive_parse_failures} turns) "
+                    "isn't returning the required JSON verdict. "
+                    "The current judge model may not be strict enough for "
+                    "structured output. Try /goal clear then /goal <text> "
+                    "with a fresh goal, or set auxiliary.goal_judge.model "
+                    "to a model with strong tool-use reliability "
+                    "(e.g. anthropic/claude-3.5-haiku via openrouter)."
                 ),
             }
 
