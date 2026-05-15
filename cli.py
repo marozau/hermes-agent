@@ -7815,10 +7815,13 @@ class HermesCLI:
                 _cprint(f"  {_DIM}No goal to resume.{_RST}")
             else:
                 _cprint(f"  ▶ Goal resumed: {state.goal}")
-                _cprint(
-                    f"  {_DIM}Send any message (or press Enter on an empty prompt "
-                    f"is a no-op; type 'continue' to kick it off).{_RST}"
-                )
+                # Kick off the next turn immediately — same as /goal set.
+                prompt = mgr.next_continuation_prompt()
+                if prompt:
+                    try:
+                        self._pending_input.put(prompt)
+                    except Exception:
+                        pass
             return
 
         if lower in ("clear", "stop", "done"):
