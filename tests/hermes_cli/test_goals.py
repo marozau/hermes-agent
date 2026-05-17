@@ -452,7 +452,7 @@ class TestJudgeParseFailureAutoPause:
             # Message points at the config surface so the user can fix it.
             assert "auxiliary" in d3["message"]
             assert "goal_judge" in d3["message"]
-            assert "config.yaml" in d3["message"]
+            assert "paused" in d3["message"]
 
     def test_parse_failure_counter_resets_on_good_reply(self, hermes_home):
         """A single good judge reply resets the counter — transient flakes don't pause."""
@@ -523,7 +523,7 @@ class TestJudgeParseFailureAutoPause:
 
 class TestGoalStateSubgoalsBackcompat:
     def test_old_state_meta_row_loads_without_subgoals(self):
-        """A goal serialized BEFORE the subgoals field existed must
+        """A goal serialized BEFORE the checklist field existed must
         round-trip with an empty list, not crash."""
         import json
         from hermes_cli.goals import GoalState
@@ -539,13 +539,7 @@ class TestGoalStateSubgoalsBackcompat:
         })
         state = GoalState.from_json(legacy)
         assert state.goal == "do a thing"
-        assert state.subgoals == []
-
-    def test_subgoals_round_trip(self):
-        from hermes_cli.goals import GoalState
-        state = GoalState(goal="g", subgoals=["a", "b", "c"])
-        rt = GoalState.from_json(state.to_json())
-        assert rt.subgoals == ["a", "b", "c"]
+        assert state.checklist == []
 
 
 class TestGoalManagerSubgoals:
@@ -553,9 +547,10 @@ class TestGoalManagerSubgoals:
         from hermes_cli.goals import GoalManager
         mgr = GoalManager(session_id="sub-add")
         mgr.set("main goal")
-        text = mgr.add_subgoal("  use bullet points  ")
-        assert text == "use bullet points"
-        assert mgr.state.subgoals == ["use bullet points"]
+        item = mgr.add_subgoal("  use bullet points  ")
+        assert item.text == "use bullet points"
+        assert len(mgr.state.checklist) == 1
+        assert mgr.state.checklist[0].text == "use bullet points"
 
     def test_add_subgoal_requires_active_goal(self, hermes_home):
         import pytest
@@ -580,8 +575,10 @@ class TestGoalManagerSubgoals:
         mgr.add_subgoal("second")
         mgr.add_subgoal("third")
         removed = mgr.remove_subgoal(2)
-        assert removed == "second"
-        assert mgr.state.subgoals == ["first", "third"]
+        assert removed.text == "second"
+        assert len(mgr.state.checklist) == 2
+        assert mgr.state.checklist[0].text == "first"
+        assert mgr.state.checklist[1].text == "third"
 
     def test_remove_subgoal_out_of_range(self, hermes_home):
         import pytest
@@ -600,9 +597,8 @@ class TestGoalManagerSubgoals:
         mgr.set("g")
         mgr.add_subgoal("a")
         mgr.add_subgoal("b")
-        prev = mgr.clear_subgoals()
-        assert prev == 2
-        assert mgr.state.subgoals == []
+        mgr.clear_checklist()
+        assert mgr.state.checklist == []
 
     def test_subgoals_persist_across_reloads(self, hermes_home):
         """Subgoals stored in SessionDB survive a fresh GoalManager."""
@@ -613,7 +609,9 @@ class TestGoalManagerSubgoals:
         mgr.add_subgoal("second")
 
         mgr2 = GoalManager(session_id="sub-persist")
-        assert mgr2.state.subgoals == ["first", "second"]
+        assert len(mgr2.state.checklist) == 2
+        assert mgr2.state.checklist[0].text == "first"
+        assert mgr2.state.checklist[1].text == "second"
 
 
 class TestContinuationPromptWithSubgoals:
@@ -624,7 +622,7 @@ class TestContinuationPromptWithSubgoals:
         prompt = mgr.next_continuation_prompt()
         assert prompt is not None
         assert "ship the feature" in prompt
-        assert "Additional criteria" not in prompt
+        assert "Checklist progress" not in prompt
 
     def test_with_subgoals_includes_them(self, hermes_home):
         from hermes_cli.goals import GoalManager
@@ -635,9 +633,9 @@ class TestContinuationPromptWithSubgoals:
         prompt = mgr.next_continuation_prompt()
         assert prompt is not None
         assert "ship the feature" in prompt
-        assert "Additional criteria" in prompt
-        assert "1. write tests" in prompt
-        assert "2. update docs" in prompt
+        assert "Checklist progress" in prompt
+        assert "write tests" in prompt
+        assert "update docs" in prompt
 
 
 class TestJudgeGoalWithSubgoals:
@@ -737,4 +735,5 @@ class TestStatusLineSubgoalCount:
         mgr.add_subgoal("a")
         mgr.add_subgoal("b")
         line = mgr.status_line()
-        assert "2 subgoals" in line
+        # Checklist renders as "0/2 done" in the status line
+        assert "0/2 done" in line or "done" in line

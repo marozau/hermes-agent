@@ -1157,6 +1157,7 @@ def judge_goal_freeform(
     last_response: str,
     *,
     timeout: float = DEFAULT_JUDGE_TIMEOUT,
+    subgoals: Optional[List[str]] = None,
 ) -> Tuple[str, str, bool]:
     """Legacy freeform judge — kept for goals with no checklist.
 
@@ -1189,7 +1190,7 @@ def judge_goal_freeform(
             current_time=current_time,
         )
     else:
-        prompt = JUDGE_USER_PROMPT_TEMPLATE.format(
+        prompt = EVALUATE_USER_PROMPT_FREEFORM_TEMPLATE.format(
             goal=_truncate(goal, 2000),
             response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
             current_time=current_time,
@@ -1943,7 +1944,7 @@ class GoalManager:
             return "continue", parsed.get("reason") or "checklist progress", parse_failed
 
         # No checklist — freeform fallback.
-        verdict, reason, parse_failed = judge_goal_freeform(state.goal, last_response)
+        verdict, reason, parse_failed = judge_goal(state.goal, last_response)
         return verdict, reason, parse_failed
 
     # --- internal helpers ---------------------------------------------
@@ -2023,9 +2024,10 @@ def judge_goal(
     last_response: str,
     *,
     timeout: float = DEFAULT_JUDGE_TIMEOUT,
+    subgoals: Optional[List[str]] = None,
 ) -> Tuple[str, str, bool]:
     """Back-compat wrapper — defers to the freeform judge."""
-    return judge_goal_freeform(goal, last_response, timeout=timeout)
+    return judge_goal_freeform(goal, last_response, timeout=timeout, subgoals=subgoals)
 
 
 __all__ = [
