@@ -51,6 +51,7 @@ import re
 import time
 from dataclasses import dataclass, field, asdict
 from pathlib import Path
+from datetime import datetime, timezone
 from typing import Any, Dict, List, Optional, Tuple
 
 logger = logging.getLogger(__name__)
@@ -235,8 +236,28 @@ EVALUATE_USER_PROMPT_CHECKLIST_TEMPLATE = (
 EVALUATE_USER_PROMPT_FREEFORM_TEMPLATE = (
     "Goal:\n{goal}\n\n"
     "Agent's most recent response:\n{response}\n\n"
+    "Current time: {current_time}\n\n"
     "Is the goal satisfied?"
 )
+
+# Used when the user has added /subgoal criteria. The judge must
+# evaluate ALL of them being met, not just the original goal.
+JUDGE_USER_PROMPT_WITH_SUBGOALS_TEMPLATE = (
+    "Goal:\n{goal}\n\n"
+    "Additional criteria the user added mid-loop (all must also be "
+    "satisfied for the goal to be DONE):\n{subgoals_block}\n\n"
+    "Agent's most recent response:\n{response}\n\n"
+    "Current time: {current_time}\n\n"
+    "Decision: For each numbered criterion above, find concrete "
+    "evidence in the agent's response that the criterion is "
+    "satisfied. Do not accept generic phrases like 'all requirements "
+    "met' or 'implying it was done' — require specific evidence (a "
+    "file contents excerpt, an output line, a command result). If "
+    "ANY criterion lacks specific evidence in the response, the goal "
+    "is NOT done — return CONTINUE.\n\n"
+    "Is the goal AND every additional criterion satisfied?"
+)
+
 
 
 # ──────────────────────────────────────────────────────────────────────
@@ -1151,10 +1172,28 @@ def judge_goal_freeform(
     if client is None:
         return "continue", "auxiliary client unavailable", False
 
-    prompt = EVALUATE_USER_PROMPT_FREEFORM_TEMPLATE.format(
-        goal=_truncate(goal, 2000),
-        response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
-    )
+    if client is None or not model:
+        return "continue", "no auxiliary client configured", False
+
+    # Build the prompt — pick the with-subgoals variant when applicable.
+    clean_subgoals = [s.strip() for s in (subgoals or []) if s and s.strip()]
+    current_time = datetime.now(tz=timezone.utc).astimezone().strftime("%Y-%m-%d %H:%M:%S %Z")
+    if clean_subgoals:
+        subgoals_block = "\n".join(
+            f"- {i}. {text}" for i, text in enumerate(clean_subgoals, start=1)
+        )
+        prompt = JUDGE_USER_PROMPT_WITH_SUBGOALS_TEMPLATE.format(
+            goal=_truncate(goal, 2000),
+            subgoals_block=_truncate(subgoals_block, 2000),
+            response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
+            current_time=current_time,
+        )
+    else:
+        prompt = JUDGE_USER_PROMPT_TEMPLATE.format(
+            goal=_truncate(goal, 2000),
+            response=_truncate(last_response, _JUDGE_RESPONSE_SNIPPET_CHARS),
+            current_time=current_time,
+        )
 
     try:
         resp = client.chat.completions.create(
