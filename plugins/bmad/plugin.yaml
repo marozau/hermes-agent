@@ -1,0 +1,17 @@
+name: bmad
+version: 0.1.0
+description: "BMAD Method v6.6.0 plugin for Hermes: structured product-development workflows (Analysis → Planning → Solutioning → Implementation) with phase-gating, auto-status-tracking, slash commands, and CLI bootstrap."
+author: "im (port); BMAD community (content)"
+kind: standalone
+platforms:
+  - linux
+  - macos
+hooks:
+  - on_session_start
+  - pre_tool_call
+  - post_tool_call
+  - transform_terminal_output
+  - subagent_stop
+provides_tools: []
+requires_env: []
+min_hermes_version: "0.14.0"

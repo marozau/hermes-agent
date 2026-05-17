@@ -1,0 +1,263 @@
+- id: fixture-architecture
+  name: Fixture Architecture
+  description: Composable fixture patterns (pure function → fixture → merge) and reuse
+    rules
+  tags: fixtures,architecture,playwright,cypress
+  tier: core
+  fragment_file: knowledge/fixture-architecture.md
+- id: network-first
+  name: Network-First Safeguards
+  description: Intercept-before-navigate workflow, HAR capture, deterministic waits,
+    edge mocking
+  tags: network,stability,playwright,cypress,ui
+  tier: core
+  fragment_file: knowledge/network-first.md
+- id: data-factories
+  name: Data Factories and API Setup
+  description: Factories with overrides, API seeding, cleanup discipline
+  tags: data,factories,setup,api,backend,seeding
+  tier: core
+  fragment_file: knowledge/data-factories.md
+- id: component-tdd
+  name: Component TDD Loop
+  description: Red→green→refactor workflow, provider isolation, accessibility assertions
+  tags: component-testing,tdd,ui
+  tier: extended
+  fragment_file: knowledge/component-tdd.md
+- id: playwright-config
+  name: Playwright Config Guardrails
+  description: Environment switching, timeout standards, artifact outputs
+  tags: playwright,config,env
+  tier: extended
+  fragment_file: knowledge/playwright-config.md
+- id: ci-burn-in
+  name: CI and Burn-In Strategy
+  description: Staged jobs, shard orchestration, burn-in loops, artifact policy
+  tags: ci,automation,flakiness
+  tier: extended
+  fragment_file: knowledge/ci-burn-in.md
+- id: selective-testing
+  name: Selective Test Execution
+  description: Tag/grep usage, spec filters, diff-based runs, promotion rules
+  tags: risk-based,selection,strategy
+  tier: extended
+  fragment_file: knowledge/selective-testing.md
+- id: feature-flags
+  name: Feature Flag Governance
+  description: Enum management, targeting helpers, cleanup, release checklists
+  tags: feature-flags,governance,launchdarkly
+  tier: specialized
+  fragment_file: knowledge/feature-flags.md
+- id: contract-testing
+  name: Contract Testing Essentials
+  description: Pact publishing, provider verification, resilience coverage
+  tags: contract-testing,pact,api,backend,microservices,service-contract
+  tier: specialized
+  fragment_file: knowledge/contract-testing.md
+- id: email-auth
+  name: Email Authentication Testing
+  description: Magic link extraction, state preservation, caching, negative flows
+  tags: email-authentication,security,workflow
+  tier: specialized
+  fragment_file: knowledge/email-auth.md
+- id: error-handling
+  name: Error Handling Checks
+  description: Scoped exception handling, retry validation, telemetry logging
+  tags: resilience,error-handling,stability,api,backend
+  tier: extended
+  fragment_file: knowledge/error-handling.md
+- id: visual-debugging
+  name: Visual Debugging Toolkit
+  description: Trace viewer usage, artifact expectations, accessibility integration
+  tags: debugging,dx,tooling,ui
+  tier: specialized
+  fragment_file: knowledge/visual-debugging.md
+- id: risk-governance
+  name: Risk Governance
+  description: Scoring matrix, category ownership, gate decision rules
+  tags: risk,governance,gates
+  tier: core
+  fragment_file: knowledge/risk-governance.md
+- id: probability-impact
+  name: Probability and Impact Scale
+  description: Shared definitions for scoring matrix and gate thresholds
+  tags: risk,scoring,scale
+  tier: core
+  fragment_file: knowledge/probability-impact.md
+- id: test-quality
+  name: Test Quality Definition of Done
+  description: Execution limits, isolation rules, green criteria
+  tags: quality,definition-of-done,tests
+  tier: core
+  fragment_file: knowledge/test-quality.md
+- id: nfr-criteria
+  name: NFR Review Criteria
+  description: Security, performance, reliability, maintainability status definitions
+  tags: nfr,assessment,quality
+  tier: extended
+  fragment_file: knowledge/nfr-criteria.md
+- id: test-levels
+  name: Test Levels Framework
+  description: Guidelines for choosing unit, integration, or end-to-end coverage
+  tags: testing,levels,selection,api,backend,ui
+  tier: core
+  fragment_file: knowledge/test-levels-framework.md
+- id: test-priorities
+  name: Test Priorities Matrix
+  description: P0–P3 criteria, coverage targets, execution ordering
+  tags: testing,prioritization,risk
+  tier: core
+  fragment_file: knowledge/test-priorities-matrix.md
+- id: test-healing-patterns
+  name: Test Healing Patterns
+  description: Common failure patterns and automated fixes
+  tags: healing,debugging,patterns
+  tier: core
+  fragment_file: knowledge/test-healing-patterns.md
+- id: selector-resilience
+  name: Selector Resilience
+  description: Robust selector strategies and debugging techniques
+  tags: selectors,locators,debugging,ui
+  tier: core
+  fragment_file: knowledge/selector-resilience.md
+- id: timing-debugging
+  name: Timing Debugging
+  description: Race condition identification and deterministic wait fixes
+  tags: timing,async,debugging
+  tier: extended
+  fragment_file: knowledge/timing-debugging.md
+- id: overview
+  name: Playwright Utils Overview
+  description: Installation, design principles, fixture patterns for API and UI testing
+  tags: playwright-utils,fixtures,api,backend,ui
+  tier: core
+  fragment_file: knowledge/overview.md
+- id: api-request
+  name: API Request
+  description: Typed HTTP client, schema validation, retry logic, operation-based
+    overload for API and service testing
+  tags: api,backend,service-testing,api-testing,playwright-utils,openapi,codegen,operation
+  tier: core
+  fragment_file: knowledge/api-request.md
+- id: network-recorder
+  name: Network Recorder
+  description: HAR record/playback, CRUD detection for offline UI testing
+  tags: network,playwright-utils,ui,har
+  tier: extended
+  fragment_file: knowledge/network-recorder.md
+- id: auth-session
+  name: Auth Session
+  description: Token persistence, multi-user, API and browser authentication
+  tags: auth,playwright-utils,api,backend,jwt,token
+  tier: core
+  fragment_file: knowledge/auth-session.md
+- id: intercept-network-call
+  name: Intercept Network Call
+  description: Network spy/stub, JSON parsing for UI tests
+  tags: network,playwright-utils,ui
+  tier: extended
+  fragment_file: knowledge/intercept-network-call.md
+- id: recurse
+  name: Recurse Polling
+  description: Async polling for API responses, background jobs, eventual consistency
+  tags: polling,playwright-utils,api,backend,async,eventual-consistency
+  tier: extended
+  fragment_file: knowledge/recurse.md
+- id: log
+  name: Log Utility
+  description: Report logging, structured output for API and UI tests
+  tags: logging,playwright-utils,api,ui
+  tier: extended
+  fragment_file: knowledge/log.md
+- id: file-utils
+  name: File Utilities
+  description: CSV/XLSX/PDF/ZIP validation for API exports and UI downloads
+  tags: files,playwright-utils,api,backend,ui
+  tier: extended
+  fragment_file: knowledge/file-utils.md
+- id: burn-in
+  name: Burn-in Runner
+  description: Smart test selection, git diff for CI optimization
+  tags: ci,playwright-utils
+  tier: extended
+  fragment_file: knowledge/burn-in.md
+- id: network-error-monitor
+  name: Network Error Monitor
+  description: HTTP 4xx/5xx detection for UI tests
+  tags: monitoring,playwright-utils,ui
+  tier: extended
+  fragment_file: knowledge/network-error-monitor.md
+- id: fixtures-composition
+  name: Fixtures Composition
+  description: mergeTests composition patterns for combining utilities
+  tags: fixtures,playwright-utils
+  tier: extended
+  fragment_file: knowledge/fixtures-composition.md
+- id: api-testing-patterns
+  name: API Testing Patterns
+  description: 'Pure API test patterns without browser: service testing, microservices,
+    GraphQL'
+  tags: api,backend,service-testing,api-testing,microservices,graphql,no-browser
+  tier: specialized
+  fragment_file: knowledge/api-testing-patterns.md
+- id: pactjs-utils-overview
+  name: Pact.js Utils Overview
+  description: Installation, contract testing flows, utility table (createProviderState,
+    toJsonMap, setJsonContent, setJsonBody)
+  tags: pactjs-utils,contract-testing,pact,api,backend,microservices
+  tier: specialized
+  fragment_file: knowledge/pactjs-utils-overview.md
+- id: pactjs-utils-consumer-helpers
+  name: Pact.js Utils Consumer Helpers
+  description: createProviderState, toJsonMap, setJsonContent, setJsonBody for consumer-side
+    Pact helpers
+  tags: pactjs-utils,consumer,contract-testing,pact,api
+  tier: specialized
+  fragment_file: knowledge/pactjs-utils-consumer-helpers.md
+- id: pactjs-utils-provider-verifier
+  name: Pact.js Utils Provider Verifier
+  description: buildVerifierOptions, buildMessageVerifierOptions for provider verification
+  tags: pactjs-utils,provider,contract-testing,pact,api,backend,ci
+  tier: specialized
+  fragment_file: knowledge/pactjs-utils-provider-verifier.md
+- id: pactjs-utils-request-filter
+  name: Pact.js Utils Request Filter
+  description: createRequestFilter, noOpRequestFilter for auth injection
+  tags: pactjs-utils,auth,contract-testing,pact
+  tier: specialized
+  fragment_file: knowledge/pactjs-utils-request-filter.md
+- id: pact-mcp
+  name: Pact MCP Server
+  description: 'SmartBear MCP for PactFlow: generate tests, review, can-i-deploy,
+    provider states'
+  tags: pact,mcp,pactflow,contract-testing,broker
+  tier: specialized
+  fragment_file: knowledge/pact-mcp.md
+- id: pact-consumer-framework-setup
+  name: Pact Consumer CDC Framework Setup
+  description: Directory structure, vitest config, shell scripts, CI workflow, PactV4
+    patterns for consumer CDC
+  tags: pactjs-utils,consumer,contract-testing,pact,ci,framework,setup,vitest,shell-scripts
+  tier: specialized
+  fragment_file: knowledge/pact-consumer-framework-setup.md
+- id: adr-quality-readiness-checklist
+  name: ADR Quality Readiness Checklist
+  description: 8-category 29-criteria framework for ADR testability and NFR assessment
+  tags: nfr,testability,adr,quality,assessment,checklist
+  tier: extended
+  fragment_file: knowledge/adr-quality-readiness-checklist.md
+- id: playwright-cli
+  name: Playwright CLI
+  description: 'Token-efficient CLI for AI coding agents: element refs, sessions,
+    snapshots, browser automation'
+  tags: cli,browser,agent,automation,snapshot
+  tier: core
+  fragment_file: knowledge/playwright-cli.md
+- id: pact-consumer-di
+  name: Pact Consumer DI Pattern
+  description: Dependency injection pattern for Pact consumer tests — call actual
+    source code instead of raw fetch by injecting mock server URL via optional baseUrl
+    in context type
+  tags: contract-testing,pact,consumer,dependency-injection,api,backend,architecture
+  tier: extended
+  fragment_file: knowledge/pact-consumer-di.md

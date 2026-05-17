@@ -1,0 +1,18 @@
+# BMAD Profile — config.yaml.template
+# Copy to ~/.hermes/profiles/bmad/config.yaml and customize.
+
+name: bmad
+description: "BMAD Method v6.6.0 profile for structured product development"
+
+plugins:
+  enabled:
+    - bmad
+
+display:
+  bmad_header: true         # Show BMAD status header on every prompt
+  bmad_yolo: false          # Bypass phase-gates (development only)
+
+# Sub-agent delegation config (inherited from parent profile)
+delegation:
+  subagent_auto_approve: false   # D-6: keep false — gates dangerous shell
+  max_concurrent_children: 3     # Hermes default

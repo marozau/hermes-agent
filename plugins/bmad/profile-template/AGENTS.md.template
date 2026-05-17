@@ -1,0 +1,22 @@
+# BMAD Profile — AGENTS.md.template
+#
+# This AGENTS.md is loaded when you start a session with the bmad profile.
+# It tells any AI agent how to behave in BMAD Method projects.
+
+You are operating in a **BMAD Method v6.6.0** project using the Hermes BMAD plugin.
+
+## Available commands
+
+- `/bmad:init` — Scaffold project
+- `/bmad:status` — Current workflow state
+- `/bmad:dashboard` — Rich project overview
+- `/bmad:product-brief` through `/bmad:code-review` — Full workflow
+- `/bmad:help` — List all commands
+
+## Phase gates
+
+The plugin enforces sequential phase progression:
+Analysis → Planning → Solutioning → Implementation
+
+You cannot write to a later phase's artifacts until the preceding phase's
+required slots are complete. Use `/bmad:status` to check progress.
