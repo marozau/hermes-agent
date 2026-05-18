@@ -276,18 +276,12 @@ class MemoryStore:
                     "usage": f"{current:,}/{limit:,}",
                 }
 
-            entries.append(content)
-            self._set_entries(target, entries)
-            self.save_to_disk(target)
-
-            # ── Story 1.5: mirror to canonical typed-memory writer ──
-            # The pre-scan above already enforced NFR-16 across both scanners;
-            # any remaining failure here is a real bug worth surfacing, not a
-            # silent fallback (P1). Only ImportError is non-fatal — lib/ may
-            # not be reachable from every entrypoint yet.
-            # FR-3 follow-up: full removal of the legacy direct write
-            # (self._set_entries / save_to_disk) is tracked as a Story 1.5
-            # follow-up; for now we mirror.
+            # ── Story 1.5 + follow-up: canonical typed-memory writer is PRIMARY ──
+            # The typed writer fires FIRST; the legacy §-format write is the
+            # mirror.  If add_entry() rejects the content (secret scanner, etc.),
+            # the legacy write is also aborted — fail-closed.
+            # ImportError is non-fatal — lib/ may not be reachable from every
+            # entrypoint during early bootstrap.
             try:
                 from lib.hermes_memory import add_entry as _typed_add_entry
             except ImportError:
@@ -301,6 +295,11 @@ class MemoryStore:
                     source=source_label,
                     memory_dir=str(get_memory_dir() / "typed"),
                 )
+
+            # ── Mirror: legacy §-delimited format ──
+            entries.append(content)
+            self._set_entries(target, entries)
+            self.save_to_disk(target)
 
         return self._success_response(target, "Entry added.")
 
