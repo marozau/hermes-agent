@@ -63,7 +63,7 @@ These are AI-agent-consistency anchors. An implementer **could decide differentl
 9. **Apply is idempotent by `dream_id`** (FR-22). Re-applying the same dream returns "no changes." Content-hashed patches enforce this.
 10. **Fallback is always cross-provider** (FR-38). Never DeepSeek→DeepSeek; never Anthropic→Anthropic. Single-provider failures must surface.
 11. **Pydantic schemas gate every effectful LLM output** (FR-40, NFR-12). Free-text output is allowed only for narrative-only blocks (e.g., REPORT.md body).
-12. **Anthropic prompt caching uses three explicit breakpoints** (ADR-7): system block, skills bundle, trajectory excerpts. Dynamic content goes below the last breakpoint. Bundle is byte-stable within a flow run (cache-break trap from `AGENTS.md` L749–759).
+12. **Anthropic prompt caching uses three explicit breakpoints** (ADR-7): system block, skills bundle, trajectory excerpts. Dynamic content goes below the last breakpoint. Bundle is byte-stable within a flow run (cache-break trap; see `AGENTS.md` § Auto-Dream Substrate → Cache-break trap).
 
 ---
 

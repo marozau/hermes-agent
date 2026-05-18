@@ -10,8 +10,7 @@ source .venv/bin/activate   # or: source venv/bin/activate
 ```
 
 `scripts/run_tests.sh` probes `.venv` first, then `venv`, then
-`$HOME/.hermes/hermes-agent/venv` (for worktrees that share a venv with the
-main checkout).
+`/Users/im/usr-local/hermes/.venv` (dev repo venv).
 
 ## Project Structure
 
@@ -778,6 +777,258 @@ Config section (`curator:` in `config.yaml`):
 `archive_after_days`, `backup.*`.
 
 Full user-facing docs: `website/docs/user-guide/features/curator.md`.
+
+---
+
+## Auto-Dream Substrate (FAMA Tier-2 #3)
+
+Copy-on-write memory consolidation pipeline + pre-task context injection layer
+that closes the FAMA Tier-2 #3 gap (proactive context retrieval at task start
++ proposal-gated memory mutation). Vocabulary and CLI verbs match
+`NousResearch/hermes-agent#10771` byte-for-byte; private fork extensions are
+confined to `<dream_id>/.hermes-private/` inside each dream artifact.
+
+### Dev tree vs live runtime — paths are not interchangeable
+
+> **All code is edited here, in `~/usr-local/hermes/` — the BMAD/dev tree.
+> Nothing in `~/.hermes/` is a source-of-truth file.**
+
+| Concern | Location | Edited? |
+|---|---|---|
+| Source code (Python modules, plugins, skills) | `~/usr-local/hermes/{lib,plugins,skills,...}/` | **Yes — only here** |
+| Version-controlled config (e.g. `providers.yaml`) | `~/usr-local/hermes/dreams/providers.yaml` (target — currently at `~/.hermes/dreams/providers.yaml`, mirror to dev tree when stable) | Yes |
+| Tests | `~/usr-local/hermes/tests/lib/`, `~/usr-local/hermes/tests/tools/`, ... | Yes |
+| Planning artifacts (PRD, architecture, epics, status, stories) | `~/usr-local/hermes/{planning,implementation}-artifacts/` | Yes |
+| **Runtime state** — dream artifacts, audit log, raw entries, memory store, telemetry, logs, per-instance preflight config | `~/.hermes/{dreams,raw,observability,memory,memories,preflight,logs}/` | **No — written by code at runtime** |
+| Per-instance / per-profile config | `~/.hermes/config.yaml`, `~/.hermes/preflight/config.yaml`, `~/.hermes/.env` | Operator-edited, not version-controlled |
+
+The dev tree → runtime bridge is `~/usr-local/hermes/deploy.sh`, which copies
+**every** `lib/hermes_*.py` (substrate helpers + provider adapters) into
+`~/.hermes/lib/` so the running agent can import them. Source-of-truth remains
+in the dev tree; the live copy is a derived artifact. Run `./deploy.sh` after
+edits; restart the gateway if it's running.
+
+### Required reading (when touching substrate code)
+
+All paths are relative to the dev tree root (`~/usr-local/hermes/`).
+
+| # | File | What it answers |
+|---|---|---|
+| 1 | `planning-artifacts/product-brief.md` | Vision, scope, why |
+| 2 | `planning-artifacts/prd-hermes-2026-05-12.md` | 47 FRs + 25 NFRs + risks + **DoD §18** — the contract |
+| 3 | `planning-artifacts/architecture.md` | 12 ADRs + 7 pattern groups + file layout |
+| 4 | `planning-artifacts/epics.md` | 7 epics, 34 stories, Given/When/Then ACs |
+| 5 | `planning-artifacts/workflow-status.yaml` | Phase / sprint position |
+| 6 | `planning-artifacts/research/technical-hermes-issue-10771-2026-05-12.md` | Upstream design consensus (typed entries, staged artifacts, dry-run gate) |
+| 7 | `planning-artifacts/research/technical-auto-dream-full-2026-05-12.md` | Verbatim auto-dream article + Hermes adaptation; full dream prompt |
+| 8 | `planning-artifacts/research/technical-pretask-context-injection-2026-05-12.md` | Preflight implementation spec |
+| 9 | `planning-artifacts/research/technical-llm-prefect-reliable-2026-05-12.md` | Provider routing + Prefect patterns |
+| 10 | `planning-artifacts/research/technical-fama-skill-improvement-2026-05-12.md` | FAMA gap analysis (the "why") |
+| 11 | `planning-artifacts/research/technical-auto-dream-for-hermes-2026-05-12.md` | Claude Code source dive (lock pattern, gates) |
+| 12 | `CLAUDE.md` | Implementation playbook + hard invariants index |
+| 13 | `lib/README.md` | Provider adapter architecture (Stories 3.6–3.8) + deploy.sh + fixtures |
+| 14 | `implementation-artifacts/stories/story-3.{6,7,8}-*.md` | In-flight story specs (Given/When/Then ACs) |
+
+Read 1–4 always; 5 to know status; 6–11 when the specific subsystem is touched; 13–14 when touching providers/dispatcher.
+
+### Status snapshot (2026-05-18)
+
+7 epics + 34 stories marked complete in `workflow-status.yaml` (214 unit tests).
+A standalone **V1 Definition-of-Done audit** against PRD §18 found:
+
+- **5/13 PASS** — items 4, 10, 11, 12, 13 (REPORT.md artifact + cross-provider fallback + schema retry + transactional rollback + attestation drift abort, all with passing tests).
+- **2/13 FAIL** —
+  - Item 1: `hermes_memory.add_entry()` is NOT the only writer of MEMORY.md. `tools/memory_tool.py:283-303` still writes directly to the runtime `MEMORY.md` ("Story 1.5 follow-up"). **Hard invariant #1 violated.**
+  - Item 7: Preflight hit-rate is **11.8%** (need ≥30%) and the plugin is in `mode: shadow` at 1% sampling — zero injections.
+- **6/13 UNVERIFIABLE** — items 2, 3, 5, 6, 8, 9. The empty `_PROVIDER_DISPATCH` seam in `hermes_llm.py:344` (stub: "Production wiring lives in Epic 4") AND zero operational runs (no dream artifacts written to runtime, no `audit.jsonl`, no `observability/llm_calls.jsonl`).
+
+**Audit re-run on the same day (after dispatcher visibility + boot-path patch):** item 8 flipped from PASS → FAIL because `register_all()` is built but never called at boot. Items 9, 10, 11 became CONTINGENT-FAIL on the same blocker. The boot-path patch at `hermes_cli/main.py:245-262` closes the wiring gap; verified with `python -c "import hermes_cli.main"` populating `_PROVIDER_DISPATCH` with all 3 keys at module load. **Operational verification still required** — only a real run with non-zero `cache_read_tokens` in `~/.hermes/observability/llm_calls.jsonl` makes item 8 a clean PASS.
+
+**Do NOT declare V1 done.** A one-week operational trial flips items 2, 3, 5, 6 (frontmatter compliance, `valid_until` token delta, recall regression hit, post-apply recall stability) and gives a directional signal on item 7.
+
+### Source tree layout (`~/usr-local/hermes/`)
+
+```
+~/usr-local/hermes/
+├── lib/                                # Substrate helpers (fork-only; NOT upstream hermes-agent)
+│   ├── hermes_memory.py                # FR-3 chokepoint — add_entry / update_entry / supersede_entry / expire_entry / read_entries
+│   ├── hermes_llm.py                   # LLMSpec + llm_call (Prefect @task; cache_policy=INPUTS) — sole LLM call site
+│   ├── hermes_dream.py                 # create_dream_artifact / apply_dream / discard_dream (lock + COW)
+│   ├── hermes_recall.py                # run_regression_check — dry-run gate for proposals
+│   ├── hermes_trust.py                 # attestation pre-flight + rebaseline
+│   ├── hermes_preflight.py             # pre_task_start classification + retrieval (≤200ms p95)
+│   ├── hermes_providers.py             # register_all() — Story 3.8 dispatcher entry point
+│   ├── hermes_providers_anthropic.py   # Story 3.6: Anthropic Messages API + cache_control breakpoints
+│   ├── hermes_providers_chat.py        # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
+│   └── README.md                       # Provider adapter architecture + deploy.sh + fixtures
+├── tests/lib/                          # Substrate + provider adapter tests
+│   ├── conftest.py                     # Dev-tree lib/ on sys.path + HERMES_ROOT
+│   ├── test_hermes_memory.py
+│   ├── test_hermes_llm.py
+│   ├── test_hermes_dream.py
+│   ├── test_hermes_recall.py
+│   ├── test_hermes_trust.py
+│   ├── test_hermes_preflight.py
+│   ├── test_hermes_preflight_integration.py  # integration; needs deployed ~/.hermes/bin/hermes-preflight
+│   ├── test_hermes_providers.py
+│   ├── test_hermes_providers_anthropic.py
+│   ├── test_hermes_providers_chat.py
+│   └── test_dispatcher_e2e.py
+├── planning-artifacts/                 # The plan
+│   ├── product-brief.md
+│   ├── prd-hermes-2026-05-12.md        # §18 = DoD
+│   ├── architecture.md
+│   ├── epics.md
+│   ├── workflow-status.yaml
+│   └── research/                       # 6 technical research docs
+├── implementation-artifacts/
+│   └── stories/                        # Story-3.6/3.7/3.8 specs (Given/When/Then ACs)
+├── plugins/preflight/                  # ⚠ NOT YET CREATED in dev tree — plugin shim still pending (preflight lib/ is migrated; plugin wrapper is the remaining piece)
+├── deploy.sh                           # Copies lib/hermes_providers*.py → ~/.hermes/lib/
+├── CLAUDE.md                           # Implementation playbook
+└── AGENTS.md                           # (this file)
+```
+
+### Live runtime layout (`~/.hermes/`)
+
+```
+~/.hermes/                              # Per-instance state; never edit by hand
+├── lib/                                # Deployed code (mirror of dev tree lib/, via deploy.sh)
+├── dreams/
+│   ├── providers.yaml                  # Workload-keyed routing config (5 workloads at V1)
+│   ├── audit.jsonl                     # Hash-chained apply/discard/force-override audit
+│   └── <dream_id>/
+│       ├── manifest.json               # Scope, gates fired, model, cost, signal-density, recall verdict
+│       ├── REPORT.md                   # Human-readable narrative
+│       ├── memory.patch                # Proposed typed-memory mutations
+│       ├── user.patch                  # Proposed USER.md mutations
+│       ├── skills.proposed/<skill>.patch
+│       ├── sources.jsonl               # Provenance (raw-layer + session references)
+│       └── .hermes-private/            # Private fork extensions (off the upstream vocab)
+├── raw/<project>/<role>/YYYY-MM-DD.jsonl  # Append-only immutable log; MEMORY.md is rebuildable from this
+├── preflight/
+│   ├── config.yaml                     # mode: shadow|live; sampling; top_k; skip_window (operator-edited)
+│   ├── domain-vocab.txt
+│   ├── gates.json
+│   ├── last-cited.json
+│   └── log/YYYY-MM-DD.jsonl            # Per-invocation telemetry
+├── observability/
+│   ├── llm_calls.jsonl                 # Per-call telemetry (workload, model, tokens, cache_read, latency, schema_status)
+│   └── advisory.jsonl
+├── memory/typed/                       # Frontmattered typed entries (written by lib/hermes_memory.add_entry)
+├── memories/                           # LEGACY § -delimited memory (Story 1.5 follow-up will retire)
+└── logs/                               # agent.log / errors.log / gateway.log
+```
+
+### Canonical helpers — chokepoints
+
+Imports use the dev tree's `lib/` package; at runtime, deployed copies are picked up from `~/.hermes/lib/`.
+
+**Hard Invariant #1 — `hermes_memory.add_entry()` is the only writer of typed memory entries** (FR-3):
+
+```python
+from lib.hermes_memory import add_entry
+add_entry(
+    type="preference|fact|procedure|episode|superseded|trajectory|unknown",
+    body="...",
+    source="user-correction|self-derived|dogfood-incident|session:<id>|trajectory|import:<origin>",
+    evidence=None, valid_until=None, supersedes=None,
+)  # Returns ULID. Emits frontmatter unconditionally. Pairs typed write with raw-layer append transactionally.
+   # Runs secret scanner pre-check (NFR-16); aborts on hit.
+```
+
+Siblings: `update_entry`, `supersede_entry`, `expire_entry`. **No direct file writes from anywhere else to the runtime `memory/typed/` store or to legacy `memories/MEMORY.md`.** The remaining direct-write site at `tools/memory_tool.py:283-303` is the open Story 1.5 follow-up.
+
+**Hard Invariant #2 — `hermes_llm.llm_call(LLMSpec)` is the only LLM call site** (FR-37, NFR-23):
+
+```python
+from lib.hermes_llm import LLMSpec, llm_call
+result = llm_call(LLMSpec(
+    workload="memory_dream_consolidate",   # key into runtime dreams/providers.yaml
+    messages=[...],
+    response_model=ProposalList,           # Pydantic gate (FR-40)
+    cache_breakpoints=[0, 1, 2],           # system | skills bundle | trajectories (ADR-7)
+    idempotency_key="memory-dream:agent:2026-05-12",
+))
+```
+
+**No `import anthropic` / `import openai` / `import deepseek` in skills or plugins.** Cross-provider fallback is enforced inside (never DeepSeek→DeepSeek). One telemetry row per call to the runtime `observability/llm_calls.jsonl`.
+
+### Hard invariants (full list at CLAUDE.md §"Hard invariants")
+
+1. Only `add_entry()` writes typed memory.
+2. Only `llm_call()` calls LLM providers.
+3. LLMs NEVER write to `skills/`, `SOUL.md`, or `USER.md` — proposals only.
+4. Dreams NEVER mutate live state (copy-on-write to runtime `dreams/<dream_id>/`; manual ack required).
+5. soul-guardian's protected set MUST exclude runtime `agents/*/memory/` and `dreams/`.
+6. MEMORY.md is rebuildable from runtime `raw/` + sessions; weekly CI enforces.
+7. Kill ≠ crash on the dream lock — user kill records audit + does NOT rewind mtime.
+8. `valid_until` filters at read; NEVER deletes from disk.
+9. `apply` is idempotent by `dream_id` (content-hashed patches).
+10. Fallback is always cross-provider.
+11. Pydantic schemas gate every effectful LLM output.
+12. Anthropic prompt caching uses three explicit breakpoints (system / skills bundle / trajectories).
+
+### Cache-break trap
+
+The dream bundle (`[system | skills bundle | trajectories | human turn]`) **must be byte-stable within a flow run.** Mutations on message dicts re-hash the block and invalidate `cache_control`. Adapter code MUST build new dicts; never mutate in place. Bundle is assembled **once per flow run** — building it mid-flow is the cache-break trap.
+
+Cross-references: this is the doctrine CLAUDE.md cites and that the provider adapters in `lib/hermes_providers_anthropic.py` gate on. Story 3.8's end-to-end smoke test asserts the cache-warm second run pays zero provider cost.
+
+### Provider routing (workload-keyed)
+
+The runtime `dreams/providers.yaml` (target: version-controlled at `~/usr-local/hermes/dreams/providers.yaml`, deployed via `deploy.sh`) maps workload names → primary + fallback chain.
+
+| Workload | Primary | Cross-provider fallback |
+|---|---|---|
+| `classify_intent` (hot path) | DeepSeek V4 Flash | none (degrade to rule-based) |
+| `preflight_polish` | DeepSeek V4 Flash | Anthropic Haiku 4.5 |
+| `skill_dream_reflect` | Anthropic Sonnet 4.6 | DeepSeek V4 Pro |
+| `memory_dream_consolidate` | Anthropic Sonnet 4.6 | DeepSeek V4 Pro |
+| `board_dream_synthesize` (V2) | Anthropic Opus 4.7 | Anthropic Sonnet 4.6 |
+
+**Callers specify the workload name only — never inline a model.** Routing is policy (one file) rather than code.
+
+### Telemetry expectations (runtime sinks)
+
+Every effectful code path emits:
+- **Per LLM call** → row to runtime `observability/llm_calls.jsonl` (workload, model, tokens, cache_read, latency, schema status, idempotency_key).
+- **Per dream create** → `manifest.json` inside runtime `dreams/<dream_id>/`.
+- **Per apply / discard / force-override** → hash-chained row to runtime `dreams/audit.jsonl`.
+- **Per preflight invocation** → row to runtime `preflight/log/<YYYY-MM-DD>.jsonl`.
+
+A code path that does effectful work without emitting telemetry is wrong.
+
+### CLI verbs (upstream vocabulary)
+
+```
+hermes dream create [--scope memory|skill|board] [--since <duration>]
+hermes dream status
+hermes dream diff   <dream_id>
+hermes dream apply  <dream_id> [--accept | --select <ids>]
+hermes dream discard <dream_id>
+```
+
+In-session triggers: `/dream`, `/dream status`, `/dream diff`. Match these verb names byte-for-byte — diverging causes rebase pain against upstream #10771.
+
+### Deploy flow
+
+```bash
+cd ~/usr-local/hermes
+./deploy.sh              # copies lib/hermes_*.py → ~/.hermes/lib/
+                         # (substrate helpers + provider adapters together)
+hermes gateway restart   # if the gateway is running
+```
+
+Tests run against the dev tree, NOT the deployed runtime — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the source. Don't `pytest` against `~/.hermes/`.
+
+### Definition-of-Done (V1)
+
+`planning-artifacts/prd-hermes-2026-05-12.md` §18 is the ship gate. Re-audit before declaring V1 complete; `workflow-status.yaml`'s "V1 COMPLETE" line reflects epic test-suite green, **not** the operational DoD.
+
+### Out of scope for V1 (deferred to V2)
+
+Per PRD §10.2: auto-scheduling activation, per-role dreams (CEO/CTO/CFO), reflection split, skill-dream (FR-45–47), board-dream, persona-proposals.
 
 ---
 
