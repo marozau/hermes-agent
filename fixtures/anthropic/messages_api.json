@@ -1,0 +1,20 @@
+{
+  "id": "msg_01A2b3C4d5E6f7G8h9I0j",
+  "type": "message",
+  "role": "assistant",
+  "content": [
+    {
+      "type": "text",
+      "text": "I understand you need help with git. Here's a quick guide:\n\n1. `git status` — check current state\n2. `git add <file>` — stage changes\n3. `git commit -m \"message\"` — commit\n4. `git push` — push to remote\n\nWould you like details on any specific command?"
+    }
+  ],
+  "model": "claude-sonnet-4-6-20260501",
+  "stop_reason": "end_turn",
+  "stop_sequence": null,
+  "usage": {
+    "input_tokens": 142,
+    "output_tokens": 67,
+    "cache_creation_input_tokens": 142,
+    "cache_read_input_tokens": 0
+  }
+}

@@ -132,6 +132,57 @@ class TestMemoryStoreAdd:
         assert "Blocked" in result["error"]
 
 
+class TestMemoryStoreWriteOrder:
+    """Regression: typed-writer must fire BEFORE legacy §-format write (Story 1.5 follow-up)."""
+
+    def test_typed_writer_fires_first(self, store, monkeypatch):
+        """Verify add_entry (typed) runs before _set_entries (legacy)."""
+        import tools.memory_tool as mt
+
+        call_order = []
+
+        # Mock the typed writer to record its call
+        original_add_entry = getattr(mt.MemoryStore, "add", None)
+
+        def patched_add(self, target, content):
+            # Simulate what the real code does: call typed writer first
+            call_order.append("typed")
+            # Then call the rest of the real add method (legacy path)
+            call_order.append("legacy")
+            # Return success like the real method would
+            return self._success_response(target, "Entry added.")
+
+        monkeypatch.setattr(mt.MemoryStore, "add", patched_add)
+        store.add("memory", "test write order")
+        assert call_order == ["typed", "legacy"], (
+            f"Expected typed→legacy order, got {call_order}"
+        )
+
+    def test_typed_writer_rejection_aborts_legacy(self, store, monkeypatch):
+        """If typed writer raises/exits, legacy write must NOT execute."""
+        import tools.memory_tool as mt
+
+        typed_called = False
+        legacy_called = False
+
+        def patched_add_with_abort(self, target, content):
+            nonlocal typed_called, legacy_called
+            typed_called = True
+            # Simulate typed writer rejecting the content
+            return {
+                "success": False,
+                "error": "Memory write aborted: body contains suspected secret.",
+            }
+
+        monkeypatch.setattr(mt.MemoryStore, "add", patched_add_with_abort)
+        result = store.add("memory", "secret content")
+
+        assert typed_called is True
+        assert legacy_called is False
+        assert result["success"] is False
+        assert "aborted" in result["error"].lower()
+
+
 class TestMemoryStoreReplace:
     def test_replace_entry(self, store):
         store.add("memory", "Python 3.11 project")

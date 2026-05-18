@@ -1,0 +1,23 @@
+{
+  "id": "chatcmpl-deepseek-abc123def456",
+  "object": "chat.completion",
+  "created": 1747588800,
+  "model": "deepseek/deepseek-v4-pro",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "Here's a Python function to reverse a string:\n\n```python\ndef reverse_string(s: str) -> str:\n    return s[::-1]\n```\n\nThis uses Python's slice notation with step -1 to reverse the sequence."
+      },
+      "finish_reason": "stop",
+      "logprobs": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 45,
+    "completion_tokens": 58,
+    "total_tokens": 103,
+    "prompt_tokens_details": null
+  }
+}

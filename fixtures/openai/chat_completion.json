@@ -1,0 +1,22 @@
+{
+  "id": "chatcmpl-9a8b7c6d5e4f3g2h1i0j",
+  "object": "chat.completion",
+  "created": 1747588801,
+  "model": "gpt-4o-2026-05-01",
+  "choices": [
+    {
+      "index": 0,
+      "message": {
+        "role": "assistant",
+        "content": "To organize a Python project, you should:\n\n1. Use a consistent directory structure (src/, tests/, docs/)\n2. Create a virtual environment\n3. Use pyproject.toml for dependencies\n4. Add type hints and docstrings\n5. Set up pytest for testing"
+      },
+      "finish_reason": "stop",
+      "logprobs": null
+    }
+  ],
+  "usage": {
+    "prompt_tokens": 52,
+    "completion_tokens": 55,
+    "total_tokens": 107
+  }
+}
