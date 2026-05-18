@@ -802,11 +802,13 @@ confined to `<dream_id>/.hermes-private/` inside each dream artifact.
 | **Runtime state** — dream artifacts, audit log, raw entries, memory store, telemetry, logs, per-instance preflight config | `~/.hermes/{dreams,raw,observability,memory,memories,preflight,logs}/` | **No — written by code at runtime** |
 | Per-instance / per-profile config | `~/.hermes/config.yaml`, `~/.hermes/preflight/config.yaml`, `~/.hermes/.env` | Operator-edited, not version-controlled |
 
-The dev tree → runtime bridge is `~/usr-local/hermes/deploy.sh`, which copies
-**every** `lib/hermes_*.py` (substrate helpers + provider adapters) into
-`~/.hermes/lib/` so the running agent can import them. Source-of-truth remains
-in the dev tree; the live copy is a derived artifact. Run `./deploy.sh` after
-edits; restart the gateway if it's running.
+**Two checkouts of the same private repo**, kept in sync with `git pull`:
+
+- `~/usr-local/hermes/` — **dev checkout.** `origin = marozau/hermes-agent-private`. Edit code here; push to `origin/main`.
+- `~/.hermes/hermes-agent/` — **runtime checkout.** Same private repo via remote `private = marozau/hermes-agent-private`. To pick up edits: `cd ~/.hermes/hermes-agent && git pull private main`. The live agent imports from this tree.
+- `~/.hermes/` (top-level, no remote) — separate local git repo that tracks **runtime state only**: profiles, installed skills, runtime config, dreams, raw, observability, preflight logs. `hermes-agent/` is gitignored at this level (it's the separate checkout above).
+
+No code-copying step is needed. The legacy `deploy.sh` in the dev tree is a historical relic from before the two-checkouts model and is unused — `git pull` in the runtime checkout is the canonical sync mechanism.
 
 ### Required reading (when touching substrate code)
 
@@ -884,7 +886,7 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 ├── implementation-artifacts/
 │   └── stories/                        # Story-3.6/3.7/3.8 specs (Given/When/Then ACs)
 ├── plugins/preflight/                  # ⚠ NOT YET CREATED in dev tree — plugin shim still pending (preflight lib/ is migrated; plugin wrapper is the remaining piece)
-├── deploy.sh                           # Copies lib/hermes_providers*.py → ~/.hermes/lib/
+├── deploy.sh                           # ⚠ legacy / unused — see "Sync flow" below
 ├── CLAUDE.md                           # Implementation playbook
 └── AGENTS.md                           # (this file)
 ```
@@ -892,8 +894,13 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 ### Live runtime layout (`~/.hermes/`)
 
 ```
-~/.hermes/                              # Per-instance state; never edit by hand
-├── lib/                                # Deployed code (mirror of dev tree lib/, via deploy.sh)
+~/.hermes/                              # Per-instance state (top-level local git repo; no remote)
+├── hermes-agent/                       # Separate checkout of marozau/hermes-agent-private
+│   │                                   # (gitignored at top level; updated via `git pull private main`)
+│   ├── lib/                            # ← Substrate helpers + provider adapters land here on pull
+│   ├── tests/                          # Tests come with the checkout (don't run in production)
+│   ├── hermes_cli/                     # CLI entry point — what the live `hermes` command imports
+│   └── ...                             # rest of the codebase mirror
 ├── dreams/
 │   ├── providers.yaml                  # Workload-keyed routing config (5 workloads at V1)
 │   ├── audit.jsonl                     # Hash-chained apply/discard/force-override audit
@@ -977,7 +984,7 @@ Cross-references: this is the doctrine CLAUDE.md cites and that the provider ada
 
 ### Provider routing (workload-keyed)
 
-The runtime `dreams/providers.yaml` (target: version-controlled at `~/usr-local/hermes/dreams/providers.yaml`, deployed via `deploy.sh`) maps workload names → primary + fallback chain.
+The runtime `dreams/providers.yaml` (target: version-controlled at `~/usr-local/hermes/dreams/providers.yaml`, picked up by `~/.hermes/hermes-agent/` via `git pull`) maps workload names → primary + fallback chain.
 
 | Workload | Primary | Cross-provider fallback |
 |---|---|---|
@@ -1011,16 +1018,22 @@ hermes dream discard <dream_id>
 
 In-session triggers: `/dream`, `/dream status`, `/dream diff`. Match these verb names byte-for-byte — diverging causes rebase pain against upstream #10771.
 
-### Deploy flow
+### Sync flow
 
 ```bash
+# 1. Edit + commit + push in the dev checkout
 cd ~/usr-local/hermes
-./deploy.sh              # copies lib/hermes_*.py → ~/.hermes/lib/
-                         # (substrate helpers + provider adapters together)
+git add -p && git commit -m "..." && git push origin main
+
+# 2. Pull into the runtime checkout
+cd ~/.hermes/hermes-agent
+git pull private main
 hermes gateway restart   # if the gateway is running
 ```
 
-Tests run against the dev tree, NOT the deployed runtime — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the source. Don't `pytest` against `~/.hermes/`.
+No file-copying step; the two checkouts are two working copies of the same git repo on different remotes (dev tree → `origin = hermes-agent-private`; runtime → `private = hermes-agent-private`). The legacy `deploy.sh` is unused — keep it on disk for now in case any external scripts reference it, but don't run it.
+
+Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last pull.
 
 ### Definition-of-Done (V1)
 
