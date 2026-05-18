@@ -585,6 +585,36 @@ def write_preflight_telemetry(
     _atomic_append(log_path / f"{today}.jsonl", row)
 
 
+def record_verify_citations(
+    session_id: str,
+    intent_hash: str,
+    cited_ids: list[str],
+    log_dir: Optional[str] = None,
+) -> None:
+    """Append a verify_citation event row keyed on (session_id, intent_hash).
+
+    Item-7 hit rate is computed by joining each preflight row with the
+    verify_citation event for the same (session_id, intent_hash) and asking
+    whether `preflight_row.top_ids[0]` appears in `verify_row.cited_ids`.
+
+    Append-only: never mutates the original preflight row. An empty
+    `cited_ids` is a meaningful signal (verify ran but consulted nothing
+    from preflight's top-K) and is recorded as such.
+    """
+    if log_dir is None:
+        log_dir = str(_preflight_dir() / "log")
+    log_path = Path(log_dir)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    row = json.dumps({
+        "ts": datetime.now(timezone.utc).isoformat(),
+        "event": "verify_citation",
+        "session_id": session_id,
+        "intent_hash": intent_hash,
+        "cited_ids": list(cited_ids),
+    }, ensure_ascii=False, sort_keys=True) + "\n"
+    _atomic_append(log_path / f"{today}.jsonl", row)
+
+
 def persist_citations(session_id: str, entry_ids: list[str]) -> None:
     """DN3 / Story 7.7: persist preflight citations for trajectory writer."""
     if not entry_ids:
@@ -781,6 +811,14 @@ def should_run_preflight(
 
     # P25 / P20: telemetry BEFORE mark_fired (so a telemetry failure leaves
     # the gate unfired and retry replays cleanly).
+    #
+    # cited_entry_ids stays empty at preflight emit time. The verify-cited
+    # follow-through (record_verify_citations) populates it later by
+    # appending a separate `verify_citation` event row keyed on
+    # (session_id, intent_hash). Item-7 hit rate is then computed by
+    # joining preflight rows with verify_citation events, NOT by reading
+    # cited_entry_ids on the original row (that field is reserved for an
+    # in-process verify hook that may land in a later iteration).
     write_preflight_telemetry(PreflightTelemetry(
         session_id=session_id,
         intent_hash=intent.intent_hash,
@@ -792,7 +830,7 @@ def should_run_preflight(
         scores=[h.score for h in deduped],
         elapsed_ms=elapsed,
         mode=mode,
-        cited_entry_ids=cited_ids,
+        cited_entry_ids=[],
     ), log_dir=log_dir)
 
     if cited_ids:

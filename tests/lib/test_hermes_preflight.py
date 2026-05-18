@@ -48,6 +48,7 @@ from lib.hermes_preflight import (
     PreflightGate, PreflightTelemetry, SkipReason, TrajectoryHit, IntentResult,
     classify_intent, dedupe_and_cap, evaluate_skip_ladder, format_heads_up,
     persist_citations, rank_trajectories, read_citations,
+    record_verify_citations,
     retrieve_trajectories, should_run_preflight, write_preflight_telemetry,
     _filter_stale_trajectories, _ensure_hydrated, _load_gates_from_disk,
     _save_gates_to_disk, _gates_path, _gates,
@@ -323,6 +324,70 @@ class TestCitations:
 
     def test_read_unknown_session_empty(self, isolated_env):
         assert read_citations("never-fired") == []
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Verify-cited follow-through (item 7 measurability)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class TestRecordVerifyCitations:
+    def test_writes_event_row(self, tmp_path):
+        log_dir = tmp_path / "preflight" / "log"
+        record_verify_citations("s1", "intent-abc", ["t2", "t9"],
+                                log_dir=str(log_dir))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = [json.loads(line) for line in (log_dir / f"{today}.jsonl")
+                .read_text().strip().split("\n")]
+        assert rows[0]["event"] == "verify_citation"
+        assert rows[0]["session_id"] == "s1"
+        assert rows[0]["intent_hash"] == "intent-abc"
+        assert rows[0]["cited_ids"] == ["t2", "t9"]
+
+    def test_empty_cited_ids_still_recorded(self, tmp_path):
+        """Verify ran but consulted nothing — that's a meaningful signal."""
+        log_dir = tmp_path / "preflight" / "log"
+        record_verify_citations("s1", "intent-x", [], log_dir=str(log_dir))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = [json.loads(line) for line in (log_dir / f"{today}.jsonl")
+                .read_text().strip().split("\n")]
+        assert rows[0]["cited_ids"] == []
+
+    def test_appends_alongside_preflight_rows(self, tmp_path):
+        """Preflight row + verify_citation event coexist in same log file
+        so the offline join (item-7 hit-rate) reads one file per day."""
+        log_dir = tmp_path / "preflight" / "log"
+        log_dir.mkdir(parents=True)
+        # Preflight row (simulated via write_preflight_telemetry).
+        t = PreflightTelemetry(
+            session_id="s1", intent_hash="ih1", domains=[],
+            complexity_hit=False, skip_reason=None, raw_hits=3,
+            top_ids=["t1", "t2", "t3"], scores=[0.7, 0.5, 0.4],
+            elapsed_ms=12.0, mode="shadow", cited_entry_ids=[],
+        )
+        write_preflight_telemetry(t, log_dir=str(log_dir))
+        # Verify follow-through.
+        record_verify_citations("s1", "ih1", ["t2"], log_dir=str(log_dir))
+        today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+        rows = [json.loads(line) for line in (log_dir / f"{today}.jsonl")
+                .read_text().strip().split("\n")]
+        assert len(rows) == 2
+        # Preflight row stays clean — cited_entry_ids is NOT an echo of top_ids.
+        preflight = rows[0]
+        assert preflight.get("event") is None  # no event key on preflight rows
+        assert preflight["top_ids"] == ["t1", "t2", "t3"]
+        assert preflight["cited_entry_ids"] == []
+        # Verify event carries the joinable keys.
+        verify = rows[1]
+        assert verify["event"] == "verify_citation"
+        assert verify["session_id"] == "s1"
+        assert verify["intent_hash"] == "ih1"
+        # Item-7 hit-rate, computed offline: did preflight's top-1 match
+        # what verify cited?
+        top_1 = preflight["top_ids"][0]
+        assert top_1 not in verify["cited_ids"]  # this run is a top-1 MISS
+        # ... and top-2 is a HIT, confirming the test wires the join correctly.
+        assert preflight["top_ids"][1] in verify["cited_ids"]
 
 
 # ─────────────────────────────────────────────────────────────────────────────
