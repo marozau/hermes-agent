@@ -1,6 +1,9 @@
-"""Pytest conftest for tests/lib/ -- provider adapter tests.
+"""Pytest conftest for tests/lib/ -- substrate helper + provider adapter tests.
 
-Ensures ~/.hermes/lib/ is importable and credentials are isolated.
+Adds dev-tree lib/ to sys.path so `import hermes_memory`, `import hermes_providers`
+etc. resolve to the dev-tree source-of-truth (FR-3, NFR-23). Exposes HERMES_ROOT
+for tests that need to locate runtime state (e.g., dreams/providers.yaml lives
+at ~/.hermes/dreams/providers.yaml, not in the dev tree).
 """
 
 import os
@@ -9,21 +12,25 @@ from pathlib import Path
 
 import pytest
 
-# Add ~/.hermes/lib/ to sys.path so tests can import lib modules.
-# NOTE: HOME may point to a profile directory (~/.hermes/profiles/*/home/)
-# in this environment. Resolve the REAL .hermes/lib by detecting the
-# profile-relative case.
-_LIB_CANDIDATES = [
-    Path.home() / ".hermes" / "lib",       # normal case
-    Path.home().parent.parent / ".hermes" / "lib",  # profile case: ~/.hermes/profiles/*/home/
-    Path("/Users/im/.hermes/lib"),          # fallback
+# Dev-tree lib/ (source-of-truth) on sys.path first; ~/.hermes/lib/ (deployed
+# runtime copy) only as a fallback for legacy callers.
+_DEV_LIB = Path(__file__).resolve().parents[2] / "lib"  # ~/usr-local/hermes/lib/
+_RUNTIME_LIB_CANDIDATES = [
+    Path.home() / ".hermes" / "lib",                       # normal case
+    Path.home().parent.parent / ".hermes" / "lib",          # profile case: ~/.hermes/profiles/*/home/
+    Path("/Users/im/.hermes/lib"),                          # fallback
 ]
-for _candidate in _LIB_CANDIDATES:
+for _candidate in [_DEV_LIB, *_RUNTIME_LIB_CANDIDATES]:
     if _candidate.is_dir():
         lib_str = str(_candidate)
         if lib_str not in sys.path:
             sys.path.insert(0, lib_str)
         break
+
+# HERMES_ROOT is the runtime workspace root — where dreams/, raw/, observability/,
+# memory/, memories/, preflight/ live. Tests use this to locate runtime config
+# (notably ~/.hermes/dreams/providers.yaml). Independent of the dev tree.
+HERMES_ROOT = Path.home() / ".hermes"
 
 # Provider API keys that MUST NOT be set during tests
 _CHAT_API_KEY_VARS = ["OPENAI_API_KEY", "DEEPSEEK_API_KEY", "ANTHROPIC_API_KEY"]

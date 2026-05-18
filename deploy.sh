@@ -21,9 +21,12 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Deploying lib modules from $SCRIPT_DIR/lib/ to $LIVE_DIR/"
 
-for f in "$SCRIPT_DIR"/lib/hermes_providers*.py; do
+# Copy every hermes_*.py — substrate helpers (memory, llm, dream, recall,
+# trust, preflight) and provider adapters (providers, providers_anthropic,
+# providers_chat).
+for f in "$SCRIPT_DIR"/lib/hermes_*.py; do
     cp -v "$f" "$LIVE_DIR/"
 done
 
-echo "Done. Live agent can import provider adapters."
+echo "Done. Live agent can import substrate helpers + provider adapters."
 echo "Restart gateway if running: hermes gateway restart"

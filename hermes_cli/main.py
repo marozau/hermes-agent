@@ -242,6 +242,26 @@ try:
 except Exception:
     pass  # best-effort — don't crash the CLI if logging setup fails
 
+# Story 3.8 boot-path wiring: register provider adapters (anthropic, deepseek,
+# openai) so `lib.hermes_llm.llm_call()` has dispatch entries at first use.
+# Adds PROJECT_ROOT/lib to sys.path so the substrate modules (hermes_memory,
+# hermes_llm, hermes_dream, hermes_recall, hermes_trust, hermes_preflight,
+# hermes_providers*) are importable as top-level. `from lib.hermes_X import`
+# also works because PROJECT_ROOT itself is on sys.path (L107) and lib/ is a
+# namespace package. Guarded against missing module on the same upgrade-mid-
+# flight rationale as hermes_bootstrap above; LLM-using subcommands will
+# surface a clear "no dispatcher registered" error from hermes_llm.py if
+# registration silently fails here.
+try:
+    _lib_dir = PROJECT_ROOT / "lib"
+    if _lib_dir.is_dir() and str(_lib_dir) not in sys.path:
+        sys.path.insert(0, str(_lib_dir))
+    import hermes_providers  # noqa: E402
+    hermes_providers.register_all()
+    del _lib_dir
+except Exception:
+    pass  # best-effort — first llm_call() will fail loudly if registry is empty
+
 # Apply IPv4 preference early, before any HTTP clients are created.
 try:
     from hermes_cli.config import load_config as _load_config_early
