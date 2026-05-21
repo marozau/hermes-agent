@@ -44,9 +44,6 @@ def register(ctx) -> None:
     )
     from plugins.bmad.hooks.pre_tool_call import pre_tool_call
     from plugins.bmad.hooks.post_tool_call import post_tool_call
-    from plugins.bmad.scripts.bmad_init import cli_main as bmad_init_cli
-    from plugins.bmad.scripts.port_completeness import cli_main as bmad_check_port_cli
-
     from plugins.bmad.hooks.subagent_stop import subagent_stop
 
     # ── Hooks ──────────────────────────────────────────
@@ -60,10 +57,120 @@ def register(ctx) -> None:
     ctx.register_hook("subagent_stop", _catch_all("subagent_stop")(subagent_stop))
 
     # ── CLI commands ───────────────────────────────────
+
+    def _register_bmad_init_cli(subparser):
+        """Add bmad-init arguments to the subparser."""
+        subparser.add_argument(
+            "--project-name", type=str, default=None,
+            help="Human-readable project name (required).",
+        )
+        subparser.add_argument(
+            "--project-type", type=str, default="other",
+            choices=["web-app", "mobile-app", "api", "library", "game", "other"],
+            help="Type of project (default: other).",
+        )
+        subparser.add_argument(
+            "--project-level", type=int, default=1, choices=[0, 1, 2, 3, 4],
+            help="BMAD rigor level 0–4 (default: 1).",
+        )
+        subparser.add_argument(
+            "--user-name", type=str, default="",
+            help="Name of the project owner/user.",
+        )
+        subparser.add_argument(
+            "--force", action="store_true", default=False,
+            help="Overwrite existing bmad/config.yaml without prompting.",
+        )
+        subparser.add_argument(
+            "--non-interactive", action="store_true", default=False,
+            help="Fail if config exists or required fields are missing.",
+        )
+
+    def _run_bmad_init(args):
+        """Thin wrapper: pass Namespace values to bootstrap().
+
+        M-2 fix (code-review 2026-05-21): the non-interactive guard now
+        fires BEFORE any input() call. Previously, the project-name input()
+        prompt ran unconditionally, hanging CI/scripted invocations.
+        """
+        import sys
+        from pathlib import Path
+        from plugins.bmad.scripts.bmad_init import bootstrap
+
+        non_interactive = bool(getattr(args, "non_interactive", False))
+
+        # Resolve project_name with the non-interactive guard fired BEFORE
+        # any blocking input() call.
+        project_name = args.project_name
+        if not project_name:
+            if non_interactive:
+                print(
+                    "Error: --project-name is required under --non-interactive",
+                    file=sys.stderr,
+                )
+                sys.exit(3)
+            try:
+                project_name = input("Project name: ").strip()
+            except (EOFError, KeyboardInterrupt):
+                print(
+                    "Error: project name required (stdin closed or interrupted)",
+                    file=sys.stderr,
+                )
+                sys.exit(3)
+            if not project_name:
+                print("Error: project name required", file=sys.stderr)
+                sys.exit(3)
+
+        try:
+            config = bootstrap(
+                Path.cwd(),
+                project_name=project_name,
+                project_type=args.project_type,
+                project_level=args.project_level,
+                user_name=args.user_name or "",
+                force=args.force,
+                interactive=not non_interactive,
+            )
+            print(f"✅ BMAD project '{config['project_name']}' initialized at {Path.cwd()}")
+            print(f"   Level: {config['project_level']}  |  Type: {config['project_type']}")
+        except RuntimeError as exc:
+            print(f"Error: {exc}", file=sys.stderr)
+            sys.exit(3)
+
+    def _register_bmad_check_port_cli(subparser):
+        """Add bmad-check-port arguments to the subparser."""
+        subparser.add_argument(
+            "--scope", type=str, default="all",
+            help="Scope: analysis, planning, solutioning, implementation, or all (default).",
+        )
+        subparser.add_argument(
+            "--bmad-source", type=str, default=None,
+            help="Path to BMAD v6.6.0 source directory.",
+        )
+
+    def _run_bmad_check_port(args):
+        """Thin wrapper: pass Namespace values to port_completeness."""
+        from plugins.bmad.scripts.port_completeness import check_port
+        from pathlib import Path
+        sys_mod = __import__('sys')
+        missing = check_port(
+            scope=args.scope or "all",
+            bmad_source=Path(args.bmad_source) if args.bmad_source else None,
+        )
+        if missing:
+            print(f"Missing files: {len(missing)}")
+            for m in missing:
+                print(f"  {m}")
+            sys_mod.exit(1)
+        else:
+            print("✅ All files present within scope.")
+            sys_mod.exit(0)
+
     ctx.register_cli_command(
         name="bmad-init",
         help="Scaffold a new BMAD project in the current directory",
-        handler_fn=bmad_init_cli,
+        setup_fn=_register_bmad_init_cli,
+        handler_fn=_run_bmad_init,
         description=(
             "Create bmad/config.yaml, planning-artifacts/, "
             "implementation-artifacts/stories/, and a "
@@ -73,7 +180,8 @@ def register(ctx) -> None:
     ctx.register_cli_command(
         name="bmad-check-port",
         help="Check BMAD port completeness against v6.6.0 source",
-        handler_fn=bmad_check_port_cli,
+        setup_fn=_register_bmad_check_port_cli,
+        handler_fn=_run_bmad_check_port,
         description=(
             "Verify that every BMAD v6.6.0 workflow file has a matching "
             "port under ~/.hermes/skills/bmad/."
@@ -134,6 +242,9 @@ def register(ctx) -> None:
     from plugins.bmad.commands.agent_builder import handler as _agent_builder_handler
     from plugins.bmad.commands.module_builder import handler as _module_builder_handler
     from plugins.bmad.commands.workflow_builder import handler as _workflow_builder_handler
+
+    # Meta — multi-persona round table (ungated)
+    from plugins.bmad.commands.party_mode import handler as _party_mode_handler
 
     ctx.register_command(
         name="bmad:init",
@@ -345,4 +456,11 @@ def register(ctx) -> None:
         args_hint="",
     )
 
-    logger.info("[bmad] plugin registered: hooks=5, cli=2, slash=39")
+    # Meta: party-mode (multi-persona round table; ungated)
+    ctx.register_command(
+        name="bmad:party-mode",
+        handler=_party_mode_handler,
+        args_hint="[--fan-out] <topic>",
+    )
+
+    logger.info("[bmad] plugin registered: hooks=5, cli=2, slash=40")
