@@ -275,9 +275,21 @@ class TestM6_NonUtf8DiffHandling:
 
 class TestM1_SkillsInRepoSourceTree:
     """Pin that the review-hunter skills are version-controlled, not just
-    deployed locally. Without this, a clean redeploy silently drops them."""
+    deployed locally. Without this, a clean redeploy silently drops them.
 
-    REPO_SKILLS = Path.home() / ".hermes" / "hermes-agent" / "skills" / "bmad" / "bmm"
+    Path resolved from this test file's location so the test runs both in
+    the live install and in the dev fork — no ``Path.home()`` coupling.
+
+    File path layout:
+        <repo-root>/plugins/bmad/tests/unit/test_code_review_must_fixes.py
+        parents[0] = unit/
+        parents[1] = tests/
+        parents[2] = bmad/
+        parents[3] = plugins/
+        parents[4] = <repo-root>
+    """
+
+    REPO_SKILLS = Path(__file__).resolve().parents[4] / "skills" / "bmad" / "bmm"
 
     def test_review_adversarial_general_in_repo(self):
         skill = self.REPO_SKILLS / "review-adversarial-general" / "SKILL.md"
@@ -315,8 +327,18 @@ class TestM2_NonInteractiveFlag:
     """
 
     def test_non_interactive_path_skips_input(self):
-        """Smoke-test: read __init__.py source and verify the guard order."""
-        init_file = Path.home() / ".hermes" / "hermes-agent" / "plugins" / "bmad" / "__init__.py"
+        """Smoke-test: read __init__.py source and verify the guard order.
+
+        Path resolved from this test file's location — portable across live
+        and dev-fork checkouts. ``parents[2]`` is the bmad/ plugin root:
+
+            <repo>/plugins/bmad/tests/unit/test_code_review_must_fixes.py
+            parents[0] = unit/
+            parents[1] = tests/
+            parents[2] = bmad/        ← we want __init__.py here
+            parents[3] = plugins/
+        """
+        init_file = Path(__file__).resolve().parents[2] / "__init__.py"
         src = init_file.read_text(encoding="utf-8")
         # The non_interactive check should appear BEFORE any input() call.
         non_int_idx = src.find("non_interactive = bool")
