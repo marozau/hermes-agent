@@ -1,0 +1,11 @@
+name: gitnexus-autorefresh
+version: 0.1.0
+description: Auto-run `gitnexus analyze` after git-mutation tool calls so the
+  GitNexus index never drifts behind HEAD. Detects git commit / merge / pull /
+  checkout / rebase / reset in terminal tool calls and fires a detached
+  background `npx gitnexus analyze --skip-agents-md` in the tool's cwd.
+kind: standalone
+metadata:
+  author: marozau
+  source-of-truth: ~/usr-local/hermes/plugins/gitnexus-autorefresh/ (after consolidation)
+  research: ~/usr-local/hermes-vscode/planning-artifacts/research/technical-gitnexus-index-freshness-hermes-2026-05-27.md
