@@ -551,10 +551,25 @@ when injecting; returns `None` when the gate skipped, the recall set was
 empty, or `mode: shadow` is set. Telemetry is written for every invocation
 (fire OR skip — FR-34).
 
-**Companion CLI:** `~/.hermes/bin/hermes-preflight` — `check`, `force`,
-`mode`, `tail` subcommands. Used for inspecting what preflight would emit
-on a given message, force-firing past the gate (the `/preflight [task]`
-slash-command equivalent — FR-35), and tailing today's telemetry.
+**Companion CLI:** `bin/hermes-preflight` (bundled in the fork; runtime
+installs to `~/.hermes/bin/hermes-preflight` on pull). Subcommands:
+`check`, `force`, `mode`, `tail`. Used for inspecting what preflight would
+emit on a given message, force-firing past the gate (the
+`/preflight [task]` slash-command equivalent — FR-35), and tailing today's
+telemetry.
+
+**Smoke test:** `scripts/smoke-test-preflight.sh` runs all four CLI
+subcommands and verifies exit codes + output shape. Designed to run in CI
+without setup; resolves `$REPO_ROOT` relative to `${BASH_SOURCE[0]}` so it
+works from any checkout. Override `HERMES_PREFLIGHT_CLI` /
+`HERMES_VENV_PYTHON` to point at the runtime-installed copy if desired.
+
+**CI:** `.github/workflows/preflight-ci.yml` triggers on changes to any
+preflight-related path (`lib/hermes_preflight.py`, `plugins/preflight/**`,
+`bin/hermes-preflight`, `tests/lib/test_hermes_preflight*.py`,
+`scripts/smoke-test-preflight.sh`). Runs unit + integration tests on
+Python 3.11 + 3.12, asserts ≥80% coverage on `lib.hermes_preflight`, then
+the smoke test.
 
 ### BMAD plugin (`plugins/bmad/`)
 
@@ -1021,6 +1036,11 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 ├── plugins/preflight/                  # FAMA Tier-2 #3 / Epic 7 — pre_llm_call hook shim
 │   ├── __init__.py                     # register(ctx) → ctx.register_hook("pre_llm_call", on_pre_llm_call)
 │   └── plugin.yaml                     # manifest
+├── bin/                                # Companion CLIs (bundled; runtime installs to ~/.hermes/bin/)
+│   ├── hermes-preflight                # FAMA Tier-2 #3 / Epic 7 — check / force / mode / tail
+│   └── hermes-dream                    # Epic 4 — create / status / diff / apply / discard
+├── scripts/smoke-test-preflight.sh     # CI smoke (used by .github/workflows/preflight-ci.yml)
+├── .github/workflows/preflight-ci.yml  # Unit + integration + coverage + smoke (Python 3.11 + 3.12)
 ├── deploy.sh                           # ⚠ legacy / unused — see "Sync flow" below
 ├── CLAUDE.md                           # Implementation playbook
 └── AGENTS.md                           # (this file)

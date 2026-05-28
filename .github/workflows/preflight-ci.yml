@@ -1,0 +1,36 @@
+name: hermes-preflight
+
+on:
+  push:
+    paths:
+      - 'lib/hermes_preflight.py'
+      - 'plugins/preflight/**'
+      - 'bin/hermes-preflight'
+      - 'tests/lib/test_hermes_preflight*.py'
+      - 'scripts/smoke-test-preflight.sh'
+  pull_request:
+    paths:
+      - 'lib/hermes_preflight.py'
+      - 'plugins/preflight/**'
+      - 'bin/hermes-preflight'
+      - 'tests/lib/test_hermes_preflight*.py'
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install deps
+        run: pip install pytest pytest-cov pyyaml
+      - name: Unit + integration tests
+        run: python -m pytest tests/lib/test_hermes_preflight*.py -v --tb=short
+      - name: Coverage
+        run: python -m pytest tests/lib/test_hermes_preflight.py --cov=lib.hermes_preflight --cov-report=term --cov-fail-under=80 -q
+      - name: Smoke test
+        run: bash scripts/smoke-test-preflight.sh

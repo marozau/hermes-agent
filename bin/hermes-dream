@@ -1,0 +1,134 @@
+#!/usr/bin/env python3
+"""hermes-dream — standalone CLI for staged dream artifacts (FR-13, NFR-21).
+
+Usage:
+    hermes-dream create [--scope SCOPE] [--memory-dir PATH] [--dry-run]
+    hermes-dream status
+    hermes-dream diff DREAM_ID
+    hermes-dream apply DREAM_ID [--only GLOB] [--accept]
+    hermes-dream discard DREAM_ID
+
+The verbs map 1:1 to the canonical helpers in lib/hermes_dream.py. Proper
+integration into the `hermes` CLI (subparser registration) is tracked as
+Story 4.8 follow-up; this standalone script lets operators exercise the
+substrate today.
+"""
+import argparse
+import json
+import os
+import sys
+from pathlib import Path
+
+# Resolve the module path from this script's install location, NOT from
+# HERMES_HOME — the env var controls where artifacts/memory live, not where
+# the python module is installed.
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_LIB_ROOT = _SCRIPT_DIR.parent  # ~/.hermes/
+if str(_LIB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIB_ROOT))
+
+from lib.hermes_dream import (
+    apply_dream, create_dream_artifact, discard_dream, dream_diff, list_dreams,
+)
+
+
+def cmd_create(args: argparse.Namespace) -> int:
+    dream_id = create_dream_artifact(
+        scope=args.scope,
+        memory_dir=args.memory_dir,
+        dry_run=args.dry_run,
+    )
+    print(dream_id)
+    return 0
+
+
+def cmd_status(args: argparse.Namespace) -> int:
+    dreams = list_dreams()
+    if not dreams:
+        print("(no dream artifacts)")
+        return 0
+    # Plain table — no external deps.
+    header = ("DREAM_ID", "SCOPE", "CREATED", "REGRESSION", "ELIGIBLE", "APPLIED")
+    rows = [header] + [
+        (d["dream_id"], d["scope"], d["created"], d["regression"],
+         d["apply_eligible"], "yes" if d.get("applied") else "no")
+        for d in dreams
+    ]
+    widths = [max(len(str(r[i])) for r in rows) for i in range(len(header))]
+    for r in rows:
+        print("  ".join(str(r[i]).ljust(widths[i]) for i in range(len(header))))
+    return 0
+
+
+def cmd_diff(args: argparse.Namespace) -> int:
+    print(dream_diff(args.dream_id))
+    return 0
+
+
+def cmd_apply(args: argparse.Namespace) -> int:
+    # FR-28 / Story 5.3 AC #3: --force requires --reason.
+    if args.force and not (args.reason and args.reason.strip()):
+        print(json.dumps({
+            "status": "refused",
+            "reason": "--force requires --reason <text>",
+        }, indent=2))
+        return 2
+    result = apply_dream(
+        args.dream_id,
+        only=args.only,
+        force_apply=args.accept,
+        force_recall=args.force,
+        force_reason=args.reason or "",
+    )
+    print(json.dumps(result, indent=2))
+    # FR-27: exit 2 when the recall gate blocks.
+    if result["status"] == "regression_blocked":
+        return 2
+    return 0 if result["status"] in ("applied", "no_changes") else 1
+
+
+def cmd_discard(args: argparse.Namespace) -> int:
+    result = discard_dream(args.dream_id)
+    print(json.dumps(result, indent=2))
+    return 0 if result["status"] in ("discarded", "not_found") else 1
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(prog="hermes-dream")
+    sub = parser.add_subparsers(dest="cmd", required=True)
+
+    p_create = sub.add_parser("create", help="create a dream artifact")
+    p_create.add_argument("--scope", default="default")
+    p_create.add_argument("--memory-dir", default=None)
+    p_create.add_argument("--dry-run", action="store_true")
+    p_create.set_defaults(func=cmd_create)
+
+    p_status = sub.add_parser("status", help="list dream artifacts")
+    p_status.set_defaults(func=cmd_status)
+
+    p_diff = sub.add_parser("diff", help="render REPORT.md + patches")
+    p_diff.add_argument("dream_id")
+    p_diff.set_defaults(func=cmd_diff)
+
+    p_apply = sub.add_parser("apply", help="apply a dream (requires --accept)")
+    p_apply.add_argument("dream_id")
+    p_apply.add_argument("--only", default=None,
+                         help="fnmatch glob on target_entry_id")
+    p_apply.add_argument("--accept", action="store_true",
+                         help="confirm manual ack (Hard Invariant #4)")
+    p_apply.add_argument("--force", action="store_true",
+                         help="override recall-regression gate (Epic 5)")
+    p_apply.add_argument("--reason", default=None,
+                         help="justification text required with --force (≥10 chars)")
+    p_apply.set_defaults(func=cmd_apply)
+
+    p_discard = sub.add_parser("discard", help="delete a dream artifact")
+    p_discard.add_argument("dream_id")
+    p_discard.set_defaults(func=cmd_discard)
+
+    args = parser.parse_args()
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

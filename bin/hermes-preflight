@@ -1,0 +1,344 @@
+#!/usr/bin/env python3
+"""hermes-preflight — standalone CLI for the preflight plugin (Story 7.6).
+
+Usage:
+    hermes-preflight check [--json|--format=text] [--timeout SEC] [--dry-run] [--verbose] <message>
+    hermes-preflight force [--json|--format=text] [--timeout SEC] [--dry-run] [--verbose] <message>
+    hermes-preflight mode [shadow|live]
+    hermes-preflight tail [--n N] [--json]
+    hermes-preflight --version
+    hermes-preflight --help
+
+Exit codes:
+    0   all checks passed (or skip with heads-up generated)
+    1   pipeline error (skip reason returned, no heads-up, or internal failure)
+    2   usage error (invalid arguments, missing message)
+    124 timeout exceeded
+"""
+import argparse
+import json
+import os
+import signal
+import sys
+from datetime import datetime, timezone
+from pathlib import Path
+
+_SCRIPT_DIR = Path(__file__).resolve().parent
+_LIB_ROOT = _SCRIPT_DIR.parent  # ~/.hermes/
+if str(_LIB_ROOT) not in sys.path:
+    sys.path.insert(0, str(_LIB_ROOT))
+
+from lib.hermes_preflight import (  # noqa: E402
+    _preflight_dir, _resolve_mode, should_run_preflight,
+)
+
+__version__ = "1.1.0"
+__commit__ = "2026-05-15"
+__build_date__ = "2026-05-15"
+
+
+def _format_output(data: dict, fmt: str) -> str:
+    """Format pipeline result as JSON or human-readable text."""
+    if fmt == "json":
+        return json.dumps(data, indent=2)
+    # text format
+    lines = []
+    lines.append(f"Mode: {data.get('mode', '?')}")
+    lines.append(f"Skip reason: {data.get('skip_reason') or 'none (pipeline fired)'}")
+    if data.get("heads_up"):
+        lines.append("Heads-up: generated")
+        lines.append(data["heads_up"])
+    else:
+        lines.append("Heads-up: none")
+    return "\n".join(lines)
+
+
+def _exit_code(reason, heads_up) -> int:
+    """Map pipeline result to exit code.
+    0 = pipeline fired (even if shadow-suppressed) or heads-up generated
+    1 = skipped (warm-up, no-domain, etc.) or error
+    """
+    if reason is None:
+        return 0
+    # Shadow mode: pipeline fired, just suppressed injection — still success
+    if hasattr(reason, 'value') and reason.value == "shadow-mode":
+        return 0
+    # Skipped with a real reason → non-zero
+    return 1
+
+
+class TimeoutError(Exception):
+    pass
+
+
+def _with_timeout(fn, timeout_sec: float):
+    """Run fn with a timeout. Raises TimeoutError if exceeded."""
+    if timeout_sec <= 0:
+        return fn()
+
+    result = [None]
+    error = [None]
+
+    def _runner():
+        try:
+            result[0] = fn()
+        except Exception as e:
+            error[0] = e
+
+    import threading
+    t = threading.Thread(target=_runner, daemon=True)
+    t.start()
+    t.join(timeout=timeout_sec)
+    if t.is_alive():
+        # Thread is still running — timeout
+        raise TimeoutError(f"timed out after {timeout_sec}s")
+    if error[0]:
+        raise error[0]
+    return result[0]
+
+
+def cmd_check(args: argparse.Namespace) -> int:
+    """Show what preflight would emit (standard pipeline, no force)."""
+    if args.dry_run:
+        result = {
+            "command": "check",
+            "message": args.message,
+            "flags": {
+                "json": args.json,
+                "format": args.format,
+                "timeout": args.timeout,
+                "dry_run": True,
+                "verbose": args.verbose,
+                "force": False,
+            },
+        }
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"DRY-RUN: would run 'check' on message ({len(args.message)} chars)")
+            print(f"  flags: format={args.format} timeout={args.timeout}s force=no")
+        return 0
+
+    if args.verbose:
+        print(f"[hermes-preflight] check: message={args.message[:60]}... timeout={args.timeout}s",
+              file=sys.stderr)
+
+    def _run():
+        return should_run_preflight(
+            session_id="cli-check",
+            message=args.message,
+            force=False,
+        )
+
+    try:
+        gate, reason, heads_up = _with_timeout(_run, args.timeout)
+    except TimeoutError as e:
+        print(str(e), file=sys.stderr)
+        return 124
+
+    out = {
+        "mode": _resolve_mode(),
+        "skip_reason": reason.value if reason else None,
+        "heads_up": heads_up,
+    }
+    fmt = "json" if args.json else args.format
+    print(_format_output(out, fmt))
+    return _exit_code(reason, heads_up)
+
+
+def cmd_force(args: argparse.Namespace) -> int:
+    """FR-35: /preflight [task] force-fires the pipeline."""
+    if args.dry_run:
+        result = {
+            "command": "force",
+            "message": args.message,
+            "flags": {
+                "json": args.json,
+                "format": args.format,
+                "timeout": args.timeout,
+                "dry_run": True,
+                "verbose": args.verbose,
+                "force": True,
+            },
+        }
+        if args.json:
+            print(json.dumps(result, indent=2))
+        else:
+            print(f"DRY-RUN: would force-fire preflight on message ({len(args.message)} chars)")
+            print(f"  flags: format={args.format} timeout={args.timeout}s force=yes")
+        return 0
+
+    if args.verbose:
+        print(f"[hermes-preflight] force: message={args.message[:60]}... timeout={args.timeout}s",
+              file=sys.stderr)
+
+    def _run():
+        return should_run_preflight(
+            session_id="cli-force",
+            message=args.message,
+            force=True,
+        )
+
+    try:
+        gate, reason, heads_up = _with_timeout(_run, args.timeout)
+    except TimeoutError as e:
+        print(str(e), file=sys.stderr)
+        return 124
+
+    out = {
+        "mode": _resolve_mode(),
+        "skip_reason": reason.value if reason else None,
+        "heads_up": heads_up,
+    }
+    fmt = "json" if args.json else args.format
+    print(_format_output(out, fmt))
+    return _exit_code(reason, heads_up)
+
+
+def cmd_mode(args: argparse.Namespace) -> int:
+    """Read or flip the rollout mode."""
+    cfg_path = _preflight_dir() / "config.yaml"
+    if args.value is None:
+        mode = _resolve_mode()
+        if args.json:
+            print(json.dumps({"mode": mode}))
+        else:
+            print(mode)
+        return 0
+    if args.value not in ("shadow", "live"):
+        print(f"invalid mode {args.value!r} (use shadow or live)", file=sys.stderr)
+        return 2
+    try:
+        import yaml
+    except ImportError:
+        print("PyYAML required to write config.yaml", file=sys.stderr)
+        return 1
+    cfg_path.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
+    cfg = {}
+    if cfg_path.exists():
+        try:
+            cfg = yaml.safe_load(cfg_path.read_text(encoding="utf-8")) or {}
+        except Exception:
+            cfg = {}
+    cfg["mode"] = args.value
+    cfg_path.write_text(yaml.dump(cfg, sort_keys=False), encoding="utf-8")
+    if args.json:
+        print(json.dumps({"mode": args.value}))
+    else:
+        print(f"mode set to {args.value}")
+    return 0
+
+
+def cmd_tail(args: argparse.Namespace) -> int:
+    """Tail today's telemetry log."""
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_file = _preflight_dir() / "log" / f"{today}.jsonl"
+    if not log_file.exists():
+        msg = "(no telemetry yet today)"
+        if args.json:
+            print(json.dumps({"entries": [], "message": msg}))
+        else:
+            print(msg)
+        return 0
+    lines = log_file.read_text(encoding="utf-8").strip().split("\n")
+    entries = []
+    for line in lines[-args.n:]:
+        try:
+            entries.append(json.loads(line))
+        except json.JSONDecodeError:
+            entries.append({"raw": line})
+
+    if args.json:
+        print(json.dumps({"entries": entries, "count": len(entries)}, indent=2))
+    else:
+        for row in entries:
+            if isinstance(row, dict) and "session_id" in row:
+                skip = row.get("skip_reason") or "FIRED"
+                print(
+                    f"{row.get('ts', '?')[:19]} "
+                    f"session={row['session_id'][:28]:30s} "
+                    f"skip={skip:35s} "
+                    f"hits={row.get('raw_hits', 0):>3} "
+                    f"domains={row.get('domains', [])}"
+                )
+            else:
+                print(row)
+    return 0
+
+
+def cmd_version(args: argparse.Namespace) -> int:
+    """Print version info."""
+    info = {
+        "version": __version__,
+        "commit": __commit__,
+        "build_date": __build_date__,
+    }
+    if args.json:
+        print(json.dumps(info))
+    else:
+        print(f"hermes-preflight {__version__} (commit {__commit__}, built {__build_date__})")
+    return 0
+
+
+def _add_output_flags(parser):
+    parser.add_argument("--json", action="store_true", help="output as JSON")
+    parser.add_argument("--format", choices=["text", "json"], default="text",
+                        help="output format (default: text)")
+
+
+def _add_common_flags(parser):
+    parser.add_argument("--timeout", type=float, default=30.0,
+                        help="timeout in seconds (default: 30)")
+    parser.add_argument("--dry-run", action="store_true",
+                        help="list what would run without executing")
+    parser.add_argument("--verbose", action="store_true",
+                        help="log diagnostics to stderr")
+
+
+def main() -> int:
+    p = argparse.ArgumentParser(
+        prog="hermes-preflight",
+        description="Preflight plugin CLI — pre-task context injection for Hermes Agent",
+        epilog="Exit codes: 0=pass, 1=pipeline skip/error, 2=usage error, 124=timeout",
+    )
+    p.add_argument("--version", action="store_true", help="print version and exit")
+    p.add_argument("--json", action="store_true", help=argparse.SUPPRESS)  # for --version
+    sub = p.add_subparsers(dest="cmd")
+
+    # check
+    p_check = sub.add_parser("check", help="show what preflight would emit (standard pipeline)")
+    p_check.add_argument("message", help="the user message to classify and retrieve for")
+    _add_output_flags(p_check)
+    _add_common_flags(p_check)
+    p_check.set_defaults(func=cmd_check)
+
+    # force
+    p_force = sub.add_parser("force", help="/preflight force-fire (bypasses skip ladder)")
+    p_force.add_argument("message", help="the user message")
+    _add_output_flags(p_force)
+    _add_common_flags(p_force)
+    p_force.set_defaults(func=cmd_force)
+
+    # mode
+    p_mode = sub.add_parser("mode", help="read or flip rollout mode (shadow|live)")
+    p_mode.add_argument("value", nargs="?", default=None, choices=[None, "shadow", "live"],
+                        help="'shadow' or 'live' (omit to read)")
+    p_mode.add_argument("--json", action="store_true", help="output as JSON")
+    p_mode.set_defaults(func=cmd_mode)
+
+    # tail
+    p_tail = sub.add_parser("tail", help="tail today's telemetry")
+    p_tail.add_argument("--n", type=int, default=20, help="number of entries (default: 20)")
+    p_tail.add_argument("--json", action="store_true", help="output as JSON array")
+    p_tail.set_defaults(func=cmd_tail)
+
+    args = p.parse_args()
+
+    if args.version or args.cmd is None:
+        return cmd_version(args)
+
+    return args.func(args)
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
