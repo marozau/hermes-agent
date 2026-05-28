@@ -556,6 +556,92 @@ empty, or `mode: shadow` is set. Telemetry is written for every invocation
 on a given message, force-firing past the gate (the `/preflight [task]`
 slash-command equivalent — FR-35), and tailing today's telemetry.
 
+### BMAD plugin (`plugins/bmad/`)
+
+Hermes integration for the BMAD Method v6.6.0 — structured product-
+development workflows (Analysis → Planning → Solutioning → Implementation)
+with phase-gating, slash commands, CLI bootstrap, and profile templates.
+Substantial bundled plugin: registers hooks, ~30 slash commands, ~20
+specialized agent profiles (analyst, architect, PM, QA, dev, etc.),
+parallel multi-reviewer code-review flow, and a profile template that
+seeds `~/.hermes/profiles/<name>/` with BMAD config + skills.
+
+**Files:**
+
+```
+plugins/bmad/
+├── __init__.py          # register(ctx) — hook + CLI + slash-command wiring
+├── plugin.yaml          # manifest
+├── README.md            # user-facing docs
+├── commands/            # ~30 slash-command handlers (/bmad:status, /bmad:create-prd, ...)
+├── hooks/               # pre_llm_call / on_session_start hooks
+├── lib/                 # workflow engine, status tracker, delegation helpers
+├── scripts/             # CLI subcommands (hermes bmad <verb>)
+├── profile-template/    # seed files for `hermes profile new --template bmad`
+└── tests/               # unit + integration tests
+```
+
+**Per-profile vs global state.** BMAD config (`bmad/config.yaml`) and
+planning artifacts (`planning-artifacts/`, `implementation-artifacts/`)
+live per-project in the working directory — NOT in `~/.hermes/`. The
+plugin loads them based on `os.getcwd()` at session start. Profile
+templates seed initial config; everything after that is project-local.
+
+**Code-review flow.** `/bmad:bmad-code-review` runs three parallel
+reviewer agents (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
+with no shared conversation context, then triages findings into
+`decision_needed` / `patch` / `defer` / `dismiss` buckets. Per-profile
+model override (added in commit `9ef647382`) lets each reviewer use a
+different model (e.g. one DeepSeek + two Anthropic for diversity).
+
+### gitnexus-autorefresh plugin (`plugins/gitnexus-autorefresh/`)
+
+`post_tool_call` hook that auto-refreshes the GitNexus code-intelligence
+index whenever the agent issues a git mutation via the `terminal` tool.
+Eliminates the "stale-index after Hermes commit" path of the three
+commit-source drift problem (the other two paths are caught by
+PostToolUse hooks in Claude Code and by an optional git `post-commit`
+hook for operator/IDE commits).
+
+**Files:**
+
+```
+plugins/gitnexus-autorefresh/
+├── __init__.py    # _post_tool_call hook + _refresh_gitnexus worker + register(ctx)
+└── plugin.yaml    # manifest
+```
+
+**Behavior.** Word-boundary regex matches `commit`, `merge`, `pull`,
+`checkout`, `rebase`, `reset`, `cherry-pick`, `revert`, `am`, `stash pop`
+on bare `git` invocations AND on the `-C <path>` / `--git-dir=…` /
+`--work-tree=…` forms. On match, spawns a daemon thread that fires
+`npx --no-install gitnexus analyze --skip-agents-md` in the tool's
+`workdir` (terminal-tool schema field — NOT `cwd`), then `wait()`s
+on the child so the OS reaps it. Per-cwd 5-second debounce coalesces
+burst events from rebase / dream apply workflows.
+
+**Footguns handled** (one-and-done after the post-merge correctness
+pass, commit `8a4ea20d0`):
+
+- Reads `args["workdir"]` first (real terminal-tool schema field at
+  `tools/terminal_tool.py:2329`); falls back to legacy `cwd` then to
+  `os.getcwd()`. The original implementation read `cwd` only and
+  silently broke in production.
+- `Path.is_dir()` (not `exists()`) so a stray FILE named `.gitnexus`
+  doesn't trick `npx` into initializing a fresh index.
+- `os.getcwd()` wrapped in `try/except OSError` for the `rm -rf $PWD`
+  case.
+- Worker top-level catch-all so daemon-thread exceptions don't leak
+  via `threading.excepthook` (which would pollute the agent's turn
+  output).
+- `--skip-agents-md` keeps `AGENTS.md` / `CLAUDE.md` operator-curated.
+- `--no-install` prevents npx from auto-downloading gitnexus mid-turn;
+  missing-npx case logs WARN and silently no-ops.
+
+**No runtime state.** The plugin is stateless aside from the module-
+level debounce dict; everything else lives in the user's repo's
+`.gitnexus/` directory (managed by GitNexus itself).
+
 ### Memory-provider plugins (`plugins/memory/<name>/`)
 
 Separate discovery system for pluggable memory backends. Current built-in
