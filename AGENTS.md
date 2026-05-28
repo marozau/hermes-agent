@@ -46,6 +46,7 @@ hermes-agent/
 │   ├── hermes-achievements/  # Gamified achievement tracking
 │   ├── observability/    # Metrics / traces / logs plugin
 │   ├── image_gen/        # Image-generation providers
+│   ├── preflight/        # FAMA Tier-2 #3 / Epic 7 — pre_llm_call shim that calls lib/hermes_preflight
 │   └── <others>/         # disk-cleanup, example-dashboard, google_meet, platforms,
 │                         #   spotify, strike-freedom-cockpit, ...
 ├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
@@ -509,6 +510,52 @@ as a side effect of importing `model_tools.py`. Code paths that read plugin
 state without importing `model_tools.py` first must call `discover_plugins()`
 explicitly (it's idempotent).
 
+### Preflight plugin (`plugins/preflight/` — FAMA Tier-2 #3 / Epic 7)
+
+Thin `pre_llm_call` shim that wires `lib/hermes_preflight.should_run_preflight()`
+into the model dispatch path. The plugin is intentionally minimal — all gate
+state, classification, retrieval, ranking, dedupe, formatting, telemetry,
+and citation persistence live in `lib/hermes_preflight.py`. The plugin is
+just the registration glue.
+
+**Files** (bundled, version-controlled here in the fork):
+
+```
+plugins/preflight/
+├── __init__.py    # register(ctx) → ctx.register_hook("pre_llm_call", on_pre_llm_call)
+└── plugin.yaml    # manifest (name, version, requires lib.hermes_preflight)
+```
+
+**Runtime state lives elsewhere** (per the dev tree vs runtime split in the
+Auto-Dream Substrate section):
+
+- `~/.hermes/preflight/config.yaml` — operator-edited (mode: shadow|live,
+  skip_window, top_k, ranking weights)
+- `~/.hermes/preflight/domain-vocab.txt` — domain keywords for classifier
+  (per-profile overrides under `~/.hermes/profiles/<role>/preflight/`)
+- `~/.hermes/preflight/last-cited.json` — current-session citations
+  (consumed by `verify` skill via `scripts/preflight_verify_helper.py`)
+- `~/.hermes/preflight/gates.json` — per-session gate state (turn_count,
+  _fired_hashes)
+- `~/.hermes/preflight/log/<YYYY-MM-DD>.jsonl` — per-invocation telemetry
+
+**Mode flag.** `mode: shadow` runs the pipeline and writes telemetry but
+does **not** inject the heads-up block — used for the 5-day rollout period
+per CLAUDE.md "Implementation order". `mode: live` injects the heads-up
+after the user message (preserves cache prefix; FR-31 / Hard Invariant #12).
+Flip via `hermes-preflight mode live` (writes `config.yaml`) or the
+`HERMES_PREFLIGHT_MODE` env override.
+
+**Hook contract.** The plugin returns `{"context": "<preflight-heads-up>...</preflight-heads-up>"}`
+when injecting; returns `None` when the gate skipped, the recall set was
+empty, or `mode: shadow` is set. Telemetry is written for every invocation
+(fire OR skip — FR-34).
+
+**Companion CLI:** `~/.hermes/bin/hermes-preflight` — `check`, `force`,
+`mode`, `tail` subcommands. Used for inspecting what preflight would emit
+on a given message, force-firing past the gate (the `/preflight [task]`
+slash-command equivalent — FR-35), and tailing today's telemetry.
+
 ### Memory-provider plugins (`plugins/memory/<name>/`)
 
 Separate discovery system for pluggable memory backends. Current built-in
@@ -885,7 +932,9 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 │   └── research/                       # 6 technical research docs
 ├── implementation-artifacts/
 │   └── stories/                        # Story-3.6/3.7/3.8 specs (Given/When/Then ACs)
-├── plugins/preflight/                  # ⚠ NOT YET CREATED in dev tree — plugin shim still pending (preflight lib/ is migrated; plugin wrapper is the remaining piece)
+├── plugins/preflight/                  # FAMA Tier-2 #3 / Epic 7 — pre_llm_call hook shim
+│   ├── __init__.py                     # register(ctx) → ctx.register_hook("pre_llm_call", on_pre_llm_call)
+│   └── plugin.yaml                     # manifest
 ├── deploy.sh                           # ⚠ legacy / unused — see "Sync flow" below
 ├── CLAUDE.md                           # Implementation playbook
 └── AGENTS.md                           # (this file)
