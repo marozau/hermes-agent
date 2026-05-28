@@ -1,0 +1,6 @@
+name: preflight
+version: 1.0.0
+description: "Pre-task context injection plugin — classifies intent, retrieves past failure trajectories, ranks by relevance, and injects a heads-up block before the agent acts. Closes FAMA Tier-2 #3."
+author: "Hermes Agent"
+provides_hooks:
+  - pre_llm_call
