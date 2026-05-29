@@ -713,5 +713,41 @@ export const opsCommands: SlashCommand[] = [
         )
         .catch(ctx.guardedErr)
     }
+  },
+
+  {
+    help: 'manage orchestration workflows — list, show, pause, resume, kill, export',
+    name: 'workflows',
+    run: (arg, ctx, cmd) => {
+      const sub = arg.trim().split(/\s+/)[0]?.toLowerCase()
+      ctx.gateway.gw
+        .request<SlashExecResponse>('slash.exec', { command: cmd.slice(1), session_id: ctx.sid })
+        .then(r => {
+          if (ctx.stale()) return
+          const body = r?.output || '/workflows: no output'
+          const formatted = r?.warning ? `warning: ${r.warning}\n${body}` : body
+          const long = formatted.length > 180 || formatted.split('\n').filter(Boolean).length > 2
+          long ? ctx.transcript.page(formatted, 'Workflows') : ctx.transcript.sys(formatted)
+        })
+        .catch(ctx.guardedErr)
+    }
+  },
+
+  {
+    aliases: ['cpts'],
+    help: 'show workflow checkpoint status — cached vs. active phases',
+    name: 'checkpoints',
+    run: (arg, ctx, cmd) => {
+      ctx.gateway.gw
+        .request<SlashExecResponse>('slash.exec', { command: cmd.slice(1), session_id: ctx.sid })
+        .then(r => {
+          if (ctx.stale()) return
+          const body = r?.output || '/checkpoints: no output'
+          const formatted = r?.warning ? `warning: ${r.warning}\n${body}` : body
+          const long = formatted.length > 180 || formatted.split('\n').filter(Boolean).length > 2
+          long ? ctx.transcript.page(formatted, 'Checkpoints') : ctx.transcript.sys(formatted)
+        })
+        .catch(ctx.guardedErr)
+    }
   }
 ]
