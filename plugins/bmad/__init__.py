@@ -37,6 +37,24 @@ def register(ctx) -> None:
     has a ``bmad/config.yaml`` the plugin activates; outside a BMAD
     project all hooks are silent no-ops.
     """
+    # Hermes's slash-command signature is ``fn(raw_args: str) -> str | None``
+    # — one argument. Our BMAD handlers all use ``def handler(ctx, args)``
+    # because the BMAD upstream pattern (Claude Code's Task tool) passes ctx
+    # explicitly. Bridge the gap by capturing ctx in a closure at registration
+    # time so the wrapped function matches Hermes's expected signature.
+    def _bind_ctx(handler_fn):
+        def wrapped(raw_args: str = "") -> str:
+            try:
+                return handler_fn(ctx, raw_args)
+            except Exception as exc:
+                logger.exception(
+                    "[bmad] slash handler %s raised", handler_fn.__module__,
+                )
+                return f"⚠️  Plugin command error: {exc.__class__.__name__}: {exc}"
+        wrapped.__name__ = getattr(handler_fn, "__name__", "wrapped")
+        wrapped.__qualname__ = getattr(handler_fn, "__qualname__", "wrapped")
+        return wrapped
+
     from plugins.bmad.lib import phases, status, templates
     from plugins.bmad.hooks.on_session_start import on_session_start
     from plugins.bmad.hooks.transform_terminal_output import (
@@ -248,218 +266,218 @@ def register(ctx) -> None:
 
     ctx.register_command(
         name="bmad:init",
-        handler=_init_handler,
+        handler=_bind_ctx(_init_handler),
         args_hint="[--force]",
     )
     ctx.register_command(
         name="bmad:status",
-        handler=_status_handler,
+        handler=_bind_ctx(_status_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:help",
-        handler=_help_handler,
+        handler=_bind_ctx(_help_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:dashboard",
-        handler=_dashboard_handler,
+        handler=_bind_ctx(_dashboard_handler),
         args_hint="",
     )
 
     # Analysis commands
     ctx.register_command(
         name="bmad:product-brief",
-        handler=_product_brief_handler,
+        handler=_bind_ctx(_product_brief_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:research",
-        handler=_research_handler,
+        handler=_bind_ctx(_research_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:brainstorm",
-        handler=_brainstorm_handler,
+        handler=_bind_ctx(_brainstorm_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:document-project",
-        handler=_document_project_handler,
+        handler=_bind_ctx(_document_project_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:quick-spec",
-        handler=_quick_spec_handler,
+        handler=_bind_ctx(_quick_spec_handler),
         args_hint="",
     )
 
     # Planning commands
     ctx.register_command(
         name="bmad:create-prd",
-        handler=_create_prd_handler,
+        handler=_bind_ctx(_create_prd_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:validate-prd",
-        handler=_validate_prd_handler,
+        handler=_bind_ctx(_validate_prd_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:edit-prd",
-        handler=_edit_prd_handler,
+        handler=_bind_ctx(_edit_prd_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:create-ux-design",
-        handler=_create_ux_design_handler,
+        handler=_bind_ctx(_create_ux_design_handler),
         args_hint="",
     )
 
     # Solutioning commands
     ctx.register_command(
         name="bmad:create-architecture",
-        handler=_create_architecture_handler,
+        handler=_bind_ctx(_create_architecture_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:epics-stories",
-        handler=_epics_stories_handler,
+        handler=_bind_ctx(_epics_stories_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:solutioning-gate-check",
-        handler=_solutioning_gate_check_handler,
+        handler=_bind_ctx(_solutioning_gate_check_handler),
         args_hint="",
     )
 
     # Implementation commands
     ctx.register_command(
         name="bmad:sprint-planning",
-        handler=_sprint_planning_handler,
+        handler=_bind_ctx(_sprint_planning_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:create-story",
-        handler=_create_story_handler,
+        handler=_bind_ctx(_create_story_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:dev-story",
-        handler=_dev_story_handler,
+        handler=_bind_ctx(_dev_story_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:code-review",
-        handler=_code_review_handler,
+        handler=_bind_ctx(_code_review_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:correct-course",
-        handler=_correct_course_handler,
+        handler=_bind_ctx(_correct_course_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:quick-dev",
-        handler=_quick_dev_handler,
+        handler=_bind_ctx(_quick_dev_handler),
         args_hint="",
     )
 
     # TEA commands (ungated)
     ctx.register_command(
         name="bmad:test-framework",
-        handler=_test_framework_handler,
+        handler=_bind_ctx(_test_framework_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:atdd",
-        handler=_atdd_handler,
+        handler=_bind_ctx(_atdd_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:test-design",
-        handler=_test_design_handler,
+        handler=_bind_ctx(_test_design_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:test-review",
-        handler=_test_review_handler,
+        handler=_bind_ctx(_test_review_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:trace",
-        handler=_trace_handler,
+        handler=_bind_ctx(_trace_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:nfr",
-        handler=_nfr_handler,
+        handler=_bind_ctx(_nfr_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:ci",
-        handler=_ci_handler,
+        handler=_bind_ctx(_ci_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:automate",
-        handler=_automate_handler,
+        handler=_bind_ctx(_automate_handler),
         args_hint="",
     )
 
     # CIS commands (ungated)
     ctx.register_command(
         name="bmad:brainstorming",
-        handler=_brainstorming_handler,
+        handler=_bind_ctx(_brainstorming_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:design-thinking",
-        handler=_design_thinking_handler,
+        handler=_bind_ctx(_design_thinking_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:problem-solving",
-        handler=_problem_solving_handler,
+        handler=_bind_ctx(_problem_solving_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:innovation-strategy",
-        handler=_innovation_strategy_handler,
+        handler=_bind_ctx(_innovation_strategy_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:storytelling",
-        handler=_storytelling_handler,
+        handler=_bind_ctx(_storytelling_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:presentation",
-        handler=_presentation_handler,
+        handler=_bind_ctx(_presentation_handler),
         args_hint="",
     )
 
     # BMB commands (ungated)
     ctx.register_command(
         name="bmad:agent-builder",
-        handler=_agent_builder_handler,
+        handler=_bind_ctx(_agent_builder_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:module-builder",
-        handler=_module_builder_handler,
+        handler=_bind_ctx(_module_builder_handler),
         args_hint="",
     )
     ctx.register_command(
         name="bmad:workflow-builder",
-        handler=_workflow_builder_handler,
+        handler=_bind_ctx(_workflow_builder_handler),
         args_hint="",
     )
 
     # Meta: party-mode (multi-persona round table; ungated)
     ctx.register_command(
         name="bmad:party-mode",
-        handler=_party_mode_handler,
+        handler=_bind_ctx(_party_mode_handler),
         args_hint="[--fan-out] <topic>",
     )
 
