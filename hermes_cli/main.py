@@ -11029,7 +11029,7 @@ _BUILTIN_SUBCOMMANDS = frozenset(
     {
         "acp", "auth", "backup", "bundles", "checkpoints", "claw", "completion",
         "computer-use",
-        "config", "cron", "curator", "dashboard", "debug", "doctor",
+        "config", "cron", "curator", "dashboard", "debug", "doctor", "dream",
         "dump", "fallback", "gateway", "hooks", "import", "insights",
         "kanban", "login", "logout", "logs", "lsp", "mcp", "memory", "migrate",
         "model", "pairing", "plugins", "portal", "postinstall", "profile", "proxy",
@@ -13015,6 +13015,27 @@ Examples:
         _register_curator_cli(curator_parser)
     except Exception as _exc:
         logging.getLogger(__name__).debug("curator CLI wiring failed: %s", _exc)
+
+    # =========================================================================
+    # dream command — Auto-Dream substrate CLI verbs (Epic 4 / FR-13; Story 4.8)
+    # =========================================================================
+    dream_parser = subparsers.add_parser(
+        "dream",
+        help="Memory-consolidation dreams — create/status/diff/apply/discard",
+        description=(
+            "Staged dream artifacts under ~/.hermes/dreams/<dream_id>/. "
+            "All proposals are copy-on-write — `apply` is the only effectful "
+            "verb and requires --accept (Hard Invariant #4). See "
+            "planning-artifacts/prd-hermes-2026-05-12.md §FR-13–22."
+        ),
+    )
+    try:
+        from hermes_cli.dream import register_cli as _register_dream_cli, cmd_dream
+
+        _register_dream_cli(dream_parser)
+        dream_parser.set_defaults(func=cmd_dream)
+    except Exception as _exc:
+        logging.getLogger(__name__).debug("dream CLI wiring failed: %s", _exc)
 
     # =========================================================================
     # memory command

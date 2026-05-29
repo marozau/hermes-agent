@@ -1,0 +1,91 @@
+# Hermes Auto-Dream provider routing (FR-36, Story 3.1 AC #1)
+#
+# Single source of truth for workload → provider mapping. Callers reference
+# workloads by name only — never inline a model. Updated via PR; loaded by
+# ~/.hermes/lib/hermes_llm.py::load_providers_config().
+#
+# Invariants (CLAUDE.md):
+#   #10 Cross-provider fallback (escape hatch: `same_provider_ok: true`).
+#   #11 Pydantic schemas gate every effectful output (the caller's concern).
+#   #12 Anthropic uses 3 cache_control breakpoints (system / skills / trajectory).
+#
+# Schema:
+#   workloads:
+#     <name>:
+#       primary:           {provider, model, max_tokens, timeout}
+#       fallback:          [ {provider, model, max_tokens, timeout}, ... ]
+#       cache:             "5m" | "1h" | "none"
+#       same_provider_ok:  bool (default false; enforces Hard Invariant #10)
+
+version: 1
+
+workloads:
+
+  # Preflight hot path — DeepSeek V4 Flash for cheap classification.
+  # Falls back to rule-based at the caller (no LLM fallback).
+  classify_intent:
+    primary:
+      provider: deepseek
+      model: deepseek-v4-flash
+      max_tokens: 80
+      timeout: 3
+    fallback: []
+    cache: "5m"
+
+  # Light rewrite path. DeepSeek primary, Haiku as cross-provider fallback.
+  preflight_polish:
+    primary:
+      provider: deepseek
+      model: deepseek-v4-flash
+      max_tokens: 300
+      timeout: 8
+    fallback:
+      - provider: anthropic
+        model: claude-haiku-4-5-20251001
+        max_tokens: 300
+        timeout: 8
+    cache: "5m"
+
+  # Skill-dream reflection — Sonnet for quality.
+  skill_dream_reflect:
+    primary:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      max_tokens: 4000
+      timeout: 120
+    fallback:
+      - provider: deepseek
+        model: deepseek-v4-pro
+        max_tokens: 4000
+        timeout: 120
+    cache: "1h"
+
+  # Memory-dream consolidation — Sonnet for synthesis, DeepSeek Pro fallback.
+  memory_dream_consolidate:
+    primary:
+      provider: anthropic
+      model: claude-sonnet-4-6
+      max_tokens: 6000
+      timeout: 240
+    fallback:
+      - provider: deepseek
+        model: deepseek-v4-pro
+        max_tokens: 6000
+        timeout: 240
+    cache: "1h"
+
+  # Board-dream synthesis (V2 weekly). Opus → Sonnet (same provider intentional —
+  # cross-tier escalation within Anthropic) requires the escape hatch.
+  board_dream_synthesize:
+    primary:
+      provider: anthropic
+      model: claude-opus-4-7
+      max_tokens: 8000
+      timeout: 600
+    fallback:
+      - provider: anthropic
+        model: claude-sonnet-4-6
+        max_tokens: 8000
+        timeout: 600
+    cache: "1h"
+    same_provider_ok: true  # DN3: Opus→Sonnet is intentional tier fallback

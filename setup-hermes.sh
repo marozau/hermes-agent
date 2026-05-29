@@ -396,6 +396,29 @@ else
 fi
 
 # ============================================================================
+# Seed Auto-Dream substrate runtime dirs (Epic 4 / FR-13–22)
+# ============================================================================
+# These dirs are referenced by `hermes dream`, `hermes_preflight`, and the
+# telemetry sinks. The substrate libs create them on first use, but seeding
+# them at setup time with the right mode (0o700 for state that may contain
+# user content) prevents first-run surprises when a CI or pristine install
+# fires `hermes dream create` before any other command has touched them.
+HERMES_HOME_DIR="${HERMES_HOME:-$HOME/.hermes}"
+for d in dreams raw observability preflight memory/typed; do
+    mkdir -p "$HERMES_HOME_DIR/$d"
+done
+# 0o700 on state dirs that may contain user-derived content (FR-14, NFR-14).
+chmod 700 "$HERMES_HOME_DIR/dreams" "$HERMES_HOME_DIR/raw" "$HERMES_HOME_DIR/memory/typed" 2>/dev/null || true
+
+# Seed dreams/providers.yaml from the dev tree's canonical copy IF the
+# runtime doesn't already have one — never overwrite an operator-edited
+# config. The canonical copy lives at <repo>/dreams/providers.yaml.
+if [ ! -f "$HERMES_HOME_DIR/dreams/providers.yaml" ] && [ -f "$SCRIPT_DIR/dreams/providers.yaml" ]; then
+    cp "$SCRIPT_DIR/dreams/providers.yaml" "$HERMES_HOME_DIR/dreams/providers.yaml"
+    echo -e "${GREEN}✓${NC} Seeded ${HERMES_HOME_DIR}/dreams/providers.yaml from dev tree"
+fi
+
+# ============================================================================
 # Seed bundled skills into ~/.hermes/skills/
 # ============================================================================
 
