@@ -55,6 +55,20 @@ def register(ctx) -> None:
         wrapped.__qualname__ = getattr(handler_fn, "__qualname__", "wrapped")
         return wrapped
 
+    # Hook bus signature (hermes_cli/plugins.py:invoke_hook) does NOT pass
+    # ctx — only kwargs like tool_name, args, session_id, etc. Bind ctx via
+    # closure for hooks that still need it (same pattern as _bind_ctx).
+    # Without this, every call to pre_tool_call / post_tool_call /
+    # transform_terminal_output / on_session_start / subagent_stop raises
+    # TypeError("missing 1 required positional argument: 'ctx'") and the
+    # _catch_all wrapper swallows it but floods errors.log.
+    def _bind_hook_ctx(handler_fn):
+        def wrapped(*args, **kwargs):
+            return handler_fn(ctx, *args, **kwargs)
+        wrapped.__name__ = getattr(handler_fn, "__name__", "wrapped")
+        wrapped.__qualname__ = getattr(handler_fn, "__qualname__", "wrapped")
+        return wrapped
+
     from plugins.bmad.lib import phases, status, templates
     from plugins.bmad.hooks.on_session_start import on_session_start
     from plugins.bmad.hooks.on_session_end import on_session_end
@@ -68,17 +82,25 @@ def register(ctx) -> None:
     from plugins.bmad.hooks.subagent_stop import subagent_stop
 
     # ── Hooks ──────────────────────────────────────────
-    ctx.register_hook("on_session_start", _catch_all("on_session_start")(on_session_start))
-    ctx.register_hook("on_session_end", _catch_all("on_session_end")(on_session_end))
-    ctx.register_hook("pre_tool_call", _catch_all("pre_tool_call")(pre_tool_call))
-    ctx.register_hook("post_tool_call", _catch_all("post_tool_call")(post_tool_call))
-    ctx.register_hook("pre_llm_call", _catch_all("pre_llm_call")(pre_llm_call))
-    ctx.register_hook("post_llm_call", _catch_all("post_llm_call")(post_llm_call))
-    ctx.register_hook(
-        "transform_terminal_output",
-        _catch_all("transform_terminal_output")(transform_terminal_output),
-    )
-    ctx.register_hook("subagent_stop", _catch_all("subagent_stop")(subagent_stop))
+    # 5 hooks declare ctx as their first positional arg → wrap with _bind_hook_ctx.
+    # 3 hooks (on_session_end, pre_llm_call, post_llm_call) already use the
+    # canonical kwarg-only signature → no binding needed.
+    ctx.register_hook("on_session_start",
+        _catch_all("on_session_start")(_bind_hook_ctx(on_session_start)))
+    ctx.register_hook("on_session_end",
+        _catch_all("on_session_end")(on_session_end))
+    ctx.register_hook("pre_tool_call",
+        _catch_all("pre_tool_call")(_bind_hook_ctx(pre_tool_call)))
+    ctx.register_hook("post_tool_call",
+        _catch_all("post_tool_call")(_bind_hook_ctx(post_tool_call)))
+    ctx.register_hook("pre_llm_call",
+        _catch_all("pre_llm_call")(pre_llm_call))
+    ctx.register_hook("post_llm_call",
+        _catch_all("post_llm_call")(post_llm_call))
+    ctx.register_hook("transform_terminal_output",
+        _catch_all("transform_terminal_output")(_bind_hook_ctx(transform_terminal_output)))
+    ctx.register_hook("subagent_stop",
+        _catch_all("subagent_stop")(_bind_hook_ctx(subagent_stop)))
 
     # ── CLI commands ───────────────────────────────────
 
