@@ -1180,15 +1180,35 @@ In-session triggers: `/dream`, `/dream status`, `/dream diff`. Match these verb 
 cd ~/usr-local/hermes
 git add -p && git commit -m "..." && git push origin main
 
-# 2. Pull into the runtime checkout
-cd ~/.hermes/hermes-agent
-git pull private main
-hermes gateway restart   # if the gateway is running
+# 2. Update the runtime checkout via its OWN hermes binary
+~/.hermes/hermes-agent/venv/bin/hermes update
+#  ↑ pulls private main into ~/.hermes/hermes-agent/, refreshes deps,
+#    and runs sync_skills(quiet=True) so bundled skills propagate from
+#    ~/.hermes/hermes-agent/skills/ → ~/.hermes/skills/ with
+#    user-customization preservation (manifest-tracked, see
+#    tools/skills_sync.py for the diff-against-origin-hash logic).
+
+# 3. Restart anything holding the old code in memory
+hermes gateway restart    # only when the gateway is running
 ```
 
-No file-copying step; the two checkouts are two working copies of the same git repo on different remotes (dev tree → `origin = hermes-agent-private`; runtime → `private = hermes-agent-private`). The legacy `deploy.sh` is unused — keep it on disk for now in case any external scripts reference it, but don't run it.
+**Two checkouts, two `hermes` binaries.** Each venv ships its own `hermes` entry-point. `_cmd_update_impl` resolves `PROJECT_ROOT` from `__file__` of the *invoking* binary, so:
 
-Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last pull.
+| Run from | `hermes update` pulls |
+|---|---|
+| `~/usr-local/hermes/venv/bin/hermes` (your terminal `hermes` after `setup-hermes.sh`) | dev tree — no-op for the local-push workflow (already at HEAD) |
+| `~/.hermes/hermes-agent/venv/bin/hermes` | runtime tree — what you want for "deploy what I pushed" |
+
+Alias if you do this often:
+
+```bash
+alias hermes-runtime-update='~/.hermes/hermes-agent/venv/bin/hermes update'
+hermes-runtime-update && hermes gateway restart
+```
+
+**Why no file-copy script.** The two checkouts are two working copies of the same private repo (dev tree → `origin = hermes-agent-private`; runtime → `private = hermes-agent-private`). `git pull` already moves code; `hermes update` wraps it with the skills-sync and dep-install steps you need anyway. Earlier file-copy scripts (`deploy.sh`, `deploy-skills.sh`) were removed because they introduced a parallel deployment path that could `rsync --delete` user-customized skills.
+
+Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last `hermes update` there.
 
 ### Definition-of-Done (V1)
 
