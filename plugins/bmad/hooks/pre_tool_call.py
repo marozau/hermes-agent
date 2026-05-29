@@ -47,15 +47,15 @@ WORKFLOW_FILE_PATTERNS: list[re.Pattern] = [
 ]
 
 
-def pre_tool_call(ctx, tool_name: str, tool_args: dict, tool_result: dict | None) -> dict | None:
+def pre_tool_call(ctx, tool_name: str, args: dict, result: dict | None = None, **kwargs) -> dict | None:
     """Phase gate + M1/M7 enforcement.
 
     Returns ``{"action": "block", "reason": str}`` to deny, or ``None`` to allow.
     """
     # M1/M7: block Read(offset|limit) on workflow files — ALWAYS, even under YOLO.
     if tool_name in ("Read", "read_file"):
-        if "offset" in tool_args or "limit" in tool_args:
-            file_path = tool_args.get("file_path", tool_args.get("path", ""))
+        if "offset" in args or "limit" in args:
+            file_path = args.get("file_path", args.get("path", ""))
             if file_path and _is_workflow_file(file_path):
                 reason = (
                     f"BMAD M1/M7 violation: workflow files must be read complete "
@@ -77,7 +77,7 @@ def pre_tool_call(ctx, tool_name: str, tool_args: dict, tool_result: dict | None
     if not config_path.exists():
         return None  # Not a BMAD project
 
-    file_path = tool_args.get("file_path", tool_args.get("path", ""))
+    file_path = args.get("file_path", args.get("path", ""))
     if not file_path:
         return None
 

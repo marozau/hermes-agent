@@ -17,7 +17,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def transform_terminal_output(ctx, text: str) -> str | None:
+def transform_terminal_output(ctx, text: str, **kwargs) -> str | None:
     """Prepend BMAD status header to *text* if inside a BMAD project.
 
     Returns a new string with the header prepended, or ``None`` to

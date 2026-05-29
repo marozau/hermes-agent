@@ -32,7 +32,7 @@ PATH_RULES: list[tuple[re.Pattern, str, str]] = [
 ]
 
 
-def post_tool_call(ctx, tool_name: str, tool_args: dict, tool_result: dict | None) -> None:
+def post_tool_call(ctx, tool_name: str, args: dict, result: dict | None = None, **kwargs) -> None:
     """Auto-update workflow-status.yaml after Write/Edit of BMAD artifacts.
 
     If the written file matches a known artifact pattern and the slot
@@ -49,7 +49,7 @@ def post_tool_call(ctx, tool_name: str, tool_args: dict, tool_result: dict | Non
     if not config_path.exists():
         return  # Not a BMAD project
 
-    file_path = tool_args.get("file_path", tool_args.get("path", ""))
+    file_path = args.get("file_path", args.get("path", ""))
     if not file_path:
         return
 
