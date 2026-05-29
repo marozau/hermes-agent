@@ -77,16 +77,14 @@ class PreflightGate:
     _MAX_FIRED_HASHES = 256
 
     def mark_fired(self, message_hash: str) -> None:
-        self._fired_hashes[message_hash] = time.monotonic()
+        self._fired_hashes[message_hash] = time.time()
         if len(self._fired_hashes) > self._MAX_FIRED_HASHES:
             self._fired_hashes.popitem(last=False)
         self._last_fired_at = time.time()
-        _save_gates_to_disk()
 
     def increment_turn(self) -> None:
         self.turn_count += 1
-        self._last_invoked_at = time.monotonic()
-        _save_gates_to_disk()
+        self._last_invoked_at = time.time()
 
 
 @dataclass
@@ -658,90 +656,49 @@ def read_citations(session_id: str) -> list[str]:
 
 _gates: "OrderedDict[str, PreflightGate]" = OrderedDict()
 _GATES_MAX = 1024  # P17 LRU bound
-_GATES_FILE_NAME = "gates.json"
 
 
-def _gates_path() -> Path:
-    return _preflight_dir() / _GATES_FILE_NAME
-
-
-def _load_gates_from_disk() -> dict[str, dict]:
-    """Hydrate in-memory gate state from disk (survives process restarts)."""
-    p = _gates_path()
-    if not p.exists():
-        return {}
+def _materialize_gate_from_log(session_id: str, enabled: bool) -> PreflightGate:
+    """Reconstruct gate state from telemetry log (Bug 2 fix).
+    Telemetry log is the source of truth — gates.json removed."""
+    gate = PreflightGate(enabled=enabled, session_id=session_id)
+    today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
+    log_path = _preflight_dir() / "log" / f"{today}.jsonl"
+    if not log_path.exists():
+        return gate
     try:
-        return json.loads(p.read_text(encoding="utf-8")) or {}
-    except Exception:
-        return {}
-
-
-def _save_gates_to_disk() -> None:
-    """Persist in-memory gate state to disk atomically.
-
-    Uses tmp+os.replace for atomicity — readers see the old or new complete
-    file, never a partial write. PID-unique suffix prevents cross-thread
-    rename races (observed: two concurrent calls both create .tmp, one
-    renames it, the other's os.replace fails with ENOENT).
-    """
-    data: dict[str, dict] = {}
-    for sid, gate in _gates.items():
-        data[sid] = {
-            "turn_count": gate.turn_count,
-            "last_fired_at": gate._last_fired_at,
-            "last_invoked_at": gate._last_invoked_at,
-            "enabled": gate.enabled,
-        }
-    p = _gates_path()
-    p.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    tmp = p.with_suffix(f".{os.getpid()}.tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, (json.dumps(data, ensure_ascii=False) + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
-    try:
-        os.replace(tmp, p)
+        for line in log_path.read_text(encoding="utf-8").splitlines():
+            if not line.strip():
+                continue
+            try:
+                row = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if row.get("session_id") != session_id:
+                continue
+            gate.turn_count += 1
+            if not row.get("skip_reason"):  # fired
+                h = row.get("intent_hash") or ""
+                if h:
+                    gate._fired_hashes[h] = 0.0
+                try:
+                    fired_dt = datetime.fromisoformat(row["ts"])
+                    gate._last_fired_at = max(gate._last_fired_at, fired_dt.timestamp())
+                except (KeyError, ValueError):
+                    pass
     except OSError:
-        # Retry once on race (e.g. tmp removed by another thread).
-        tmp = p.with_suffix(f".{os.getpid()}.{os.urandom(4).hex()}.tmp")
-        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        try:
-            os.write(fd, (json.dumps(data, ensure_ascii=False) + "\n").encode("utf-8"))
-        finally:
-            os.close(fd)
-        os.replace(tmp, p)
-
-
-_HYDRATED = False
-
-
-def _ensure_hydrated() -> None:
-    """On first call after process start, restore gate state from disk."""
-    global _HYDRATED
-    if _HYDRATED:
-        return
-    _HYDRATED = True
-    disk = _load_gates_from_disk()
-    for sid, state in disk.items():
-        gate = PreflightGate(
-            enabled=state.get("enabled", True),
-            session_id=sid,
-        )
-        gate.turn_count = int(state.get("turn_count", 0))
-        gate._last_fired_at = float(state.get("last_fired_at", 0.0))
-        gate._last_invoked_at = float(state.get("last_invoked_at", 0.0))
-        _gates[sid] = gate
+        pass
+    return gate
 
 
 def get_or_create_gate(session_id: str, enabled: bool = True) -> PreflightGate:
-    _ensure_hydrated()
     if session_id in _gates:
         gate = _gates[session_id]
-        # Re-read enabled from config (P19 — config changes take effect).
         gate.enabled = enabled
         _gates.move_to_end(session_id)
         return gate
+    # Bug 2 fix: derive gate state from telemetry log instead of gates.json.
+    gate = _materialize_gate_from_log(session_id, enabled)
     if len(_gates) >= _GATES_MAX:
         _gates.popitem(last=False)
 
