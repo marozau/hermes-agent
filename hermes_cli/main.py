@@ -6169,6 +6169,66 @@ def cmd_status(args):
     show_status(args)
 
 
+def cmd_skills_sync(args):
+    """`hermes skills sync --profile <name> [--dry-run]`.
+
+    Runs `tools.skills_sync.sync_skills()` against the target profile's
+    HERMES_HOME. Ported from a runtime-tree WIP that had broken
+    indentation (def at column 0 inside main() truncated the rest of
+    main()'s body — see commit history for the recovery context).
+    """
+    import os
+    import subprocess
+    import sys
+    from pathlib import Path
+    from hermes_cli.profiles import (
+        get_profile_dir, normalize_profile_name, profile_exists, list_profiles,
+    )
+
+    try:
+        profile_name = normalize_profile_name(args.profile)
+        if not profile_exists(profile_name):
+            available = ", ".join(p.name for p in list_profiles())
+            print(f"Error: Profile '{profile_name}' does not exist", file=sys.stderr)
+            print(f"Available profiles: {available}", file=sys.stderr)
+            sys.exit(1)
+    except Exception as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        sys.exit(1)
+
+    profile_dir = get_profile_dir(profile_name)
+    dry_run = bool(getattr(args, "dry_run", False))
+
+    print(f"{'[DRY RUN] ' if dry_run else ''}Syncing skills → profile '{profile_name}' ({profile_dir})")
+
+    if dry_run:
+        # sync_skills doesn't currently support a dry-run mode; surface
+        # that limitation honestly rather than pretending the next call
+        # didn't write anything.
+        print("Note: --dry-run is a no-op today — tools.skills_sync has no preview mode.", file=sys.stderr)
+        print("      Skipping to avoid making changes. File a story to add real dry-run.", file=sys.stderr)
+        sys.exit(0)
+
+    # Spawn a subprocess so HERMES_HOME=<profile_dir> is the *child's*
+    # environment, not the current process. Avoids polluting the parent
+    # process's get_hermes_home() cache for any caller that subsequently
+    # invokes other Hermes APIs.
+    env = {**os.environ, "HERMES_HOME": str(profile_dir)}
+    project_root = Path(__file__).resolve().parent.parent
+    result = subprocess.run(
+        [sys.executable, "-c",
+         "from tools.skills_sync import sync_skills; r = sync_skills(quiet=False); "
+         "print(); print(f'Copied {len(r[\"copied\"])} / updated {len(r.get(\"updated\", []))} / "
+         "kept {len(r[\"user_modified\"])} user-modified / total {r[\"total_bundled\"]} bundled')"],
+        env=env,
+        cwd=str(project_root),
+        timeout=300,
+    )
+    if result.returncode != 0:
+        print(f"Skills sync failed (exit {result.returncode})", file=sys.stderr)
+        sys.exit(result.returncode)
+
+
 def cmd_cron(args):
     """Cron job management."""
     from hermes_cli.cron import cron_command
@@ -12849,6 +12909,27 @@ Examples:
     tap_add.add_argument("repo", help="GitHub repo (e.g. owner/repo)")
     tap_rm = tap_subparsers.add_parser("remove", help="Remove a tap")
     tap_rm.add_argument("name", help="Tap name to remove")
+
+    # sync sub-action: copy bundled skills from default → target profile
+    skills_sync_parser = skills_subparsers.add_parser(
+        "sync",
+        help="Sync bundled skills from the default profile to a target profile",
+        description=(
+            "Synchronize bundled skills from ~/.hermes/skills/ to "
+            "~/.hermes/profiles/<name>/skills/. Profile-specific "
+            "customizations are preserved (same hash-based diff logic as "
+            "the boot-time sync). Use --dry-run to preview without writing."
+        ),
+    )
+    skills_sync_parser.add_argument(
+        "--profile", "-p", required=True,
+        help="Target profile name",
+    )
+    skills_sync_parser.add_argument(
+        "--dry-run", action="store_true",
+        help="Preview changes without applying them",
+    )
+    skills_sync_parser.set_defaults(func=cmd_skills_sync)
 
     # config sub-action: interactive enable/disable
     skills_subparsers.add_parser(
