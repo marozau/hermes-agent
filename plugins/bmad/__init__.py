@@ -57,17 +57,23 @@ def register(ctx) -> None:
 
     from plugins.bmad.lib import phases, status, templates
     from plugins.bmad.hooks.on_session_start import on_session_start
+    from plugins.bmad.hooks.on_session_end import on_session_end
     from plugins.bmad.hooks.transform_terminal_output import (
         transform_terminal_output,
     )
     from plugins.bmad.hooks.pre_tool_call import pre_tool_call
     from plugins.bmad.hooks.post_tool_call import post_tool_call
+    from plugins.bmad.hooks.pre_llm_call import pre_llm_call
+    from plugins.bmad.hooks.post_llm_call import post_llm_call
     from plugins.bmad.hooks.subagent_stop import subagent_stop
 
     # ── Hooks ──────────────────────────────────────────
     ctx.register_hook("on_session_start", _catch_all("on_session_start")(on_session_start))
+    ctx.register_hook("on_session_end", _catch_all("on_session_end")(on_session_end))
     ctx.register_hook("pre_tool_call", _catch_all("pre_tool_call")(pre_tool_call))
     ctx.register_hook("post_tool_call", _catch_all("post_tool_call")(post_tool_call))
+    ctx.register_hook("pre_llm_call", _catch_all("pre_llm_call")(pre_llm_call))
+    ctx.register_hook("post_llm_call", _catch_all("post_llm_call")(post_llm_call))
     ctx.register_hook(
         "transform_terminal_output",
         _catch_all("transform_terminal_output")(transform_terminal_output),
@@ -481,4 +487,4 @@ def register(ctx) -> None:
         args_hint="[--fan-out] <topic>",
     )
 
-    logger.info("[bmad] plugin registered: hooks=5, cli=2, slash=40")
+    logger.info("[bmad] plugin registered: hooks=8, cli=2, slash=40")

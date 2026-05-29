@@ -1,0 +1,108 @@
+# criteria.yaml — BMAD Phase Gate Criteria v6.6.0
+#
+# Defines gate criteria for all four BMAD phases.
+# Each phase lists required artifacts and a set of gates.
+# Each gate has:
+#   id        — unique identifier within the phase
+#   description — human-readable explanation of what the gate checks
+#   severity  — "required" (must pass for phase completion) or "recommended" (advisory)
+#
+# Consumed by phase_gates.py:evaluate_all_gates()
+
+phases:
+  analysis:
+    required_artifacts:
+      - product_brief.md
+    gates:
+      - id: problem_statement_present
+        description: "The product brief clearly defines the problem being solved, including who experiences it and why it matters."
+        severity: required
+
+      - id: target_users_defined
+        description: "Target users or personas are explicitly identified with their needs, pain points, and context."
+        severity: required
+
+      - id: success_metrics_listed
+        description: "Measurable success criteria are defined — quantitative metrics or qualitative outcomes that determine whether the solution works."
+        severity: required
+
+      - id: constraints_documented
+        description: "Known constraints (technical, business, regulatory, timeline, budget) are documented so the solution space is bounded."
+        severity: recommended
+
+      - id: scope_boundary_clear
+        description: "What is in-scope and out-of-scope is stated, preventing unbounded expansion during later phases."
+        severity: recommended
+
+  planning:
+    required_artifacts:
+      - prd.md
+    gates:
+      - id: requirements_traceable_to_brief
+        description: "Every functional requirement in the PRD traces back to a problem statement or user need from the product brief."
+        severity: required
+
+      - id: acceptance_criteria_per_feature
+        description: "Each feature or requirement has at least one concrete acceptance criterion — a testable condition that defines 'done'."
+        severity: required
+
+      - id: priority_assigned
+        description: "Requirements are prioritized (e.g., MoSCoW, P0-P3) so the team knows what to build first."
+        severity: required
+
+      - id: dependencies_identified
+        description: "Inter-feature dependencies, external service dependencies, and prerequisite work are explicitly called out."
+        severity: recommended
+
+      - id: out_of_scope_stated
+        description: "Features or requirements explicitly excluded from this release are listed to prevent scope creep."
+        severity: recommended
+
+  solutioning:
+    required_artifacts:
+      - architecture.md
+    gates:
+      - id: components_mapped_to_requirements
+        description: "Every architectural component (service, module, library) is traceable to one or more requirements from the PRD."
+        severity: required
+
+      - id: data_flow_documented
+        description: "Data flows between components are documented — including data formats, protocols, and transformation steps."
+        severity: required
+
+      - id: tech_stack_decisions_justified
+        description: "Technology choices (languages, frameworks, databases, infrastructure) include a rationale — not just a name."
+        severity: required
+
+      - id: integration_points_identified
+        description: "External integrations (APIs, services, data sources) are enumerated with their interfaces, auth requirements, and failure modes."
+        severity: required
+
+      - id: risk_mitigation_planned
+        description: "Identified architectural risks have corresponding mitigation strategies or contingency plans."
+        severity: recommended
+
+  implementation:
+    required_artifacts:
+      - code/
+      - tests/
+    gates:
+      - id: code_compiles
+        description: "The codebase compiles or passes syntax validation without errors."
+        severity: required
+
+      - id: tests_pass
+        description: "All automated tests (unit, integration, acceptance) pass with no failures."
+        severity: required
+
+      - id: requirements_covered
+        description: "Every requirement from the PRD has corresponding test coverage and implementation evidence."
+        severity: required
+
+      - id: no_hardcoded_secrets
+        description: "No secrets, API keys, tokens, or credentials are hardcoded in source files — all are sourced from environment variables or secret stores."
+        severity: required
+
+      - id: documentation_updated
+        description: "Relevant documentation (README, API docs, architecture diagrams) reflects the implemented changes."
+        severity: recommended
