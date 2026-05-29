@@ -26,4 +26,12 @@ def handler(ctx, args: str) -> str:
 
     body_path = Path(__file__).with_name("create-architecture.md")
     body = body_path.read_text(encoding="utf-8")
+
+    # Inject reflection-bank watch-outs for recurring patterns.
+    from plugins.bmad.lib.phases import COMMAND_PHASE
+    from plugins.bmad.judge.phase_gates import inject_adjustments
+
+    phase = COMMAND_PHASE[COMMAND][0]
+    body = inject_adjustments(phase=phase, project_root=project_dir, body=body)
+
     return body

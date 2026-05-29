@@ -277,3 +277,191 @@ def make_message_cb(
         _send_update(conn, session_id, loop, update)
 
     return _message
+
+
+# ------------------------------------------------------------------
+# Session lifecycle event callbacks (Hermes session events)
+# ------------------------------------------------------------------
+# These create callbacks that plugin hooks and the agent runtime can
+# invoke to emit structured session events to connected editors via
+# ACP ext_notification("hermes/session_event", ...).
+
+def make_session_start_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+    cwd: str,
+) -> Callable:
+    """Create a callback that emits a SessionStart event.
+
+    Callable signature: ``fn(client_info: dict | None = None) -> None``
+    """
+
+    def _session_start(client_info: dict | None = None) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.session_start(cwd=cwd, client_info=client_info)
+
+    return _session_start
+
+
+def make_session_end_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable:
+    """Create a callback that emits a SessionEnd event.
+
+    Callable signature:
+    ``fn(outcome: str, summary: str | None = None, reason: dict | None = None) -> None``
+    """
+
+    def _session_end(
+        outcome: str,
+        summary: str | None = None,
+        reason: dict | None = None,
+    ) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.session_end(outcome=outcome, summary=summary, reason=reason)
+
+    return _session_end
+
+
+def make_tool_result_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable:
+    """Create a callback that emits a ToolCallResult event.
+
+    Callable signature:
+    ``fn(tool_call_id, tool_name, success, duration_ms=None, error=None, result_summary=None) -> None``
+    """
+
+    def _tool_result(
+        tool_call_id: str,
+        tool_name: str,
+        success: bool,
+        duration_ms: float | None = None,
+        error: str | None = None,
+        result_summary: dict | None = None,
+    ) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.tool_call_result(
+            tool_call_id=tool_call_id,
+            tool_name=tool_name,
+            success=success,
+            duration_ms=duration_ms,
+            error=error,
+            result_summary=result_summary,
+        )
+
+    return _tool_result
+
+
+def make_user_question_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable:
+    """Create a callback that emits a UserQuestion event.
+
+    Callable signature:
+    ``fn(question_id, question_text, options=None) -> None``
+    """
+
+    def _user_question(
+        question_id: str,
+        question_text: str,
+        options: list[str] | None = None,
+    ) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.user_question(
+            question_id=question_id,
+            question_text=question_text,
+            options=options,
+        )
+
+    return _user_question
+
+
+def make_session_stalled_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable:
+    """Create a callback that emits a SessionStalled event.
+
+    Callable signature:
+    ``fn(last_activity_age_seconds, current_tool=None, diagnostic=None) -> None``
+    """
+
+    def _session_stalled(
+        last_activity_age_seconds: float,
+        current_tool: str | None = None,
+        diagnostic: dict | None = None,
+    ) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.session_stalled(
+            last_activity_age_seconds=last_activity_age_seconds,
+            current_tool=current_tool,
+            diagnostic=diagnostic,
+        )
+
+    return _session_stalled
+
+
+def make_session_cancelled_cb(
+    conn: acp.Client,
+    session_id: str,
+    loop: asyncio.AbstractEventLoop,
+) -> Callable:
+    """Create a callback that emits a SessionCancelled event.
+
+    Callable signature:
+    ``fn(cancelled_by: str, reason: str | None = None) -> None``
+    """
+
+    def _session_cancelled(
+        cancelled_by: str,
+        reason: str | None = None,
+    ) -> None:
+        from acp_adapter.publisher import SessionEventPublisher
+
+        publisher = SessionEventPublisher(
+            session_id=session_id,
+            send_ext_notification=conn.ext_notification,
+            loop=loop,
+        )
+        publisher.session_cancelled(cancelled_by=cancelled_by, reason=reason)
+
+    return _session_cancelled
