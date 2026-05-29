@@ -14331,6 +14331,67 @@ Examples:
     logs_parser.set_defaults(func=cmd_logs)
 
     # =========================================================================
+    # infra command
+    # =========================================================================
+    from hermes_cli.infra import cmd_infra
+
+    infra_parser = subparsers.add_parser(
+        "infra",
+        help="Manage per-profile k3d cluster infrastructure",
+        description="Bring up, tear down, or inspect per-profile Kubernetes resources (namespaces, GitNexus MCP, Prefect worker, quotas).",
+    )
+    infra_subparsers = infra_parser.add_subparsers(dest="infra_command")
+
+    # infra up
+    infra_up = infra_subparsers.add_parser(
+        "up", help="Bring up infrastructure for a profile"
+    )
+    infra_up.add_argument(
+        "profile",
+        help="Profile name (default, engineer, cto, personal, sre, bmad)",
+    )
+
+    # infra down
+    infra_down = infra_subparsers.add_parser(
+        "down", help="Tear down infrastructure for a profile"
+    )
+    infra_down.add_argument(
+        "profile",
+        help="Profile name (default, engineer, cto, personal, sre, bmad)",
+    )
+
+    # infra status
+    infra_status = infra_subparsers.add_parser(
+        "status", help="Show infrastructure status"
+    )
+    infra_status.add_argument(
+        "profile",
+        nargs="?",
+        help="Profile name to filter (omit for all profiles)",
+    )
+
+    # infra auto-start (hidden from help — used by session hooks)
+    infra_auto = infra_subparsers.add_parser(
+        "auto-start", help="Ensure infrastructure is up for a profile (session hook)"
+    )
+    infra_auto.add_argument(
+        "profile",
+        help="Profile name",
+    )
+
+    # infra idle-teardown
+    infra_idle = infra_subparsers.add_parser(
+        "idle-teardown", help="Scale down non-critical pods in idle namespaces"
+    )
+    infra_idle.add_argument(
+        "--hours",
+        type=int,
+        default=4,
+        help="Idle threshold in hours (default: 4)",
+    )
+    infra_parser.set_defaults(func=cmd_infra)
+
+    # =========================================================================
     # Parse and execute
     # =========================================================================
     # Pre-process argv so unquoted multi-word session names after -c / -r

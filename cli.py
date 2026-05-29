@@ -1324,6 +1324,24 @@ def _run_checkpoint_auto_maintenance() -> None:
         logger.debug("checkpoint auto-maintenance skipped: %s", exc)
 
 
+def _run_infra_auto_start() -> None:
+    """Ensure k3d namespace exists for the active Hermes profile.
+
+    Called once per CLI session startup.  Reads the active profile name,
+    then calls ``auto_start`` from ``hermes_cli.infra``.  Never raises —
+    infrastructure maintenance must never block interactive startup.
+    """
+    try:
+        from hermes_cli.profiles import get_active_profile_name
+        profile = get_active_profile_name()
+        if not profile:
+            return
+        from hermes_cli.infra import auto_start
+        auto_start(profile)
+    except Exception as exc:
+        logger.debug("infra auto-start skipped: %s", exc)
+
+
 def _prune_stale_worktrees(repo_root: str, max_age_hours: int = 24) -> None:
     """Remove stale worktrees and orphaned branches on startup.
 
@@ -3195,6 +3213,11 @@ class HermesCLI:
         # checkpoint repos under ~/.hermes/checkpoints/.  Opt-in via
         # checkpoints.auto_prune, idempotent via .last_prune marker.
         _run_checkpoint_auto_maintenance()
+
+        # Opportunistic infra auto-start — ensures k3d namespace exists
+        # for the active profile.  Non-blocking; failures are logged but
+        # never prevent the CLI from launching.
+        _run_infra_auto_start()
 
         # Deferred title: stored in memory until the session is created in the DB
         self._pending_title: Optional[str] = None
@@ -5666,6 +5689,57 @@ class HermesCLI:
 
         agent_running = getattr(self, "_agent_running", False)
         _cprint(f"  Agent: {'running' if agent_running else 'idle'}")
+
+    def _handle_checkpoints_command(self):
+        """Handle /checkpoints — show workflow checkpoint status."""
+        try:
+            from hermes_state import SessionDB
+            sdb = SessionDB()
+            active = sdb.checkpoint_list_active()
+            sdb.close()
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Cannot read checkpoints: {exc}{_RST}")
+            return
+
+        if not active:
+            _cprint(f"  No active workflow checkpoints.")
+            return
+
+        _cprint(f"  Active workflows: {len(active)}")
+        for wf in active:
+            wf_id = wf["workflow_id"]
+            total = wf["total"]
+            completed = wf["completed"]
+            pending = wf["pending"]
+            running = wf["running"]
+            failed = wf["failed"]
+            pct = int(completed / total * 100) if total else 0
+
+            # Build a simple progress bar
+            bar_w = 20
+            done_w = int(bar_w * completed / total) if total else 0
+            fail_w = int(bar_w * failed / total) if total else 0
+            pend_w = bar_w - done_w - fail_w
+            bar = (f"{_DIM}[{_RST}"
+                   f"{'█' * done_w}"
+                   f"{'✗' * fail_w}" if failed else ""
+                   f"{'·' * pend_w}"
+                   f"{_DIM}]{_RST}")
+
+            # Status indicators
+            parts = []
+            if completed:
+                parts.append(f"✓{completed}")
+            if running:
+                parts.append(f"↻{running}")
+            if failed:
+                parts.append(f"✗{failed}")
+            if pending:
+                parts.append(f"·{pending}")
+
+            status = " ".join(parts)
+            short_id = wf_id[:16] + "…" if len(wf_id) > 16 else wf_id
+            _cprint(f"    {short_id}  {bar}  {pct}%  ({status})")
 
     def _handle_paste_command(self):
         """Handle /paste — explicitly check clipboard for an image.
@@ -8626,8 +8700,12 @@ class HermesCLI:
             self._handle_stop_command()
         elif canonical == "agents":
             self._handle_agents_command()
+        elif canonical == "checkpoints":
+            self._handle_checkpoints_command()
         elif canonical == "background":
             self._handle_background_command(cmd_original)
+        elif canonical == "workflow":
+            self._handle_workflow_command(cmd_original)
         elif canonical == "queue":
             # Extract prompt after "/queue " or "/q "
             parts = cmd_original.split(None, 1)
@@ -8964,6 +9042,34 @@ class HermesCLI:
         thread = threading.Thread(target=run_background, daemon=True, name=f"bg-task-{task_id}")
         self._background_tasks[task_id] = thread
         thread.start()
+
+    def _handle_workflow_command(self, cmd: str):
+        """Handle /workflow <goal> — run a multi-phase agent workflow.
+
+        Takes a user goal, frames it as a workflow orchestration task,
+        and feeds it to the agent. The agent (with the workflow prompt
+        injected) generates and executes a Python orchestration script
+        via execute_code that coordinates subagents through phases.
+        """
+        parts = cmd.strip().split(maxsplit=1)
+        if len(parts) < 2 or not parts[1].strip():
+            _cprint("  Usage: /workflow <goal>")
+            _cprint("  Example: /workflow Research the Rust async ecosystem and produce a report")
+            _cprint("  The agent will plan phases, spawn subagents, and synthesize results.")
+            return
+
+        goal = parts[1].strip()
+        # Frame the goal for workflow orchestration
+        workflow_prompt = (
+            f"Execute a multi-phase workflow to accomplish this goal: {goal}\n\n"
+            f"Write and run an orchestration script via execute_code that:\n"
+            f"1. Plans the phases needed\n"
+            f"2. Uses delegate_task to spawn subagents for each phase\n"
+            f"3. Synthesizes the results into a final answer\n\n"
+            f"Only return the final synthesis — keep intermediate results in script variables."
+        )
+        self._pending_input.put(workflow_prompt)
+        _cprint(f"  🔄 Workflow started: \"{goal[:80]}{'...' if len(goal) > 80 else ''}\"")
 
     @staticmethod
     def _try_launch_chrome_debug(port: int, system: str) -> bool:
