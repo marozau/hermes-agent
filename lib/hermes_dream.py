@@ -108,8 +108,8 @@ def _resolve_dreams_dir(override: Optional[str] = None) -> Path:
     env = os.environ.get("HERMES_DREAMS_DIR")
     if env:
         return Path(env)
-    home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
-    return Path(home) / "dreams"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "dreams"
 
 
 def _ensure_dir(path: Path, mode: int = 0o700) -> None:

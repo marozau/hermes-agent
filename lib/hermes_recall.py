@@ -98,8 +98,8 @@ def _resolve_raw_dir(override: Optional[str] = None) -> Path:
     env = os.environ.get("HERMES_RAW_DIR")
     if env:
         return Path(env)
-    home = os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))
-    return Path(home) / "raw"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "raw"
 
 
 # ─────────────────────────────────────────────────────────────────────────────

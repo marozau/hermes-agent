@@ -123,14 +123,24 @@ def chat_completions(
                 headers=headers,
                 content=json.dumps(body),
             )
-    except httpx.TimeoutException:
-        raise ValueError(
+    except httpx.TimeoutException as exc:
+        from hermes_llm import ProviderError
+        raise ProviderError(
             f"Chat completions request timed out after {timeout}s "
-            f"(provider={provider.provider}, model={provider.model})"
-        )
+            f"(provider={provider.provider}, model={provider.model})",
+            provider=provider.provider,
+            model=provider.model,
+            category="timeout",
+            raw_error=exc,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ValueError(
-            f"Chat completions HTTP error ({provider.provider}): {exc}"
+        from hermes_llm import ProviderError
+        raise ProviderError(
+            f"Chat completions HTTP error ({provider.provider}): {exc}",
+            provider=provider.provider,
+            model=provider.model,
+            category="unknown",
+            raw_error=exc,
         ) from exc
 
     elapsed = _time.monotonic() - t0
@@ -140,13 +150,19 @@ def chat_completions(
     )
 
     if resp.status_code != 200:
+        from hermes_llm import ProviderError, classify_http_status
         try:
             err_body = resp.json()
         except Exception:
             err_body = {"raw": resp.text[:500]}
-        raise ValueError(
+        category = classify_http_status(resp.status_code)
+        raise ProviderError(
             f"Chat completions API ({provider.provider}) returned "
-            f"{resp.status_code}: {json.dumps(err_body)}"
+            f"{resp.status_code}: {json.dumps(err_body)}",
+            provider=provider.provider,
+            model=provider.model,
+            category=category,
+            status_code=resp.status_code,
         )
 
     data = resp.json()

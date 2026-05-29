@@ -57,8 +57,8 @@ def _resolve_memory_dir(override: Optional[str] = None) -> Path:
     env_dir = os.environ.get("HERMES_MEMORY_DIR")
     if env_dir:
         return Path(env_dir)
-    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
-    return Path(home) / "memory" / "typed"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "memory" / "typed"
 
 
 def _resolve_raw_dir(override: Optional[str] = None) -> Path:
@@ -69,8 +69,8 @@ def _resolve_raw_dir(override: Optional[str] = None) -> Path:
     env_dir = os.environ.get("HERMES_RAW_DIR")
     if env_dir:
         return Path(env_dir)
-    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
-    return Path(home) / "raw"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "raw"
 
 
 def _ensure_raw_dirs(raw_root: Path, project: str, role: str) -> Path:

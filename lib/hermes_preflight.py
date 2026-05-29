@@ -108,7 +108,8 @@ class PreflightTelemetry:
 
 
 def _hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home())
 
 
 def _preflight_dir() -> Path:

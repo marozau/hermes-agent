@@ -161,26 +161,42 @@ def anthropic_chat(
                 headers=headers,
                 content=json.dumps(body),
             )
-    except httpx.TimeoutException:
-        raise ValueError(
+    except httpx.TimeoutException as exc:
+        from hermes_llm import ProviderError
+        raise ProviderError(
             f"Anthropic request timed out after {timeout}s "
-            f"(model={provider.model})"
-        )
+            f"(model={provider.model})",
+            provider=provider.provider,
+            model=provider.model,
+            category="timeout",
+            raw_error=exc,
+        ) from exc
     except httpx.HTTPError as exc:
-        raise ValueError(
-            f"Anthropic HTTP error: {exc}"
+        from hermes_llm import ProviderError
+        raise ProviderError(
+            f"Anthropic HTTP error: {exc}",
+            provider=provider.provider,
+            model=provider.model,
+            category="unknown",
+            raw_error=exc,
         ) from exc
 
     elapsed = _time.monotonic() - t0
     logger.debug("anthropic_chat %s finished in %.2fs", provider.model, elapsed)
 
     if resp.status_code != 200:
+        from hermes_llm import ProviderError, classify_http_status
         try:
             err_body = resp.json()
         except Exception:
             err_body = {"raw": resp.text[:500]}
-        raise ValueError(
-            f"Anthropic API returned {resp.status_code}: {json.dumps(err_body)}"
+        category = classify_http_status(resp.status_code)
+        raise ProviderError(
+            f"Anthropic API returned {resp.status_code}: {json.dumps(err_body)}",
+            provider=provider.provider,
+            model=provider.model,
+            category=category,
+            status_code=resp.status_code,
         )
 
     data = resp.json()

@@ -123,15 +123,15 @@ def _resolve_providers_path(override: Optional[Union[Path, str]] = None) -> Path
     env_p = _env("HERMES_PROVIDERS_PATH")
     if env_p:
         return Path(env_p)
-    home = _env("HERMES_HOME") or str(Path.home() / ".hermes")
-    return Path(home) / "dreams" / "providers.yaml"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "dreams" / "providers.yaml"
 
 
 def _resolve_observability_dir(override: Optional[str] = None) -> Path:
     if override:
         return Path(override)
-    home = _env("HERMES_HOME") or str(Path.home() / ".hermes")
-    return Path(home) / "observability"
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home()) / "observability"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -338,6 +338,65 @@ def _extract_json_payload(content: str) -> str:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Provider error classification (fallback-visibility)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class ProviderError(Exception):
+    """Exception carrying provider error classification metadata.
+
+    Raised by provider dispatchers instead of bare ValueError when the
+    upstream API returns a distinguishable error.  The fallback chain in
+    llm_call uses these fields to emit structured WARN-level logs.
+    """
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        provider: str,
+        model: str,
+        category: str,  # timeout | rate-limit | model-unavailable | server-error | unknown
+        status_code: Optional[int] = None,
+        raw_error: Optional[Exception] = None,
+    ) -> None:
+        super().__init__(message)
+        self.provider = provider
+        self.model = model
+        self.category = category
+        self.status_code = status_code
+        self.raw_error = raw_error
+
+
+def classify_http_status(status_code: int) -> str:
+    """Classify an HTTP status code into an error category string."""
+    if status_code == 429:
+        return "rate-limit"
+    if status_code in (400, 404):
+        return "model-unavailable"
+    if 500 <= status_code < 600:
+        return "server-error"
+    return "unknown"
+
+
+def classify_exception(exc: BaseException) -> str:
+    """Classify a caught exception into an error category string.
+
+    ProviderError carries its own category; httpx timeouts map to 'timeout';
+    everything else is 'unknown'.
+    """
+    try:
+        import httpx as _httpx
+        if isinstance(exc, _httpx.TimeoutException):
+            return "timeout"
+    except ImportError:
+        pass
+    if isinstance(exc, ProviderError):
+        return exc.category
+    return "unknown"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Provider dispatch seam (DN4)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -473,7 +532,7 @@ def llm_call(
         fb for fb in wl.fallback
         if wl.same_provider_ok or fb.provider != wl.primary.provider
     ]
-    for prov in chain:
+    for idx, prov in enumerate(chain):
         try:
             raw = _attempt_call(prov, spec, cache_mode=wl.cache)
             served_by = prov
@@ -489,6 +548,17 @@ def llm_call(
         except Exception as exc:
             last_exc = exc
             tried.append(prov.provider)
+            # ── Fallback activation logging (WARN level) ──
+            category = classify_exception(exc)
+            status_code = getattr(exc, "status_code", None)
+            if idx + 1 < len(chain):
+                fallback_target = f"{chain[idx + 1].provider}/{chain[idx + 1].model}"
+            else:
+                fallback_target = "none (exhausted)"
+            logger.warning(
+                "Fallback triggered: %s/%s failed (category=%s, status=%s) -> %s",
+                prov.provider, prov.model, category, status_code, fallback_target,
+            )
             continue
 
     if raw is None:
@@ -497,6 +567,10 @@ def llm_call(
             schema_status="not_applicable", outcome="failed_provider",
             error=f"primary+fallbacks failed: tried={tried}",
             observability_dir=observability_dir,
+        )
+        logger.warning(
+            "All providers exhausted for workload '%s': tried=%s",
+            spec.workload, tried,
         )
         raise RuntimeError(
             f"llm_call: workload '{spec.workload}' exhausted chain "
@@ -549,6 +623,11 @@ def llm_call(
             fb_raw = _attempt_call(prov, spec, cache_mode=wl.cache)
         except Exception as e:
             parse_err_3 = e
+            category = classify_exception(e)
+            logger.warning(
+                "Schema fallback: %s/%s failed (category=%s)",
+                prov.provider, prov.model, category,
+            )
             continue
         parsed, parse_err_3 = _validate_response(fb_raw, spec.response_model)
         if parse_err_3 is None:

@@ -66,7 +66,8 @@ class AuditRow(BaseModel):
 
 
 def _hermes_home() -> Path:
-    return Path(os.environ.get("HERMES_HOME") or os.path.expanduser("~/.hermes"))
+    from lib._hermes_paths import resolve_hermes_home
+    return Path(resolve_hermes_home())
 
 
 def _resolve_attestation_dir(override: Optional[str] = None) -> Path:
