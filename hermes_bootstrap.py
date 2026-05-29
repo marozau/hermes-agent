@@ -52,6 +52,36 @@ from __future__ import annotations
 import os
 import sys
 
+# ─────────────────────────────────────────────────────────────────────────────
+# sys.path scrub — defend the editable install from cwd-shadowing
+# ─────────────────────────────────────────────────────────────────────────────
+# Python sets ``sys.path[0] = ''`` (cwd) for ``python -m foo`` and
+# ``python -c "..."`` invocations.  When the cwd happens to contain a
+# directory named like one of our top-level packages (``hermes_cli``,
+# ``agent``, ``tools``, ``lib``, etc.), PathFinder finds it BEFORE the
+# editable-install finder runs — silently overriding the editable mapping.
+#
+# Concrete failure: ``~/.hermes/hermes-agent/venv/bin/python -m hermes_cli.main
+# update`` invoked from cwd ``~/usr-local/hermes`` (the dev tree) loads the
+# DEV TREE's hermes_cli.main into the RUNTIME venv.  PROJECT_ROOT resolves to
+# the dev tree, ``git pull`` updates the dev tree, ``pip install -e .``
+# rebinds the runtime venv's editable install to the dev tree, and
+# ``sync_skills()`` reads bundled skills from the dev tree.  The runtime is
+# never updated; the dev tree gets re-pulled.  Same hazard surfaces with
+# launchd plists whose ``WorkingDirectory`` differs from the venv's install
+# root.
+#
+# Stripping the empty string from sys.path is equivalent to ``python -P``
+# (PEP 686, Python 3.11+) but applied at module-import time so it covers
+# both shebang scripts and ``python -m`` invocations after this module loads
+# (hermes_bootstrap is the FIRST import in every Hermes entry point).
+#
+# Operator-visible behavior change: the binary you invoke always operates
+# on its own editable-install root.  No more "cd to the right dir first"
+# discipline.
+sys.path[:] = [_p for _p in sys.path if _p]
+
+
 _IS_WINDOWS = sys.platform == "win32"
 _bootstrap_applied = False
 
