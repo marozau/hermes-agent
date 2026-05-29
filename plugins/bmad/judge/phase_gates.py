@@ -811,6 +811,127 @@ def load_criteria(
     }
 
 
+def _validate_criteria(criteria: dict) -> None:
+    """Validate that a criteria dict has all expected keys.
+
+    Raises ValueError if required keys are missing or invalid.
+    """
+    required_keys = ("phase", "required_artifacts", "gates")
+    for key in required_keys:
+        if key not in criteria:
+            raise ValueError(
+                f"Criteria dict missing required key {key!r}"
+            )
+
+    if not isinstance(criteria["required_artifacts"], list):
+        raise ValueError("'required_artifacts' must be a list")
+    if not isinstance(criteria["gates"], list):
+        raise ValueError("'gates' must be a list")
+
+    for i, gate in enumerate(criteria["gates"]):
+        if not isinstance(gate, dict):
+            raise ValueError(f"Gate at index {i} is not a dict: {gate!r}")
+        for gk in ("id", "description", "severity"):
+            if gk not in gate:
+                raise ValueError(
+                    f"Gate at index {i} ({gate.get('id', '?')}) "
+                    f"missing required key {gk!r}"
+                )
+        if gate["severity"] not in ("required", "recommended"):
+            raise ValueError(
+                f"Gate {gate['id']!r} has invalid severity "
+                f"{gate['severity']!r} — must be 'required' or 'recommended'"
+            )
+
+
+def get_gate_criteria(
+    phase: str,
+    overrides: dict | None = None,
+) -> dict:
+    """Load gate criteria for *phase*, merging project-specific overrides.
+
+    This is the entry point for callers that need the final criteria with
+    project-level customisations applied.  It first loads the default
+    criteria from ``criteria.yaml``, then merges *overrides* on top.
+
+    Overrides are discovered by the caller — for example, from
+    ``plugin.yaml`` or ``.hermes/config``.  The *overrides* dict should
+    have the same shape as the per-phase section of criteria.yaml:
+
+    .. code-block:: yaml
+
+        overrides:
+          required_artifacts:
+            - extra_artifact.md
+          gates:
+            - id: existing_gate_id
+              severity: required   # promote from recommended → required
+            - id: custom_team_gate
+              description: "Team-specific quality check"
+              severity: recommended
+
+    Merge rules:
+
+    * ``required_artifacts`` — appended (duplicates skipped).
+    * ``gates`` — merged by ``id``.  If a gate with the same ``id``
+      already exists, its keys are updated in-place.  If the ``id`` is
+      new, the gate is appended to the list.
+
+    After merging, the result is validated to ensure all expected keys
+    are present and severities are valid.
+
+    Args:
+        phase: One of ``"analysis"``, ``"planning"``, ``"solutioning"``,
+            ``"implementation"``.
+        overrides: Optional override dict with optional keys
+            ``required_artifacts`` (list) and ``gates`` (list of dicts).
+
+    Returns:
+        ``{phase, required_artifacts, gates}`` — the merged criteria.
+
+    Raises:
+        FileNotFoundError: If the default criteria.yaml cannot be found.
+        ValueError: If *phase* is unknown or the merged criteria fail
+            validation.
+    """
+    criteria = load_criteria(phase)
+
+    if not overrides:
+        return criteria
+
+    # ── Merge required_artifacts ───────────────────────────────────────
+    if "required_artifacts" in overrides:
+        existing = set(criteria["required_artifacts"])
+        for artifact in overrides["required_artifacts"]:
+            if artifact not in existing:
+                criteria["required_artifacts"].append(artifact)
+                existing.add(artifact)
+
+    # ── Merge gates ────────────────────────────────────────────────────
+    if "gates" in overrides:
+        gate_map: dict[str, dict] = {
+            g["id"]: g for g in criteria["gates"]
+        }
+        for gate_override in overrides["gates"]:
+            gate_id = gate_override.get("id")
+            if not gate_id:
+                raise ValueError(
+                    f"Override gate missing 'id': {gate_override!r}"
+                )
+            if gate_id in gate_map:
+                # Update existing gate in-place
+                gate_map[gate_id].update(gate_override)
+            else:
+                # New gate
+                gate_map[gate_id] = dict(gate_override)
+        criteria["gates"] = list(gate_map.values())
+
+    # ── Validate ───────────────────────────────────────────────────────
+    _validate_criteria(criteria)
+
+    return criteria
+
+
 def check_gate(
     gate: dict,
     artifacts: dict,

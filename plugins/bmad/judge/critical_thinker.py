@@ -61,6 +61,163 @@ class ThinkerVerdict:
             self.weak_points = ["Confidence below 0.9 — review recommended"]
 
 
+@dataclass
+class ReasoningStep:
+    """A single step in a reasoning chain.
+
+    Attributes:
+        description: Human-readable description of the step.
+        step_type: Classification — ``"first_principles"`` (derived from
+            axioms/base truths), ``"heuristic"`` (rule of thumb or pattern
+            match), ``"evidence"`` (direct observation or data point),
+            ``"assumption"`` (explicitly stated as unverified), or
+            ``"conclusion"`` (deduced or inferred result).
+        confidence_impact: How this step affects overall confidence.
+            -1.0 (fully undermining) to +1.0 (fully supporting). 0 = neutral.
+        detail: Optional expanded explanation.
+        source: Where this step came from — e.g. check name, evidence key.
+    """
+    description: str
+    step_type: str  # "first_principles" | "heuristic" | "evidence" | "assumption" | "conclusion"
+    confidence_impact: float = 0.0  # -1.0 .. +1.0
+    detail: str = ""
+    source: str = ""
+
+    def __post_init__(self):
+        valid_types = {"first_principles", "heuristic", "evidence", "assumption", "conclusion"}
+        if self.step_type not in valid_types:
+            raise ValueError(
+                f"step_type must be one of {valid_types}, got '{self.step_type}'"
+            )
+        self.confidence_impact = max(-1.0, min(1.0, self.confidence_impact))
+
+    def to_dict(self) -> dict:
+        return {
+            "description": self.description,
+            "step_type": self.step_type,
+            "confidence_impact": self.confidence_impact,
+            "detail": self.detail,
+            "source": self.source,
+        }
+
+
+@dataclass
+class ReasoningChain:
+    """Structured reasoning chain from evidence to verdict.
+
+    Records every step, classifies it as first-principles vs heuristic vs
+    evidence-based, tracks assumptions and weak points explicitly, and
+    provides a summary of the reasoning architecture.
+
+    Attributes:
+        steps: Ordered list of ReasoningStep objects.
+        weak_points: Explicitly identified weak points in the reasoning.
+        assumptions: Explicit assumptions that underpin the reasoning.
+        verdict: Final verdict (PASS / FAIL / CONDITIONAL_PASS).
+        confidence: Final calibrated confidence (0.0–1.0).
+    """
+    steps: list[ReasoningStep] = field(default_factory=list)
+    weak_points: list[str] = field(default_factory=list)
+    assumptions: list[str] = field(default_factory=list)
+    verdict: str = ""
+    confidence: float = 0.0
+
+    def add_step(
+        self,
+        description: str,
+        step_type: str,
+        confidence_impact: float = 0.0,
+        detail: str = "",
+        source: str = "",
+    ) -> ReasoningStep:
+        """Add a reasoning step and return it."""
+        step = ReasoningStep(
+            description=description,
+            step_type=step_type,
+            confidence_impact=confidence_impact,
+            detail=detail,
+            source=source,
+        )
+        self.steps.append(step)
+        return step
+
+    def add_weak_point(self, description: str):
+        """Add a weak point if not already present."""
+        if description not in self.weak_points:
+            self.weak_points.append(description)
+
+    def add_assumption(self, description: str):
+        """Add an assumption if not already present."""
+        if description not in self.assumptions:
+            self.assumptions.append(description)
+
+    def finalize(self, verdict: str, confidence: float):
+        """Set the final verdict and confidence."""
+        self.verdict = verdict
+        self.confidence = confidence
+
+    def count_by_type(self) -> dict[str, int]:
+        """Count steps by type. Returns e.g. {'first_principles': 3, 'heuristic': 2, ...}."""
+        counts: dict[str, int] = {}
+        for step in self.steps:
+            counts[step.step_type] = counts.get(step.step_type, 0) + 1
+        return counts
+
+    def first_principles_ratio(self) -> float:
+        """Ratio of first-principles steps to heuristic steps. 1.0 = all first-principles."""
+        counts = self.count_by_type()
+        fp = counts.get("first_principles", 0)
+        heur = counts.get("heuristic", 0)
+        total = fp + heur
+        if total == 0:
+            return 0.5  # neutral when neither present
+        return fp / total
+
+    def to_dict(self) -> dict:
+        """Serialize the full reasoning chain to a dict."""
+        return {
+            "verdict": self.verdict,
+            "confidence": self.confidence,
+            "steps": [s.to_dict() for s in self.steps],
+            "weak_points": list(self.weak_points),
+            "assumptions": list(self.assumptions),
+            "step_counts": self.count_by_type(),
+            "first_principles_ratio": round(self.first_principles_ratio(), 2),
+        }
+
+    def summary(self) -> str:
+        """One-paragraph human-readable summary of the reasoning architecture."""
+        counts = self.count_by_type()
+        fp = counts.get("first_principles", 0)
+        heur = counts.get("heuristic", 0)
+        ev = counts.get("evidence", 0)
+        asm = counts.get("assumption", 0)
+        conc = counts.get("conclusion", 0)
+
+        parts = [f"{len(self.steps)} reasoning steps"]
+        if fp:
+            parts.append(f"{fp} first-principles")
+        if heur:
+            parts.append(f"{heur} heuristic")
+        if ev:
+            parts.append(f"{ev} evidence-based")
+        if asm:
+            parts.append(f"{asm} assumptions")
+        if conc:
+            parts.append(f"{conc} conclusions")
+
+        base = ", ".join(parts)
+        base += (
+            f" | Verdict: {self.verdict} "
+            f"(confidence={self.confidence:.2f})"
+        )
+        if self.weak_points:
+            base += f" | {len(self.weak_points)} weak point(s)"
+        if self.assumptions:
+            base += f" | {len(self.assumptions)} explicit assumption(s)"
+        return base
+
+
 # ═══════════════════════════════════════════════════════════════════════════
 # Confidence calibration
 # ═══════════════════════════════════════════════════════════════════════════
