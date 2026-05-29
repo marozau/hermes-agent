@@ -44,10 +44,27 @@ def _resolve_short_name(name: str, sources, console: Console) -> str:
     c = console or _console
     c.print(f"[dim]Resolving '{name}'...[/]")
 
+    # Fast path: search local sources first.  Network sources (hermes-index,
+    # skills-sh, etc.) can return 50+ results per query, and the local exact
+    # match often lands beyond the default result limit — the truncation hides
+    # it.  A local-only search is filesystem-local and instant.
+    local_results = unified_search(name, sources, source_filter="local", limit=5)
+    local_exact = [r for r in local_results if r.name.lower() == name.lower()]
+    if local_exact:
+        c.print(f"[dim]Resolved to local: {local_exact[0].identifier}[/]")
+        return local_exact[0].identifier
+
     results = unified_search(name, sources, source_filter="all", limit=20)
 
     # Filter to exact name matches (case-insensitive)
     exact = [r for r in results if r.name.lower() == name.lower()]
+
+    # Prefer local skills when there are multiple exact-name matches
+    # from different sources — the user's own skill wins.
+    local_match = next((r for r in exact if r.source == "local"), None)
+    if local_match:
+        c.print(f"[dim]Resolved to local: {local_match.identifier}[/]")
+        return local_match.identifier
 
     if len(exact) == 1:
         c.print(f"[dim]Resolved to: {exact[0].identifier}[/]")
