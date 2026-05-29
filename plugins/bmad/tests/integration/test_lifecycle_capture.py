@@ -226,12 +226,18 @@ class TestHookActivation:
             working_directory = None
             profile_config = {}
 
-        pre_tool_call(FakeCtx(), tool_name="read_file", args={})
+        pre_tool_call(FakeCtx(), tool_name="read_file", tool_args={}, tool_result=None)
         # pre_tool_call is disabled for event capture, but the hook itself
         # still runs (for phase gate). The lifecycle capture should be skipped.
         # There may be no events if disabled.
 
-    def test_enabled_pre_tool_call_captures(self):
+    def test_enabled_pre_tool_call_graceful(self):
+        """pre_tool_call with lifecycle capture env set should not crash.
+
+        The pre_tool_call hook is a phase gate, not a lifecycle capture hook.
+        Even with BMAD_LIFECYCLE_HOOK_PRE_TOOL_CALL=1, the hook does not call
+        capture_event() — that path is reserved for future implementation.
+        """
         os.environ["BMAD_LIFECYCLE_HOOK_PRE_TOOL_CALL"] = "1"
         reset_event_bus()
         bus = get_event_bus()
@@ -243,8 +249,10 @@ class TestHookActivation:
             working_directory = None
             profile_config = {}
 
-        pre_tool_call(FakeCtx(), tool_name="read_file", args={})
-        # pre_tool_call for event capture is now enabled
+        # Must not raise — hook is wrapped by _catch_all
+        pre_tool_call(FakeCtx(), tool_name="read_file", tool_args={}, tool_result=None)
+        # pre_tool_call is a phase gate hook — no lifecycle capture expected
+        assert bus.stats()["queue_size"] == 0
 
     def test_hook_never_raises(self):
         """Verify _catch_all wrapper prevents exceptions from propagating."""
@@ -301,8 +309,8 @@ class TestEndToEnd:
         post_tool_call(
             FakeCtx(),
             tool_name="read_file",
-            args={"path": "app.py", "offset": 1, "limit": 100},
-            result='{"content": "print(hello)"}',
+            tool_args={"path": "app.py", "offset": 1, "limit": 100},
+            tool_result={"content": "print(hello)"},
         )
 
         post_llm_call(
