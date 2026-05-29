@@ -7361,17 +7361,6 @@ class GatewayRunner:
                     adapter._pending_messages[_quick_key] = queued_event
                 return "No active agent — /steer queued for the next turn."
 
-            # /party <task> — rewrite as 🎭 PARTY | <task> and let it
-            # flow through as a normal user message. The SOUL.md
-            # orchestrator protocol handles the rest.
-            if _cmd_def_inner and _cmd_def_inner.name == "party":
-                party_task = event.get_command_args().strip()
-                if not party_task:
-                    return "Usage: /party <task>"
-                event.text = f"\U0001f3ad PARTY | {party_task}"
-                # Do NOT return — fall through to normal message handling
-                # so the rewritten text reaches the agent as a user turn.
-
             # /model must not be used while the agent is running.
             if _cmd_def_inner and _cmd_def_inner.name == "model":
                 return "Agent is running — wait or /stop first, then switch models."
@@ -7830,15 +7819,6 @@ class GatewayRunner:
             # Do NOT return — fall through to _handle_message_with_agent
             # at the end of this function so the rewritten text is sent
             # to the agent as a regular user turn.
-
-        if canonical == "party":
-            # Rewrite /party <task> as 🎭 PARTY | <task> and let it
-            # flow through as a normal user message.
-            party_task = event.get_command_args().strip()
-            if not party_task:
-                return "Usage: /party <task>"
-            event.text = f"\U0001f3ad PARTY | {party_task}"
-            # Do NOT return — fall through to _handle_message_with_agent.
 
         if canonical == "goal":
             return await self._handle_goal_command(event)
