@@ -8702,6 +8702,8 @@ class HermesCLI:
             self._handle_agents_command()
         elif canonical == "checkpoints":
             self._handle_checkpoints_command()
+        elif canonical == "workflows":
+            self._handle_workflows_command(cmd_original)
         elif canonical == "background":
             self._handle_background_command(cmd_original)
         elif canonical == "workflow":
@@ -8836,17 +8838,32 @@ class HermesCLI:
                     )
             # Check for skill slash commands (/gif-search, /axolotl, etc.)
             elif base_cmd in skill_commands:
-                user_instruction = cmd_original[len(base_cmd):].strip()
-                msg = build_skill_invocation_message(
-                    base_cmd, user_instruction, task_id=self.session_id
-                )
-                if msg:
-                    skill_name = skill_commands[base_cmd]["name"]
-                    print(f"\n⚡ Loading skill: {skill_name}")
-                    if hasattr(self, '_pending_input'):
-                        self._pending_input.put(msg)
+                # Workflow commands get a different code path
+                if skill_commands[base_cmd].get("kind") == "workflow":
+                    from agent.skill_commands import build_workflow_invocation_message
+                    user_instruction = cmd_original[len(base_cmd):].strip()
+                    msg = build_workflow_invocation_message(
+                        base_cmd, user_instruction, task_id=self.session_id
+                    )
+                    if msg:
+                        wf_name = skill_commands[base_cmd]["name"]
+                        print(f"\n🔄 Running workflow: {wf_name}")
+                        if hasattr(self, '_pending_input'):
+                            self._pending_input.put(msg)
+                    else:
+                        ChatConsole().print(f"[bold red]Failed to load workflow for {base_cmd}[/]")
                 else:
-                    ChatConsole().print(f"[bold red]Failed to load skill for {base_cmd}[/]")
+                    user_instruction = cmd_original[len(base_cmd):].strip()
+                    msg = build_skill_invocation_message(
+                        base_cmd, user_instruction, task_id=self.session_id
+                    )
+                    if msg:
+                        skill_name = skill_commands[base_cmd]["name"]
+                        print(f"\n⚡ Loading skill: {skill_name}")
+                        if hasattr(self, '_pending_input'):
+                            self._pending_input.put(msg)
+                    else:
+                        ChatConsole().print(f"[bold red]Failed to load skill for {base_cmd}[/]")
             else:
                 # Prefix matching: if input uniquely identifies one command, execute it.
                 # Matches against both built-in COMMANDS and installed skill commands so
@@ -9070,6 +9087,337 @@ class HermesCLI:
         )
         self._pending_input.put(workflow_prompt)
         _cprint(f"  🔄 Workflow started: \"{goal[:80]}{'...' if len(goal) > 80 else ''}\"")
+
+    def _handle_workflows_command(self, cmd: str):
+        """Handle /workflows — workflow management (list, show, pause, resume, kill, export).
+
+        Subcommands:
+            list              — show all workflows with status
+            show <id>         — drill into a workflow to see phases and subagents
+            pause <id>        — pause a running workflow
+            resume <id>       — resume a paused workflow
+            kill <id>         — kill a running workflow (SIGTERM its sandbox PID)
+            export <id>       — export workflow definition as YAML
+        """
+        parts = cmd.strip().split()
+        if len(parts) < 2:
+            self._workflows_print_usage()
+            return
+
+        subcmd = parts[1].lower()
+        wf_id = parts[2] if len(parts) > 2 else None
+
+        if subcmd == "list":
+            self._workflows_handle_list()
+        elif subcmd == "show":
+            if not wf_id:
+                _cprint("  Usage: /workflows show <id>")
+                return
+            self._workflows_handle_show(wf_id)
+        elif subcmd == "pause":
+            if not wf_id:
+                _cprint("  Usage: /workflows pause <id>")
+                return
+            self._workflows_handle_pause(wf_id)
+        elif subcmd == "resume":
+            if not wf_id:
+                _cprint("  Usage: /workflows resume <id>")
+                return
+            self._workflows_handle_resume(wf_id)
+        elif subcmd == "kill":
+            if not wf_id:
+                _cprint("  Usage: /workflows kill <id>")
+                return
+            self._workflows_handle_kill(wf_id)
+        elif subcmd == "export":
+            if not wf_id:
+                _cprint("  Usage: /workflows export <id>")
+                return
+            self._workflows_handle_export(wf_id)
+        else:
+            _cprint(f"  Unknown subcommand: {subcmd}")
+            self._workflows_print_usage()
+
+    def _workflows_print_usage(self):
+        """Print usage for /workflows."""
+        _cprint(f"  {_BOLD}/workflows{_RST} — workflow management")
+        _cprint(f"    {_DIM}list{_RST}              — show all workflows")
+        _cprint(f"    {_DIM}show <id>{_RST}         — drill into a workflow")
+        _cprint(f"    {_DIM}pause <id>{_RST}        — pause a running workflow")
+        _cprint(f"    {_DIM}resume <id>{_RST}       — resume a paused workflow")
+        _cprint(f"    {_DIM}kill <id>{_RST}         — kill a running workflow")
+        _cprint(f"    {_DIM}export <id>{_RST}       — export workflow definition YAML")
+
+    def _workflows_get_sdb(self):
+        """Get a SessionDB instance, or None on failure."""
+        try:
+            from hermes_state import SessionDB
+            return SessionDB()
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Cannot access state DB: {exc}{_RST}")
+            return None
+
+    def _workflows_handle_list(self):
+        """List all workflows with status summaries."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            workflows = sdb.workflow_list_all()
+            if not workflows:
+                _cprint(f"  No workflows found.")
+                return
+
+            _cprint(f"  {_BOLD}Workflows:{_RST} {len(workflows)}")
+            for wf in workflows:
+                self._workflows_print_summary(wf)
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error listing workflows: {exc}{_RST}")
+        finally:
+            sdb.close()
+
+    def _workflows_print_summary(self, wf: dict):
+        """Print a one-line summary of a workflow."""
+        wf_id = wf["workflow_id"]
+        total = wf["total"] or 0
+        completed = wf["completed"] or 0
+        pending = wf["pending"] or 0
+        running = wf["running"] or 0
+        failed = wf["failed"] or 0
+        paused = bool(wf.get("paused", 0))
+        pid = wf.get("pid")
+
+        pct = int(completed / total * 100) if total else 0
+
+        # Build progress bar
+        bar_w = 20
+        done_w = int(bar_w * completed / total) if total else 0
+        fail_w = int(bar_w * failed / total) if total else 0
+        pend_w = bar_w - done_w - fail_w
+        bar = (f"{_DIM}[{_RST}"
+               f"{'█' * done_w}"
+               f"{'✗' * fail_w}"
+               f"{'·' * pend_w}"
+               f"{_DIM}]{_RST}")
+
+        # Status indicators
+        parts = []
+        if completed:
+            parts.append(f"✓{completed}")
+        if running:
+            parts.append(f"↻{running}")
+        if failed:
+            parts.append(f"✗{failed}")
+        if pending:
+            parts.append(f"·{pending}")
+        status = " ".join(parts)
+
+        # Extra flags
+        flags = []
+        if paused:
+            flags.append(f"{_BOLD}⏸ PAUSED{_RST}")
+        if pid:
+            flags.append(f"PID:{pid}")
+        flag_str = f" {_DIM}[{', '.join(flags)}]{_RST}" if flags else ""
+
+        short_id = wf_id[:24] + "…" if len(wf_id) > 24 else wf_id
+        _cprint(f"    {short_id}  {bar}  {pct}%  ({status}){flag_str}")
+
+    def _workflows_handle_show(self, wf_id: str):
+        """Show detailed view of a workflow — phases and subagents."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            wf = sdb.workflow_get_full(wf_id)
+            if not wf:
+                _cprint(f"  Workflow not found: {wf_id[:32]}")
+                return
+
+            paused = bool(wf.get("paused", 0))
+            pid = wf.get("pid")
+
+            _cprint(f"  {_BOLD}Workflow:{_RST} {wf_id}")
+            if paused:
+                _cprint(f"  Status: {_BOLD}⏸ PAUSED{_RST}")
+            if pid:
+                _cprint(f"  PID: {pid}")
+            _cprint(f"")
+
+            phases = wf.get("phases", [])
+            if not phases:
+                _cprint(f"  No phases recorded.")
+                return
+
+            _cprint(f"  {_BOLD}Phases:{_RST}")
+            for ph in phases:
+                status = ph["status"]
+                agent_id = ph.get("agent_id", "")
+                ts = ph.get("timestamp", 0)
+
+                # Status icon
+                if status == "completed":
+                    icon = f"✓"
+                elif status == "running":
+                    icon = f"↻"
+                elif status == "failed":
+                    icon = f"✗"
+                else:
+                    icon = f"·"
+
+                # Agent info
+                agent_short = ""
+                if agent_id:
+                    agent_short = agent_id[:16] + "…" if len(agent_id) > 16 else agent_id
+                    agent_short = f" {_DIM}(agent: {agent_short}){_RST}"
+
+                # Timestamp
+                ts_str = ""
+                if ts:
+                    from datetime import datetime
+                    ts_str = f" {_DIM}{datetime.fromtimestamp(ts).strftime('%H:%M:%S')}{_RST}"
+
+                _cprint(f"    {icon} {ph['phase']} [{status}]{agent_short}{ts_str}")
+
+            # Cross-reference with live subagents from delegate_task
+            self._workflows_show_subagents(wf_id)
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error showing workflow: {exc}{_RST}")
+        finally:
+            sdb.close()
+
+    @staticmethod
+    def _workflows_show_subagents(wf_id: str) -> None:
+        """Show live subagents from delegate_task for a workflow."""
+        try:
+            from tools.delegate_tool import list_active_subagents
+            from tools.process_registry import format_uptime_short
+            import time as _time
+
+            subagents = list_active_subagents()
+            if not subagents:
+                return
+
+            # Filter subagents — any running subagent is potentially part of a workflow
+            running = [s for s in subagents if s.get("status") == "running"]
+            if not running:
+                return
+
+            _cprint(f"")
+            _cprint(f"  {_BOLD}Live Subagents:{_RST} {len(running)} active")
+
+            for sa in running:
+                sa_id = sa.get("subagent_id", "?")[:20]
+                goal = (sa.get("goal", "") or "")[:60]
+                model = sa.get("model", "?")
+                depth = sa.get("depth", 0)
+                tool_count = sa.get("tool_count", 0)
+                started = sa.get("started_at", 0)
+                elapsed = ""
+                if started:
+                    elapsed = format_uptime_short(_time.time() - started)
+
+                _cprint(
+                    f"    ↻ {sa_id}  depth={depth}  {model}  "
+                    f"{tool_count} tools  {elapsed}"
+                )
+                if goal:
+                    _cprint(f"      {_DIM}{goal}{_RST}")
+        except Exception:
+            pass  # delegate_tool not available or subagent tracking inactive
+
+    def _workflows_handle_pause(self, wf_id: str):
+        """Pause a workflow."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            ok = sdb.workflow_pause(wf_id)
+            if ok:
+                _cprint(f"  ⏸ Workflow paused: {wf_id[:32]}")
+            else:
+                _cprint(f"  Workflow not found or already paused: {wf_id[:32]}")
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error pausing workflow: {exc}{_RST}")
+        finally:
+            sdb.close()
+
+    def _workflows_handle_resume(self, wf_id: str):
+        """Resume a paused workflow."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            ok = sdb.workflow_resume(wf_id)
+            if ok:
+                _cprint(f"  ▶ Workflow resumed: {wf_id[:32]}")
+            else:
+                _cprint(f"  Workflow not found or not paused: {wf_id[:32]}")
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error resuming workflow: {exc}{_RST}")
+        finally:
+            sdb.close()
+
+    def _workflows_handle_kill(self, wf_id: str):
+        """Kill a workflow by sending SIGTERM to its sandbox PID."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            pid = sdb.workflow_get_pid(wf_id)
+            if not pid:
+                _cprint(f"  No PID recorded for workflow: {wf_id[:32]}")
+                _cprint(f"  {_DIM}The sandbox may have already exited, or the workflow was not started via execute_code.{_RST}")
+                return
+
+            import signal
+            try:
+                os.kill(pid, signal.SIGTERM)
+                _cprint(f"  ✕ Sent SIGTERM to PID {pid} (workflow: {wf_id[:32]})")
+                # Also mark all running phases as failed
+                sdb.workflow_delete(wf_id)
+            except ProcessLookupError:
+                _cprint(f"  Process {pid} no longer exists — cleaning up workflow.")
+                sdb.workflow_delete(wf_id)
+            except PermissionError:
+                _cprint(f"  Permission denied — cannot kill PID {pid}.")
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error killing workflow: {exc}{_RST}")
+        finally:
+            sdb.close()
+
+    def _workflows_handle_export(self, wf_id: str):
+        """Export a workflow definition as YAML and save to ~/.hermes/workflows/."""
+        sdb = self._workflows_get_sdb()
+        if not sdb:
+            return
+        try:
+            yaml_str = sdb.workflow_export_yaml(wf_id)
+            if not yaml_str:
+                _cprint(f"  No definition YAML saved for workflow: {wf_id[:32]}")
+                return
+
+            # Parse the YAML to extract workflow name
+            import yaml as _yaml
+            try:
+                doc = _yaml.safe_load(yaml_str)
+                wf_name = (doc or {}).get("name", "")
+            except Exception:
+                wf_name = ""
+
+            if wf_name:
+                # Save to personal workflows directory
+                from hermes_cli.workflows import save_workflow, workflow_from_yaml
+                wf = workflow_from_yaml(yaml_str)
+                path = save_workflow(wf, tier="personal")
+                _cprint(f"  ✓ Exported workflow '{wf_name}' to {path}")
+            else:
+                _cprint(f"  {_DIM}--- workflow definition (no name in YAML, printed only) ---{_RST}")
+                _cprint(yaml_str)
+        except Exception as exc:
+            _cprint(f"  {_DIM}✗ Error exporting workflow: {exc}{_RST}")
+        finally:
+            sdb.close()
 
     @staticmethod
     def _try_launch_chrome_debug(port: int, system: str) -> bool:

@@ -87,6 +87,8 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Iterable, Optional
 
+import yaml
+
 from toolsets import get_toolset_names
 
 _log = logging.getLogger(__name__)
@@ -6238,6 +6240,93 @@ def run_daemon(
 # Worker context builder (what a spawned worker sees)
 # ---------------------------------------------------------------------------
 
+def _build_reflection_patterns_section(
+    assignee: Optional[str], parent_profiles: set[str]
+) -> str:
+    """Build the "Known Reflection Patterns" section for the worker context.
+
+    Reads the global and project-local reflection banks, filters for
+    high-severity (HIGH/CRITICAL) or recurring (recurrence_count > 0)
+    patterns relevant to the profiles involved, and returns a formatted
+    markdown section. Returns an empty string when no patterns match.
+
+    The section heading is always the same; when no patterns match the
+    section states "none."
+    """
+    # Collect profiles involved: the assignee + parent task profiles
+    profiles: set[str] = set()
+    if assignee:
+        profiles.add(assignee)
+    profiles.update(parent_profiles)
+
+    # Load entries from global and project banks
+    entries: list[dict[str, Any]] = []
+
+    hermes_home = Path(os.environ.get("HERMES_HOME", Path.home() / ".hermes"))
+    global_bank = hermes_home / "reflection-bank" / "global.yaml"
+    if global_bank.exists():
+        try:
+            raw = global_bank.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw)
+            if isinstance(data, list):
+                entries.extend(data)
+        except Exception:
+            pass
+
+    # Project bank — relative to CWD. Graceful when CWD has no .hermes dir.
+    project_bank = Path(".hermes") / "reflection-bank.yaml"
+    if project_bank.exists():
+        try:
+            raw = project_bank.read_text(encoding="utf-8")
+            data = yaml.safe_load(raw)
+            if isinstance(data, list):
+                entries.extend(data)
+        except Exception:
+            pass
+
+    if not entries:
+        return "## Known Reflection Patterns for This Phase\n\nnone.\n"
+
+    # Filter: (severity is high or critical OR recurrence_count > 0)
+    # AND profile is in the involved set (when profiles are specified).
+    def _matches(entry: dict[str, Any]) -> bool:
+        sev = str(entry.get("severity", "")).lower()
+        rec = entry.get("recurrence_count", 0)
+        if not (sev in ("high", "critical") or (isinstance(rec, int) and rec > 0)):
+            return False
+        if profiles:
+            entry_profile = str(entry.get("profile", ""))
+            if entry_profile and entry_profile not in profiles:
+                return False
+        return True
+
+    matched = [e for e in entries if _matches(e)]
+
+    if not matched:
+        return "## Known Reflection Patterns for This Phase\n\nnone.\n"
+
+    # Sort: by severity (critical first), then recurrence_count descending
+    sev_order = {"critical": 0, "high": 1}
+    matched.sort(key=lambda e: (
+        sev_order.get(str(e.get("severity", "")).lower(), 99),
+        -(int(e.get("recurrence_count", 0) or 0)),
+    ))
+
+    # Build section
+    lines = ["## Known Reflection Patterns for This Phase", ""]
+    for e in matched:
+        sev = str(e.get("severity", "?")).upper()
+        summary = str(e.get("summary", "(no summary)"))
+        rec = int(e.get("recurrence_count", 0) or 0)
+        phase = str(e.get("phase", "?"))
+        profile = str(e.get("profile", "?"))
+        lines.append(
+            f"- [{sev}] [{phase}] ({profile}) {summary} (recurred {rec}x)"
+        )
+    lines.append("")
+    return "\n".join(lines)
+
+
 def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
     """Return the full text a worker should read to understand its task.
 
@@ -6252,9 +6341,14 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
          ``run.summary`` / ``run.metadata`` when the parent was executed
          via a run; falls back to ``task.result`` for older data. Same
          per-field cap.
-      5. Cross-task role history for the assignee (most recent 5
+      5. Known reflection patterns for the profiles involved (assignee +
+         parent task profiles), sourced from the global and project
+         reflection banks. Filters for high-severity (HIGH/CRITICAL) or
+         recurring (recurrence_count > 0) entries.  When no patterns
+         match, the section states "none."
+      6. Cross-task role history for the assignee (most recent 5
          completed runs on other tasks).
-      6. Comment thread (most recent ``_CTX_MAX_COMMENTS`` shown, older
+      7. Comment thread (most recent ``_CTX_MAX_COMMENTS`` shown, older
          collapsed).
 
     All caps exist so worker prompts stay bounded even on pathological
@@ -6348,6 +6442,7 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
         (task_id,),
     ).fetchall()
     parent_ids = [r["parent_id"] for r in parent_rows]
+    parent_profiles: set[str] = set()
 
     if parent_ids:
         wrote_header = False
@@ -6355,6 +6450,8 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
             pt = get_task(conn, pid)
             if not pt or pt.status != "done":
                 continue
+            if pt.assignee:
+                parent_profiles.add(pt.assignee)
             runs = [r for r in list_runs(conn, pid) if r.outcome == "completed"]
             runs.sort(key=lambda r: r.started_at, reverse=True)
             run = runs[0] if runs else None
@@ -6380,6 +6477,16 @@ def build_worker_context(conn: sqlite3.Connection, task_id: str) -> str:
                     pass
             lines.extend(body_lines)
             lines.append("")
+
+    # Known reflection patterns — surface high-severity / recurring
+    # patterns from the global and project reflection banks for the
+    # profiles involved (assignee + parent task profiles).  Placed after
+    # parent results so the worker sees historical context before
+    # seeing patterns derived from that history.
+    reflection_section = _build_reflection_patterns_section(
+        task.assignee, parent_profiles
+    )
+    lines.append(reflection_section)
 
     # Cross-task role history: what else has THIS assignee completed
     # recently? Gives the worker implicit continuity — "I'm the reviewer

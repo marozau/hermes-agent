@@ -34,7 +34,7 @@ T = TypeVar("T")
 
 DEFAULT_DB_PATH = get_hermes_home() / "state.db"
 
-SCHEMA_VERSION = 14
+SCHEMA_VERSION = 15
 
 # ---------------------------------------------------------------------------
 # WAL-compatibility fallback
@@ -294,6 +294,31 @@ CREATE INDEX IF NOT EXISTS idx_sessions_parent ON sessions(parent_session_id);
 CREATE INDEX IF NOT EXISTS idx_sessions_started ON sessions(started_at DESC);
 CREATE INDEX IF NOT EXISTS idx_messages_session ON messages(session_id, timestamp);
 CREATE INDEX IF NOT EXISTS idx_compression_locks_expires ON compression_locks(expires_at);
+
+CREATE TABLE IF NOT EXISTS workflow_checkpoints (
+    workflow_id TEXT NOT NULL,
+    phase TEXT NOT NULL,
+    agent_id TEXT,
+    status TEXT NOT NULL DEFAULT 'pending',
+    result_cache TEXT,
+    timestamp REAL NOT NULL,
+    PRIMARY KEY (workflow_id, phase)
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflow_checkpoints_workflow
+    ON workflow_checkpoints(workflow_id, status);
+
+CREATE TABLE IF NOT EXISTS workflows (
+    workflow_id TEXT PRIMARY KEY,
+    pid INTEGER,
+    paused INTEGER NOT NULL DEFAULT 0,
+    definition_yaml TEXT,
+    created_at REAL NOT NULL,
+    updated_at REAL NOT NULL
+);
+
+CREATE INDEX IF NOT EXISTS idx_workflows_paused
+    ON workflows(paused);
 """
 
 FTS_SQL = """
@@ -730,6 +755,21 @@ class SessionDB:
                     "COALESCE(tool_name, '') || ' ' || "
                     "COALESCE(tool_calls, '') "
                     "FROM messages"
+                )
+            if current_version < 15:
+                # v15: workflows metadata table for TUI workflow management.
+                cursor.execute(
+                    """CREATE TABLE IF NOT EXISTS workflows (
+                        workflow_id TEXT PRIMARY KEY,
+                        pid INTEGER,
+                        paused INTEGER NOT NULL DEFAULT 0,
+                        definition_yaml TEXT,
+                        created_at REAL NOT NULL,
+                        updated_at REAL NOT NULL
+                    )"""
+                )
+                cursor.execute(
+                    "CREATE INDEX IF NOT EXISTS idx_workflows_paused ON workflows(paused)"
                 )
             if current_version < SCHEMA_VERSION:
                 cursor.execute(
@@ -3699,6 +3739,343 @@ class SessionDB:
                 "UPDATE sessions SET handoff_state = 'failed', "
                 "handoff_error = ? WHERE id = ?",
                 (error[:500], session_id),
+            )
+        self._execute_write(_do)
+
+    # ──────────────────────────────────────────────────────────────────
+    # Workflow checkpointing — for orchestration script pause/resume
+    # ──────────────────────────────────────────────────────────────────
+
+    def _ensure_workflow_row(self, workflow_id: str) -> None:
+        """Ensure a row exists in the workflows table for the given workflow_id.
+
+        Idempotent — no-op if the row already exists.  Called automatically
+        by checkpoint_upsert so that sandbox-originated workflows appear in
+        ``/workflows list`` and the TUI even when no explicit definition YAML
+        has been saved yet.
+        """
+        def _do(conn):
+            now = time.time()
+            conn.execute(
+                """INSERT OR IGNORE INTO workflows
+                   (workflow_id, created_at, updated_at)
+                   VALUES (?, ?, ?)""",
+                (workflow_id, now, now),
+            )
+        self._execute_write(_do)
+
+    def checkpoint_upsert(
+        self,
+        workflow_id: str,
+        phase: str,
+        *,
+        status: str = "pending",
+        agent_id: str = None,
+        result_cache: str = None,
+    ) -> None:
+        """Insert or update a workflow checkpoint row.
+
+        Called by the sandbox RPC handler after each delegate_task completes
+        (auto-checkpoint) and on explicit checkpoint_save() calls.
+
+        Auto-creates the parent row in ``workflows`` if this is the first
+        checkpoint for the workflow, so the TUI /workflows view sees it
+        without an explicit registration step.
+        """
+        self._ensure_workflow_row(workflow_id)
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO workflow_checkpoints
+                   (workflow_id, phase, agent_id, status, result_cache, timestamp)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(workflow_id, phase) DO UPDATE SET
+                   agent_id = excluded.agent_id,
+                   status = excluded.status,
+                   result_cache = excluded.result_cache,
+                   timestamp = excluded.timestamp""",
+                (workflow_id, phase, agent_id, status, result_cache, time.time()),
+            )
+        self._execute_write(_do)
+
+    def checkpoint_bulk_status(
+        self, workflow_id: str, phases: List[str], status: str = "pending"
+    ) -> None:
+        """Mark multiple phases with the same status in one transaction.
+
+        Used at workflow start to seed all phase rows as 'pending'.
+        """
+        def _do(conn):
+            now = time.time()
+            conn.executemany(
+                """INSERT INTO workflow_checkpoints
+                   (workflow_id, phase, status, timestamp)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(workflow_id, phase) DO UPDATE SET
+                   status = excluded.status,
+                   timestamp = excluded.timestamp""",
+                [(workflow_id, p, status, now) for p in phases],
+            )
+        self._execute_write(_do)
+
+    def checkpoint_load(self, workflow_id: str) -> Dict[str, Dict[str, Any]]:
+        """Load all checkpoints for a workflow.
+
+        Returns dict of {phase: {status, agent_id, result_cache, timestamp}}.
+        Empty dict if no checkpoints exist for this workflow_id.
+        """
+        try:
+            cur = self._conn.execute(
+                """SELECT phase, status, agent_id, result_cache, timestamp
+                   FROM workflow_checkpoints
+                   WHERE workflow_id = ?
+                   ORDER BY phase""",
+                (workflow_id,),
+            )
+            rows = cur.fetchall()
+            return {
+                row["phase"]: {
+                    "status": row["status"],
+                    "agent_id": row["agent_id"],
+                    "result_cache": row["result_cache"],
+                    "timestamp": row["timestamp"],
+                }
+                for row in rows
+            }
+        except Exception:
+            return {}
+
+    def checkpoint_completed_phases(self, workflow_id: str) -> List[str]:
+        """Return list of phase names that have status='completed'."""
+        try:
+            cur = self._conn.execute(
+                """SELECT phase FROM workflow_checkpoints
+                   WHERE workflow_id = ? AND status = 'completed'
+                   ORDER BY phase""",
+                (workflow_id,),
+            )
+            return [row["phase"] for row in cur.fetchall()]
+        except Exception:
+            return []
+
+    def checkpoint_clear(self, workflow_id: str) -> None:
+        """Delete all checkpoints for a workflow (cleanup after completion)."""
+        def _do(conn):
+            conn.execute(
+                "DELETE FROM workflow_checkpoints WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+        self._execute_write(_do)
+
+    def checkpoint_mark_running(self, workflow_id: str, phase: str) -> None:
+        """Mark a phase as 'running' — called right before delegate_task dispatch."""
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO workflow_checkpoints
+                   (workflow_id, phase, status, timestamp)
+                   VALUES (?, ?, 'running', ?)
+                   ON CONFLICT(workflow_id, phase) DO UPDATE SET
+                   status = 'running',
+                   timestamp = excluded.timestamp""",
+                (workflow_id, phase, time.time()),
+            )
+        self._execute_write(_do)
+
+    def checkpoint_list_active(self) -> List[Dict[str, Any]]:
+        """Return all workflows with at least one non-completed phase.
+
+        Used by TUI for the checkpoint status indicator.
+        Returns list of {workflow_id, total, completed, pending, running, failed}.
+        """
+        try:
+            cur = self._conn.execute(
+                """SELECT workflow_id,
+                          COUNT(*) as total,
+                          SUM(CASE WHEN status = 'completed' THEN 1 ELSE 0 END) as completed,
+                          SUM(CASE WHEN status = 'pending' THEN 1 ELSE 0 END) as pending,
+                          SUM(CASE WHEN status = 'running' THEN 1 ELSE 0 END) as running,
+                          SUM(CASE WHEN status = 'failed' THEN 1 ELSE 0 END) as failed
+                   FROM workflow_checkpoints
+                   GROUP BY workflow_id
+                   HAVING completed < total
+                   ORDER BY workflow_id"""
+            )
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+    # ──────────────────────────────────────────────────────────────────
+    # Workflow management — TUI /workflows command
+    # ──────────────────────────────────────────────────────────────────
+
+    def workflow_register(
+        self,
+        workflow_id: str,
+        *,
+        pid: int = None,
+        definition_yaml: str = None,
+    ) -> None:
+        """Register a workflow in the metadata table."""
+        def _do(conn):
+            now = time.time()
+            conn.execute(
+                """INSERT INTO workflows
+                   (workflow_id, pid, paused, definition_yaml, created_at, updated_at)
+                   VALUES (?, ?, 0, ?, ?, ?)
+                   ON CONFLICT(workflow_id) DO UPDATE SET
+                   pid = excluded.pid,
+                   updated_at = excluded.updated_at""",
+                (workflow_id, pid, definition_yaml, now, now),
+            )
+        self._execute_write(_do)
+
+    def workflow_set_pid(self, workflow_id: str, pid: int) -> None:
+        """Update the sandbox PID for a workflow."""
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO workflows (workflow_id, pid, paused, created_at, updated_at)
+                   VALUES (?, ?, 0, ?, ?)
+                   ON CONFLICT(workflow_id) DO UPDATE SET
+                   pid = excluded.pid,
+                   updated_at = excluded.updated_at""",
+                (workflow_id, pid, time.time(), time.time()),
+            )
+        self._execute_write(_do)
+
+    def workflow_get_pid(self, workflow_id: str) -> Optional[int]:
+        """Get the sandbox PID for a workflow, or None."""
+        try:
+            cur = self._conn.execute(
+                "SELECT pid FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+            row = cur.fetchone()
+            return row["pid"] if row else None
+        except Exception:
+            return None
+
+    def workflow_pause(self, workflow_id: str) -> bool:
+        """Pause a workflow. Returns True if the workflow existed and was not already paused."""
+        def _do(conn):
+            cur = conn.execute(
+                "UPDATE workflows SET paused = 1, updated_at = ? "
+                "WHERE workflow_id = ? AND paused = 0",
+                (time.time(), workflow_id),
+            )
+            return cur.rowcount > 0
+        return self._execute_write(_do)
+
+    def workflow_resume(self, workflow_id: str) -> bool:
+        """Resume a paused workflow. Returns True if the workflow existed and was paused."""
+        def _do(conn):
+            cur = conn.execute(
+                "UPDATE workflows SET paused = 0, updated_at = ? "
+                "WHERE workflow_id = ? AND paused = 1",
+                (time.time(), workflow_id),
+            )
+            return cur.rowcount > 0
+        return self._execute_write(_do)
+
+    def workflow_is_paused(self, workflow_id: str) -> bool:
+        """Check if a workflow is paused."""
+        try:
+            cur = self._conn.execute(
+                "SELECT paused FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+            row = cur.fetchone()
+            return bool(row["paused"]) if row else False
+        except Exception:
+            return False
+
+    def workflow_list_all(self) -> List[Dict[str, Any]]:
+        """List all workflows with their checkpoint summaries.
+
+        Returns list of {workflow_id, total, completed, pending, running, failed,
+                         paused, pid, created_at, updated_at}.
+        """
+        try:
+            cur = self._conn.execute(
+                """SELECT w.workflow_id, w.pid, w.paused, w.created_at, w.updated_at,
+                          COUNT(c.phase) as total,
+                          SUM(CASE WHEN c.status = 'completed' THEN 1 ELSE 0 END) as completed,
+                          SUM(CASE WHEN c.status = 'pending' THEN 1 ELSE 0 END) as pending,
+                          SUM(CASE WHEN c.status = 'running' THEN 1 ELSE 0 END) as running,
+                          SUM(CASE WHEN c.status = 'failed' THEN 1 ELSE 0 END) as failed
+                   FROM workflows w
+                   LEFT JOIN workflow_checkpoints c ON w.workflow_id = c.workflow_id
+                   GROUP BY w.workflow_id
+                   ORDER BY w.created_at DESC"""
+            )
+            return [dict(r) for r in cur.fetchall()]
+        except Exception:
+            return []
+
+    def workflow_get_full(self, workflow_id: str) -> Optional[Dict[str, Any]]:
+        """Get full workflow metadata plus checkpoint phases.
+
+        Returns {workflow_id, pid, paused, created_at, updated_at, phases: [...]}
+        or None if workflow not found.
+        """
+        try:
+            # Get metadata
+            cur = self._conn.execute(
+                "SELECT workflow_id, pid, paused, created_at, updated_at "
+                "FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+            meta = cur.fetchone()
+            if not meta:
+                return None
+            result = dict(meta)
+
+            # Get phases
+            cur = self._conn.execute(
+                """SELECT phase, status, agent_id, result_cache, timestamp
+                   FROM workflow_checkpoints
+                   WHERE workflow_id = ?
+                   ORDER BY phase""",
+                (workflow_id,),
+            )
+            result["phases"] = [dict(r) for r in cur.fetchall()]
+            return result
+        except Exception:
+            return None
+
+    def workflow_export_yaml(self, workflow_id: str) -> Optional[str]:
+        """Return the saved workflow definition YAML, or None."""
+        try:
+            cur = self._conn.execute(
+                "SELECT definition_yaml FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+            row = cur.fetchone()
+            return row["definition_yaml"] if row else None
+        except Exception:
+            return None
+
+    def workflow_save_definition(self, workflow_id: str, yaml_str: str) -> None:
+        """Save the workflow definition YAML."""
+        def _do(conn):
+            conn.execute(
+                """INSERT INTO workflows (workflow_id, definition_yaml, created_at, updated_at)
+                   VALUES (?, ?, ?, ?)
+                   ON CONFLICT(workflow_id) DO UPDATE SET
+                   definition_yaml = excluded.definition_yaml,
+                   updated_at = excluded.updated_at""",
+                (workflow_id, yaml_str, time.time(), time.time()),
+            )
+        self._execute_write(_do)
+
+    def workflow_delete(self, workflow_id: str) -> None:
+        """Delete a workflow and its checkpoints."""
+        def _do(conn):
+            conn.execute(
+                "DELETE FROM workflow_checkpoints WHERE workflow_id = ?",
+                (workflow_id,),
+            )
+            conn.execute(
+                "DELETE FROM workflows WHERE workflow_id = ?",
+                (workflow_id,),
             )
         self._execute_write(_do)
 

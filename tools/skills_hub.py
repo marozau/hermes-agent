@@ -3531,6 +3531,195 @@ class HermesIndexSource(SkillSource):
         )
 
 
+class LocalSource(SkillSource):
+    """Fetch skills from the active profile's local skills directory.
+
+    Scans ``~/.hermes/skills/`` (default profile) or
+    ``~/.hermes/profiles/<name>/skills/`` (named profiles) plus any
+    external skill directories configured in the user's config.
+
+    Mirrors the filesystem scan in ``skills_tool._find_all_skills``
+    so local skills that show up in ``skills list --source local``
+    also appear in ``skills inspect`` and ``skills search``.
+    """
+
+    def __init__(self):
+        from agent.skill_utils import EXCLUDED_SKILL_DIRS
+        self._excluded = EXCLUDED_SKILL_DIRS
+
+    @property
+    def _skills_dir(self) -> Path:
+        """Resolve the profile's skills directory lazily — profile-aware."""
+        from hermes_constants import get_hermes_home
+        return get_hermes_home() / "skills"
+
+    @property
+    def _external_dirs(self) -> List[Path]:
+        """Resolve external skill directories lazily — profile-aware."""
+        from agent.skill_utils import get_external_skills_dirs
+        return get_external_skills_dirs()
+
+    def source_id(self) -> str:
+        return "local"
+
+    def trust_level_for(self, identifier: str) -> str:
+        return "builtin"
+
+    # -- search -----------------------------------------------------------
+
+    def search(self, query: str, limit: int = 10) -> List[SkillMeta]:
+        results: List[SkillMeta] = []
+        query_lower = query.lower() if query else ""
+
+        for meta in self._scan_all():
+            searchable = f"{meta.name} {meta.description} {' '.join(meta.tags)}".lower()
+            if not query_lower or query_lower in searchable:
+                results.append(meta)
+                if len(results) >= limit:
+                    break
+
+        return results
+
+    # -- fetch ------------------------------------------------------------
+
+    def fetch(self, identifier: str) -> Optional[SkillBundle]:
+        rel = identifier.split("/", 1)[-1] if identifier.startswith("local/") else identifier
+
+        skill_dir = self._find_skill_dir(rel)
+        if not skill_dir:
+            return None
+
+        files: Dict[str, Union[str, bytes]] = {}
+        for f in skill_dir.rglob("*"):
+            if (
+                f.is_file()
+                and not f.name.startswith(".")
+                and "__pycache__" not in f.parts
+                and f.suffix != ".pyc"
+            ):
+                rel_path_str = str(f.relative_to(skill_dir))
+                try:
+                    files[rel_path_str] = f.read_bytes()
+                except OSError:
+                    continue
+
+        if not files:
+            return None
+
+        return SkillBundle(
+            name=skill_dir.name,
+            files=files,
+            source="local",
+            identifier=f"local/{rel}",
+            trust_level="builtin",
+        )
+
+    # -- inspect ----------------------------------------------------------
+
+    def inspect(self, identifier: str) -> Optional[SkillMeta]:
+        rel = identifier.split("/", 1)[-1] if identifier.startswith("local/") else identifier
+        skill_name = rel.rsplit("/", 1)[-1]
+
+        for meta in self._scan_all():
+            if meta.name == skill_name:
+                return meta
+        return None
+
+    # -- internal helpers -------------------------------------------------
+
+    def _find_skill_dir(self, name_or_path: str) -> Optional[Path]:
+        """Find a skill directory by name or relative path."""
+        dirs_to_scan: List[Path] = []
+        if self._skills_dir.exists():
+            dirs_to_scan.append(self._skills_dir)
+        dirs_to_scan.extend(self._external_dirs)
+
+        for scan_dir in dirs_to_scan:
+            candidate = scan_dir / name_or_path
+            try:
+                candidate = candidate.resolve()
+                if candidate.is_dir() and (candidate / "SKILL.md").exists():
+                    return candidate
+            except (OSError, ValueError):
+                pass
+
+            for skill_md in scan_dir.rglob("SKILL.md"):
+                if any(part in self._excluded for part in skill_md.parts):
+                    continue
+                if skill_md.parent.name == name_or_path:
+                    return skill_md.parent
+
+        return None
+
+    def _scan_all(self) -> List[SkillMeta]:
+        """Enumerate all local skills with metadata."""
+        from agent.skill_utils import iter_skill_index_files
+
+        results: List[SkillMeta] = []
+        dirs_to_scan: List[Path] = []
+        if self._skills_dir.exists():
+            dirs_to_scan.append(self._skills_dir)
+        dirs_to_scan.extend(self._external_dirs)
+
+        for scan_dir in dirs_to_scan:
+            for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
+                if any(part in self._excluded for part in skill_md.parts):
+                    continue
+
+                parent = skill_md.parent
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                fm = OptionalSkillSource._parse_frontmatter(content)
+                name = fm.get("name", parent.name)
+                if isinstance(name, list):
+                    name = parent.name
+                name = str(name)[:64] if name else parent.name
+
+                desc = fm.get("description", "")
+                if not desc:
+                    body = content
+                    if content.startswith("---"):
+                        parts = content.split("---\n", 2)
+                        body = parts[2] if len(parts) > 2 else content
+                    for line in body.strip().split("\n"):
+                        line = line.strip()
+                        if line and not line.startswith("#"):
+                            desc = line
+                            break
+
+                if len(desc) > 200:
+                    desc = desc[:197] + "..."
+
+                tags: List[str] = []
+                meta_block = fm.get("metadata", {})
+                if isinstance(meta_block, dict):
+                    hermes_meta = meta_block.get("hermes", {})
+                    if isinstance(hermes_meta, dict):
+                        t = hermes_meta.get("tags", [])
+                        if isinstance(t, list):
+                            tags = t
+
+                try:
+                    rel_path = str(parent.relative_to(scan_dir))
+                except ValueError:
+                    rel_path = parent.name
+
+                results.append(SkillMeta(
+                    name=name,
+                    description=desc,
+                    source="local",
+                    identifier=f"local/{rel_path}",
+                    trust_level="builtin",
+                    path=rel_path,
+                    tags=tags,
+                ))
+
+        return results
+
+
 def create_source_router(auth: Optional[GitHubAuth] = None) -> List[SkillSource]:
     """
     Create all configured source adapters.
@@ -3543,6 +3732,7 @@ def create_source_router(auth: Optional[GitHubAuth] = None) -> List[SkillSource]
     extra_taps = taps_mgr.list_taps()
 
     sources: List[SkillSource] = [
+        LocalSource(),                # Profile-local skills (highest priority)
         OptionalSkillSource(),        # Official optional skills (highest priority)
         HermesIndexSource(auth=auth), # Centralized index (search + resolved install paths)
         SkillsShSource(auth=auth),

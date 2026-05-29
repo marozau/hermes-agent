@@ -43,17 +43,19 @@ Within execute_code, import tools from `hermes_tools`:
 
 ```python
 from hermes_tools import (
-    delegate_task,  # spawn subagents in phases
-    terminal,       # shell commands
-    read_file,      # read files
-    write_file,     # write files
-    search_files,   # search code
-    web_search,     # web search
-    web_extract,    # extract web content
-    patch,          # targeted file edits
-    json_parse,     # safe JSON parsing
-    shell_quote,    # safe shell escaping
-    retry,          # retry with backoff
+    delegate_task,     # spawn subagents in phases
+    checkpoint_save,   # save workflow checkpoint
+    checkpoint_load,   # load workflow checkpoints
+    terminal,          # shell commands
+    read_file,         # read files
+    write_file,        # write files
+    search_files,      # search code
+    web_search,        # web search
+    web_extract,       # extract web content
+    patch,             # targeted file edits
+    json_parse,        # safe JSON parsing
+    shell_quote,       # safe shell escaping
+    retry,             # retry with backoff
 )
 ```
 
@@ -134,34 +136,68 @@ print(json.dumps({
 }))
 ```
 
-#### Pattern 3: Adversarial Verification
+#### Pattern 3: Adversarial Verification (parameterized)
+
+The `adversarial_review()` helper spawns N reviewers in parallel against
+subagent results. Configure per-phase with `review_agents: N`:
+
 ```python
-# Phase 1: Generate proposal
-proposal = delegate_task(
-    goal="Create a technical proposal for the architecture change",
-    toolsets=["file", "terminal"],
+# Phase 1: Fan-out — N parallel workers produce results
+results = delegate_task(tasks=[
+    {"goal": "Research topic A", "toolsets": ["web"]},
+    {"goal": "Research topic B", "toolsets": ["web"]},
+    {"goal": "Research topic C", "toolsets": ["web"]},
+])
+
+# Phase 2: Adversarial review — spawn N reviewers in parallel.
+# Set review_agents higher for critical tasks, 0 to skip review.
+review_agents = 2  # per-phase config: 0=off, 1-3 recommended
+verdict = adversarial_review(
+    results=results,
+    task_spec="Research topics A, B, C with factual accuracy. "
+              "All claims must be verifiable. No speculation.",
+    num_reviewers=review_agents,
+    toolsets=["web", "terminal"],
 )
 
-# Phase 2: Adversarial review (explicitly told to find flaws)
-critique = delegate_task(
-    goal="You are an adversarial reviewer. Find every flaw, edge case, "
-         "and missing requirement in this proposal. Be ruthlessly critical.",
-    context=proposal["summary"],
-    toolsets=["terminal", "web"],
+# Phase 3: Synthesize — only results that survived review
+if verdict["defects"]:
+    print(json.dumps({
+        "status": "reviewed",
+        "warnings": len(verdict["defects"]),
+        "defects": verdict["defects"],
+    }))
+# Pass only clean results to synthesis
+clean_summaries = verdict["passed"]
+synthesis = delegate_task(
+    goal="Synthesize the verified research into a coherent report",
+    context=json.dumps(clean_summaries),
+    toolsets=["file"],
 )
 
-# Phase 3: Defend or revise
-if "no issues found" in critique["summary"].lower():
-    final = proposal["summary"]
-else:
-    final = delegate_task(
-        goal="Revise the proposal to address all critique points",
-        context=f"PROPOSAL:\n{proposal['summary']}\n\nCRITIQUE:\n{critique['summary']}",
-        toolsets=["file"],
-    )["summary"]
-
-print(json.dumps({"status": "complete", "result": final}))
+print(json.dumps({
+    "status": "complete",
+    "result": synthesis["summary"],
+    "review_stats": {
+        "total_results": len(results),
+        "passed": len(verdict["passed"]),
+        "defects_found": len(verdict["defects"]),
+        "reviewers": review_agents,
+    },
+}))
 ```
+
+**How adversarial_review works:** Each reviewer receives the original task
+specification AND all primary subagent results. They are instructed to
+identify contradictions, factual errors, and missing information. A result
+is excluded if ANY reviewer flags it as defective. The returned dict has
+`passed` (clean summaries), `defects` (list of findings), and `all_reviews`
+(raw reviewer output for transparency).
+
+**Per-phase configuration:** Set `review_agents: 0` to skip review for a
+phase (faster, less reliable). Set `review_agents: 2` or higher for
+critical phases where accuracy matters. The reviewers run in parallel
+so N reviewers ≈ 1 reviewer wall-clock time.
 
 ### Error Handling & Resilience
 
@@ -192,28 +228,51 @@ def safe_delegate(goal, context="", toolsets=None, max_retries=2):
 ### Timeout Management
 
 The execute_code sandbox has a 5-minute timeout (configurable via
-`code_execution.timeout`). For long workflows, checkpoint intermediate
-results to files:
+`code_execution.timeout`). For long workflows, use the built-in SQLite
+checkpointing system — no need for manual file I/O.
+
+### Checkpointing & Resumption
+
+The sandbox provides `checkpoint_save` and `checkpoint_load` that persist
+to the same SQLite database as the session store. For automatic
+checkpointing, pass `workflow_id` and `phase` to `delegate_task` — the
+result is cached on completion and marked 'completed' in the DB.
+
+**Generating a workflow_id:** Use a unique string that identifies this
+workflow run. On resumption, the same workflow_id reconnects to the
+cached results. Good: `f"{task_id}-{uuid4().hex[:8]}"` so the id is
+deterministic across retries.
 
 ```python
-import json, os
+import json, os, uuid as _uuid
 
-CHECKPOINT_FILE = "/tmp/workflow_checkpoint.json"
+WORKFLOW_ID = os.environ.get("HERMES_KANBAN_TASK", "") + "-" + _uuid.uuid4().hex[:8]
 
-# Resume from checkpoint if exists
-completed_phases = set()
-if os.path.exists(CHECKPOINT_FILE):
-    with open(CHECKPOINT_FILE) as f:
-        completed_phases = set(json.load(f).get("completed", []))
+# On resume: check what's already done
+cached = checkpoint_load(WORKFLOW_ID)
+completed = {p for p, v in cached.items() if v.get("status") == "completed"}
 
-if "research" not in completed_phases:
-    research = safe_delegate("Research the topic")
-    completed_phases.add("research")
-    with open(CHECKPOINT_FILE, "w") as f:
-        json.dump({"completed": list(completed_phases)}, f)
+if "research" not in completed:
+    result = delegate_task(
+        goal="Research the topic thoroughly",
+        toolsets=["web", "terminal"],
+        workflow_id=WORKFLOW_ID,
+        phase="research",
+    )
+    # result auto-checkpointed as 'completed' on success.
+    # On failure, marked 'failed' — resume will re-run it.
 
-# ... continue with other phases
+# For non-delegate_task state, use explicit checkpoint_save:
+checkpoint_save(WORKFLOW_ID, "setup", status="completed",
+                result_cache=json.dumps({"config_loaded": True}))
 ```
+
+**Resumption semantics:** `checkpoint_load(workflow_id)` returns
+`{phase: {status, result_cache, timestamp, agent_id}}`. Phases with
+`status == "completed"` can be skipped. Phases with any other status
+(`pending`, `failed`, `running`) should be re-executed. After the
+workflow completes, call `checkpoint_save(workflow_id, phase, status="completed")`
+for the final phase to clean up, though orphaned checkpoints are harmless.
 
 ### Key Rules
 
@@ -229,4 +288,8 @@ if "research" not in completed_phases:
    parallelism. Max 3 concurrent subagents.
 6. **Handle both single and batch results.** `delegate_task` with `goal`
    returns a single dict; with `tasks` returns a list of dicts.
+7. **Checkpoint for resumption.** Pass `workflow_id` and `phase` to every
+   `delegate_task` call in multi-phase workflows. On script start, call
+   `checkpoint_load(workflow_id)` to skip already-completed phases.
+   This makes workflows resilient to interruptions without duplicate work.
 """

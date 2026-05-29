@@ -25,7 +25,7 @@ from typing import Optional
 #   t_19be5e5d — Prefect per-namespace isolation
 
 PROFILES: dict[str, dict] = {
-    "default":  {"port": 8090, "cpu_req": "2", "cpu_lim": "4", "mem_req": "4Gi", "mem_lim": "8Gi", "storage": "10Gi"},
+    "default":  {"port": 8090, "cpu_req": "2", "cpu_lim": "4", "mem_req": "4Gi", "mem_lim": "8Gi", "storage": "20Gi"},
     "engineer": {"port": 8091, "cpu_req": "4", "cpu_lim": "8", "mem_req": "8Gi", "mem_lim": "16Gi", "storage": "20Gi"},
     "cto":      {"port": 8092, "cpu_req": "2", "cpu_lim": "4", "mem_req": "4Gi", "mem_lim": "8Gi", "storage": "10Gi"},
     "personal": {"port": 8093, "cpu_req": "1", "cpu_lim": "2", "mem_req": "2Gi", "mem_lim": "4Gi", "storage": "5Gi"},

@@ -290,7 +290,7 @@ def _atomic_write(path: Path, content: str) -> None:
 
 EntryType = Literal[
     "preference", "fact", "procedure", "episode",
-    "superseded", "trajectory", "unknown",
+    "superseded", "trajectory", "lesson", "unknown",
 ]
 
 

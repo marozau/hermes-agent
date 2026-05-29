@@ -4992,14 +4992,21 @@ def _(rid, params: dict) -> dict:
         from agent.skill_commands import (
             scan_skill_commands,
             build_skill_invocation_message,
+            build_workflow_invocation_message,
+            is_workflow_command,
         )
 
         cmds = scan_skill_commands()
         key = f"/{name}"
         if key in cmds:
-            msg = build_skill_invocation_message(
-                key, arg, task_id=session.get("session_key", "") if session else ""
-            )
+            if is_workflow_command(key):
+                msg = build_workflow_invocation_message(
+                    key, arg, task_id=session.get("session_key", "") if session else ""
+                )
+            else:
+                msg = build_skill_invocation_message(
+                    key, arg, task_id=session.get("session_key", "") if session else ""
+                )
             if msg:
                 return _ok(
                     rid,

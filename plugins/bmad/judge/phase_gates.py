@@ -18,6 +18,15 @@ from typing import Any
 
 import yaml
 
+from plugins.bmad.judge.reflection_bank import (
+    ReflectionEntry,
+    BankStore,
+    get_global_store,
+    get_project_store,
+    Query,
+    search,
+)
+
 
 # ═══════════════════════════════════════════════════════════════════════════
 # Default criteria path (relative to this file)
@@ -520,6 +529,242 @@ _GATE_HANDLERS: dict[str, Any] = {
 
 
 # ═══════════════════════════════════════════════════════════════════════════
+# Reflection Bank Integration
+# ═══════════════════════════════════════════════════════════════════════════
+
+_RECURRENCE_THRESHOLD = 3  # flag recurring patterns at 3rd occurrence
+
+
+def _load_reflection_bank(
+    profile: str | None = None,
+    project_root: Path | None = None,
+) -> list[ReflectionEntry]:
+    """Load reflection bank entries from global + project stores.
+
+    Query filter: if *profile* is given, only entries matching that profile
+    are returned; otherwise all entries are loaded.
+    """
+    entries: list[ReflectionEntry] = []
+
+    # Global store
+    try:
+        global_store = get_global_store()
+        entries.extend(global_store.entries)
+    except Exception:
+        pass  # no global bank yet — that's fine
+
+    # Project store
+    try:
+        project_store = get_project_store(project_root)
+        entries.extend(project_store.entries)
+    except Exception:
+        pass
+
+    # Filter by profile if requested
+    if profile:
+        entries = [e for e in entries if e.profile == profile]
+
+    return entries
+
+
+def _cross_reference_gates(
+    gate_results: list[dict],
+    reflection_entries: list[ReflectionEntry],
+    profile: str | None = None,
+) -> dict:
+    """Cross-reference gate results against the reflection bank.
+
+    For each FAILED gate, look for matching reflection entries by gate_id
+    (as mistake_pattern).  When a reflection entry has recurrence_count
+    >= *_RECURRENCE_THRESHOLD*, flag it as a recurring pattern.
+
+    Returns a dict with keys:
+
+    * ``pattern_flags`` — list of dicts with gate_id, pattern, recurrence_count,
+      phase_of_discovery, and a human-readable ``message``.
+    * ``confidence_adjustments`` — list of dicts naming gates whose PASS should
+      be regarded with reduced confidence because the reflection bank records
+      an unresolved recurring issue in that area.
+    * ``skill_recommendations`` — list of dicts with ``affected_skill`` and
+      ``recommendation`` for gates whose reflection entries name a skill.
+    """
+    pattern_flags: list[dict] = []
+    confidence_adjustments: list[dict] = []
+    skill_recommendations: list[dict] = []
+
+    if not reflection_entries:
+        return {
+            "pattern_flags": [],
+            "confidence_adjustments": [],
+            "skill_recommendations": [],
+        }
+
+    for gate in gate_results:
+        gate_id = gate["gate_id"]
+        gate_passed = gate["passed"]
+
+        # Find matching reflection entries — mistake_pattern contains the gate_id
+        matching = [
+            e
+            for e in reflection_entries
+            if gate_id.lower() in (e.mistake_pattern or "").lower()
+        ]
+
+        if not matching:
+            continue
+
+        # Check for recurring patterns (recurrence >= threshold)
+        for entry in matching:
+            if entry.recurrence_count >= _RECURRENCE_THRESHOLD:
+                if not gate_passed:
+                    severity = (
+                        entry.severity.value
+                        if hasattr(entry.severity, "value")
+                        else str(entry.severity)
+                    )
+                    pattern_flags.append(
+                        {
+                            "gate_id": gate_id,
+                            "mistake_pattern": entry.mistake_pattern,
+                            "recurrence_count": entry.recurrence_count,
+                            "phase_of_discovery": entry.phase_of_discovery,
+                            "severity": severity,
+                            "message": (
+                                f"Recurring issue '{entry.mistake_pattern}' "
+                                f"(×{entry.recurrence_count} across phases, "
+                                f"first seen in {entry.phase_of_discovery}): "
+                                f"{entry.summary}"
+                            ),
+                        }
+                    )
+                else:
+                    # Gate passed, but reflection bank shows this is a recurring
+                    # issue area — lower confidence in the PASS
+                    if not entry.fixed_in_phase:
+                        confidence_adjustments.append(
+                            {
+                                "gate_id": gate_id,
+                                "mistake_pattern": entry.mistake_pattern,
+                                "recurrence_count": entry.recurrence_count,
+                                "message": (
+                                    f"Gate '{gate_id}' PASSED but reflection bank "
+                                    f"shows unresolved recurring issue "
+                                    f"'{entry.mistake_pattern}' (×{entry.recurrence_count}). "
+                                    f"Confidence in this PASS should be lowered."
+                                ),
+                            }
+                        )
+
+                # Skill update recommendation
+                if entry.affected_skill:
+                    skill_recommendations.append(
+                        {
+                            "gate_id": gate_id,
+                            "affected_skill": entry.affected_skill,
+                            "recommendation": entry.recommendation,
+                            "message": (
+                                f"Skill '{entry.affected_skill}' needs updating "
+                                f"to address recurring issue '{entry.mistake_pattern}': "
+                                f"{entry.recommendation}"
+                            ),
+                            "adjusted_instruction": entry.adjusted_instruction,
+                        }
+                    )
+
+    # Deduplicate skill recommendations by affected_skill
+    seen_skills: set[str] = set()
+    deduped_skills: list[dict] = []
+    for sr in skill_recommendations:
+        skill_name = sr["affected_skill"]
+        if skill_name not in seen_skills:
+            seen_skills.add(skill_name)
+            deduped_skills.append(sr)
+
+    return {
+        "pattern_flags": pattern_flags,
+        "confidence_adjustments": confidence_adjustments,
+        "skill_recommendations": deduped_skills,
+    }
+
+
+# ═══════════════════════════════════════════════════════════════════════════
+# Pre-phase adjustment query
+# ═══════════════════════════════════════════════════════════════════════════
+
+
+def get_phase_adjustments(
+    phase: str,
+    project_root: Path | None = None,
+    profile: str = "default",
+) -> str:
+    """Query the reflection bank for recurring patterns before starting a phase.
+
+    Searches for entries matching *phase* with ``recurrence_count > 1``
+    that have a non-empty ``adjusted_instruction``.  Returns a formatted
+    "Watch-out" section suitable for injection into the handoff brief.
+
+    Args:
+        phase: BMAD phase name (``"analysis"``, ``"planning"``,
+            ``"solutioning"``, ``"implementation"``).
+        project_root: Optional path to a BMAD project root.  When given the
+            project-level reflection bank is included alongside the global one.
+        profile: Hermes profile name to filter by (default ``"default"``).
+
+    Returns:
+        A markdown-formatted string (including a leading newline) with
+        watch-out instructions, or an empty string when no recurring
+        patterns are found.
+    """
+    entries = _load_reflection_bank(profile=profile, project_root=project_root)
+
+    # Find entries matching the upcoming phase with recurrence_count > 1
+    # and a non-empty adjusted_instruction.
+    matching = [
+        e
+        for e in entries
+        if e.phase.strip() == phase.strip()
+        and e.recurrence_count > 1
+        and e.adjusted_instruction.strip()
+    ]
+
+    if not matching:
+        return ""
+
+    # Build a "Watch-out" section for the handoff brief.
+    lines: list[str] = ["\n## ⚠️ Watch-out (from reflection bank)\n"]
+    for entry in matching:
+        lines.append(
+            f"- **{entry.mistake_pattern}** (×{entry.recurrence_count}, "
+            f"first seen in {entry.phase_of_discovery}): "
+            f"{entry.adjusted_instruction}"
+        )
+
+    return "\n".join(lines)
+
+
+def inject_adjustments(
+    phase: str,
+    project_root: Path | None,
+    body: str,
+    profile: str = "default",
+) -> str:
+    """Inject reflection-bank watch-out instructions into a handoff brief.
+
+    Convenience wrapper that calls :func:`get_phase_adjustments` and
+    appends the result to *body*.  Returns *body* unchanged when no
+    adjustments are found.
+    """
+    adjustments = get_phase_adjustments(
+        phase=phase,
+        project_root=project_root,
+        profile=profile,
+    )
+    if adjustments:
+        return body.rstrip("\n") + adjustments
+    return body
+
+
+# ═══════════════════════════════════════════════════════════════════════════
 # Public API
 # ═══════════════════════════════════════════════════════════════════════════
 
@@ -621,6 +866,8 @@ def evaluate_all_gates(
     artifacts: dict,
     context: dict,
     custom_criteria: str | None = None,
+    profile: str | None = None,
+    project_root: Path | None = None,
 ) -> dict:
     """Run all gates for *phase* and return aggregated results.
 
@@ -629,10 +876,18 @@ def evaluate_all_gates(
         artifacts: Parsed artifact content (from artifact_reader).
         context: Previous phase results.
         custom_criteria: Optional path to custom criteria.yaml.
+        profile: Optional Hermes/BMAD profile name.  When set, the reflection
+            bank is queried for this profile and the verdict includes recurrence
+            pattern flags, confidence adjustments, and skill update
+            recommendations.
+        project_root: Optional project root for per-project reflection bank.
 
     Returns:
         ``{gates: list[gate_result], required_passed: bool,
-           recommended_pass_rate: float}``.
+           recommended_pass_rate: float, reflection: dict | None}``.
+        ``reflection`` is None when no profile is supplied; otherwise it
+        contains ``pattern_flags``, ``confidence_adjustments``, and
+        ``skill_recommendations``.
     """
     criteria = load_criteria(phase, custom_criteria)
     gates = criteria.get("gates", [])
@@ -649,7 +904,7 @@ def evaluate_all_gates(
         else 1.0
     )
 
-    return {
+    result: dict = {
         "phase": phase,
         "gates": results,
         "required_passed": required_passed,
@@ -657,3 +912,20 @@ def evaluate_all_gates(
         "total_gates": len(results),
         "passed_count": sum(1 for r in results if r["passed"]),
     }
+
+    # ── Reflection bank cross-referencing ──────────────────────────────
+    if profile:
+        reflection_entries = _load_reflection_bank(
+            profile=profile,
+            project_root=project_root,
+        )
+        reflection = _cross_reference_gates(
+            gate_results=results,
+            reflection_entries=reflection_entries,
+            profile=profile,
+        )
+        result["reflection"] = reflection
+    else:
+        result["reflection"] = None
+
+    return result

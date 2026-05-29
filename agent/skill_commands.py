@@ -261,19 +261,20 @@ def _build_skill_message(
 
 
 def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
-    """Scan ~/.hermes/skills/ and return a mapping of /command -> skill info.
+    """Scan ~/.hermes/skills/ and ~/.hermes/workflows/ for slash commands.
 
     Returns:
-        Dict mapping "/skill-name" to {name, description, skill_md_path, skill_dir}.
+        Dict mapping "/skill-name" to {name, description, kind, ...}.
+        ``kind`` is "skill" for SKILL.md entries and "workflow" for YAML entries.
     """
     global _skill_commands, _skill_commands_platform
     _skill_commands_platform = _resolve_skill_commands_platform()
     _skill_commands = {}
+    seen_names: set = set()
     try:
         from tools.skills_tool import SKILLS_DIR, _parse_frontmatter, skill_matches_platform, _get_disabled_skill_names
         from agent.skill_utils import get_external_skills_dirs, iter_skill_index_files
         disabled = _get_disabled_skill_names()
-        seen_names: set = set()
 
         # Scan local dir first, then external dirs
         dirs_to_scan = []
@@ -314,6 +315,7 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     if not cmd_name:
                         continue
                     _skill_commands[f"/{cmd_name}"] = {
+                        "kind": "skill",
                         "name": name,
                         "description": description or f"Invoke the {name} skill",
                         "skill_md_path": str(skill_md),
@@ -323,7 +325,41 @@ def scan_skill_commands() -> Dict[str, Dict[str, Any]]:
                     continue
     except Exception:
         pass
+
+    # --- Scan workflow YAMLs (personal, then project overrides) ---
+    _scan_workflow_commands(seen_names)
+
     return _skill_commands
+
+
+def _scan_workflow_commands(seen_names: set) -> None:
+    """Scan ~/.hermes/workflows/ and .hermes/workflows/ for workflow YAML definitions.
+
+    Project-level workflows override personal ones with the same name.
+    Populates ``_skill_commands`` with ``kind: workflow`` entries.
+    """
+    try:
+        from hermes_cli.workflows import list_workflows
+        workflows = list_workflows()
+        for wf_name, wf in workflows.items():
+            if wf_name in seen_names:
+                continue  # Don't shadow an existing skill with the same name
+            seen_names.add(wf_name)
+            cmd_name = wf_name.lower().replace(' ', '-').replace('_', '-')
+            cmd_name = _SKILL_INVALID_CHARS.sub('', cmd_name)
+            cmd_name = _SKILL_MULTI_HYPHEN.sub('-', cmd_name).strip('-')
+            if not cmd_name:
+                continue
+            _skill_commands[f"/{cmd_name}"] = {
+                "kind": "workflow",
+                "name": wf.name,
+                "description": wf.description or f"Run the {wf.name} workflow",
+                "source_tier": wf.source_tier,
+                "source_path": str(wf.source_path) if wf.source_path else None,
+                "pattern": wf.pattern,
+            }
+    except Exception:
+        pass
 
 
 def get_skill_commands() -> Dict[str, Dict[str, Any]]:
@@ -404,6 +440,68 @@ def reload_skills() -> Dict[str, Any]:
         "total": len(after),
         "commands": len(new_commands),
     }
+
+
+def is_workflow_command(cmd_key: str) -> bool:
+    """Return True if this slash command key corresponds to a workflow YAML."""
+    info = get_skill_commands().get(cmd_key, {})
+    return info.get("kind") == "workflow"
+
+
+def build_workflow_invocation_message(
+    cmd_key: str,
+    user_instruction: str = "",
+    task_id: str | None = None,
+) -> Optional[str]:
+    """Build the orchestration prompt for a workflow slash command.
+
+    Loads the workflow YAML, generates the orchestration script, and
+    returns a prompt instructing the agent to execute it via execute_code.
+
+    Args:
+        cmd_key: The command key including leading slash (e.g., "/research-pipeline").
+        user_instruction: Optional text the user typed after the command (becomes the goal).
+        task_id: Optional session/task ID for workflow_id generation.
+
+    Returns:
+        The formatted prompt string, or None if the workflow wasn't found.
+    """
+    commands = get_skill_commands()
+    wf_info = commands.get(cmd_key)
+    if not wf_info or wf_info.get("kind") != "workflow":
+        return None
+
+    try:
+        from hermes_cli.workflows import load_workflow, generate_orchestration_script
+    except ImportError:
+        return None
+
+    wf = load_workflow(wf_info["name"])
+    if not wf:
+        return None
+
+    script = generate_orchestration_script(
+        wf,
+        user_goal=user_instruction,
+        workflow_id=task_id,
+    )
+
+    wf_name = wf_info["name"]
+    prompt_parts = [
+        f'[IMPORTANT: The user has invoked the "{wf_name}" workflow. '
+        f"Execute the orchestration script below via execute_code to run this workflow.]",
+        "",
+        f"The user's goal is: {user_instruction or '(run workflow)'}",
+        "",
+        "Generated orchestration script:",
+        "```python",
+        script,
+        "```",
+        "",
+        "Run this script via execute_code. Do NOT modify the script — it was "
+        "generated from a verified workflow definition.",
+    ]
+    return "\n".join(prompt_parts)
 
 
 def resolve_skill_command_key(command: str) -> Optional[str]:

@@ -108,6 +108,7 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
     "delegate_task",
     "checkpoint_save",
     "checkpoint_load",
+    "checkpoint_is_paused",
 ])
 
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
@@ -311,6 +312,12 @@ _TOOL_STUBS = {
         "checkpoint_load",
         "workflow_id: str",
         '"""Load all checkpoints for a workflow. Returns {phase: {status, agent_id, result_cache, timestamp}}."""',
+        '{"workflow_id": workflow_id}',
+    ),
+    "checkpoint_is_paused": (
+        "checkpoint_is_paused",
+        "workflow_id: str",
+        '"""Check if a workflow is paused. Returns True if paused, False otherwise."""',
         '{"workflow_id": workflow_id}',
     ),
 }
@@ -719,7 +726,10 @@ def _rpc_server_loop(
                         phase = tool_args.get("phase") if isinstance(tool_args, dict) else None
                         if workflow_id and phase:
                             try:
-                                _get_session_db().checkpoint_mark_running(workflow_id, phase)
+                                sdb = _get_session_db()
+                                # Auto-register workflow so it appears in /workflows list
+                                sdb.workflow_register(workflow_id)
+                                sdb.checkpoint_mark_running(workflow_id, phase)
                             except Exception:
                                 pass  # Non-fatal — checkpoint is best-effort
                         try:
@@ -763,8 +773,8 @@ def _rpc_server_loop(
                     conn.sendall((result + "\n").encode())
                     continue
 
-                # checkpoint_save / checkpoint_load dispatch
-                if tool_name in ("checkpoint_save", "checkpoint_load"):
+                # checkpoint_save / checkpoint_load / checkpoint_is_paused dispatch
+                if tool_name in ("checkpoint_save", "checkpoint_load", "checkpoint_is_paused"):
                     try:
                         sdb = _get_session_db()
                         if tool_name == "checkpoint_save":
@@ -772,12 +782,18 @@ def _rpc_server_loop(
                             ph = tool_args.get("phase", "")
                             st = tool_args.get("status", "completed")
                             rc = tool_args.get("result_cache")
+                            # Auto-register workflow so it appears in /workflows list
+                            sdb.workflow_register(wf_id)
                             sdb.checkpoint_upsert(wf_id, ph, status=st, result_cache=rc)
                             result = json.dumps({"ok": True})
-                        else:  # checkpoint_load
+                        elif tool_name == "checkpoint_load":
                             wf_id = tool_args.get("workflow_id", "")
                             data = sdb.checkpoint_load(wf_id)
                             result = json.dumps(data)
+                        else:  # checkpoint_is_paused
+                            wf_id = tool_args.get("workflow_id", "")
+                            paused = sdb.workflow_is_paused(wf_id)
+                            result = json.dumps(paused)
                     except Exception as exc:
                         logger.error(
                             "checkpoint tool failed in sandbox: %s", exc, exc_info=True
@@ -1405,8 +1421,9 @@ def execute_code(
     max_tool_calls = _cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
 
     # Determine which tools the sandbox can call.
-    # checkpoint_save/checkpoint_load are sandbox-only — always include them
-    # even when the parent session doesn't expose them as top-level tools.
+    # checkpoint_save/checkpoint_load/checkpoint_is_paused are sandbox-only —
+    # always include them even when the parent session doesn't expose them as
+    # top-level tools.
     session_tools = set(enabled_tools) if enabled_tools else set()
     sandbox_tools = frozenset(SANDBOX_ALLOWED_TOOLS & session_tools)
 
@@ -1414,7 +1431,9 @@ def execute_code(
         sandbox_tools = SANDBOX_ALLOWED_TOOLS
     else:
         # Ensure checkpoint tools are always available in the sandbox.
-        sandbox_tools = sandbox_tools | frozenset(["checkpoint_save", "checkpoint_load"])
+        sandbox_tools = sandbox_tools | frozenset([
+            "checkpoint_save", "checkpoint_load", "checkpoint_is_paused"
+        ])
 
     # --- Set up temp directory with hermes_tools.py and script.py ---
     tmpdir = tempfile.mkdtemp(prefix="hermes_sandbox_")
