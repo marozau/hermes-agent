@@ -73,6 +73,7 @@ class PreflightGate:
     turn_count: int = 0          # P12 / FR-32 warm-up tracking
     _fired_hashes: OrderedDict = field(default_factory=OrderedDict)  # P17 bounded
     _last_fired_at: float = 0.0
+    _last_invoked_at: float = 0.0  # P17b: monotonic timestamp of last increment_turn()
     _MAX_FIRED_HASHES = 256
 
     def mark_fired(self, message_hash: str) -> None:
@@ -84,6 +85,7 @@ class PreflightGate:
 
     def increment_turn(self) -> None:
         self.turn_count += 1
+        self._last_invoked_at = time.monotonic()
         _save_gates_to_disk()
 
 
@@ -678,26 +680,37 @@ def _save_gates_to_disk() -> None:
     """Persist in-memory gate state to disk atomically.
 
     Uses tmp+os.replace for atomicity — readers see the old or new complete
-    file, never a partial write. Two concurrent writers: last os.replace wins,
-    which is acceptable (at worst, one turn_count increment is lost, causing
-    one extra warm-up turn).
+    file, never a partial write. PID-unique suffix prevents cross-thread
+    rename races (observed: two concurrent calls both create .tmp, one
+    renames it, the other's os.replace fails with ENOENT).
     """
     data: dict[str, dict] = {}
     for sid, gate in _gates.items():
         data[sid] = {
             "turn_count": gate.turn_count,
             "last_fired_at": gate._last_fired_at,
+            "last_invoked_at": gate._last_invoked_at,
             "enabled": gate.enabled,
         }
     p = _gates_path()
     p.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    tmp = p.with_suffix(p.suffix + ".tmp")
+    tmp = p.with_suffix(f".{os.getpid()}.tmp")
     fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     try:
         os.write(fd, (json.dumps(data, ensure_ascii=False) + "\n").encode("utf-8"))
     finally:
         os.close(fd)
-    os.replace(tmp, p)
+    try:
+        os.replace(tmp, p)
+    except OSError:
+        # Retry once on race (e.g. tmp removed by another thread).
+        tmp = p.with_suffix(f".{os.getpid()}.{os.urandom(4).hex()}.tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (json.dumps(data, ensure_ascii=False) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, p)
 
 
 _HYDRATED = False
@@ -717,6 +730,7 @@ def _ensure_hydrated() -> None:
         )
         gate.turn_count = int(state.get("turn_count", 0))
         gate._last_fired_at = float(state.get("last_fired_at", 0.0))
+        gate._last_invoked_at = float(state.get("last_invoked_at", 0.0))
         _gates[sid] = gate
 
 
@@ -730,7 +744,20 @@ def get_or_create_gate(session_id: str, enabled: bool = True) -> PreflightGate:
         return gate
     if len(_gates) >= _GATES_MAX:
         _gates.popitem(last=False)
+
+    # P17b: carry forward turn_count from recently-active gates.
+    # Context compression creates a new session_id mid-conversation.
+    # Without this, the warm-up gate resets to 0 on every compression.
+    carried = 0
+    _now = time.monotonic()
+    for _sid, _gate in reversed(list(_gates.items())):
+        if _gate._last_invoked_at > 0 and (_now - _gate._last_invoked_at) < 30.0:
+            carried = _gate.turn_count
+            break
+
     gate = PreflightGate(enabled=enabled, session_id=session_id)
+    if carried > 0:
+        gate.turn_count = carried
     _gates[session_id] = gate
     return gate
 
