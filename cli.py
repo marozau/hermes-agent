@@ -8848,6 +8848,23 @@ class HermesCLI:
                     if msg:
                         wf_name = skill_commands[base_cmd]["name"]
                         print(f"\n🔄 Running workflow: {wf_name}")
+                        # Best-effort: save the workflow YAML definition to the
+                        # workflows table so /workflows export and TUI show work.
+                        try:
+                            from hermes_cli.workflows import load_workflow, workflow_to_yaml
+                            from hermes_state import SessionDB
+                            wf_def = load_workflow(wf_name)
+                            if wf_def:
+                                yaml_str = workflow_to_yaml(wf_def)
+                                sdb = SessionDB()
+                                try:
+                                    sdb.workflow_save_definition(
+                                        self.session_id, yaml_str
+                                    )
+                                finally:
+                                    sdb.close()
+                        except Exception:
+                            pass
                         if hasattr(self, '_pending_input'):
                             self._pending_input.put(msg)
                     else:

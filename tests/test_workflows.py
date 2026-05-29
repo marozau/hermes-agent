@@ -432,3 +432,259 @@ class TestSlashCommandIntegration(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWorkflowDBIntegration(unittest.TestCase):
+    """Test workflow DB integration — save definition, auto-registration, export."""
+
+    def setUp(self):
+        from hermes_cli.workflows import PhaseSpec, WorkflowDefinition
+        self.PhaseSpec = PhaseSpec
+        self.WorkflowDefinition = WorkflowDefinition
+        self._tmp_personal = tempfile.TemporaryDirectory()
+        self._personal_dir = Path(self._tmp_personal.name)
+
+    def tearDown(self):
+        self._tmp_personal.cleanup()
+
+    def test_save_definition_and_export(self):
+        """Save a workflow definition to DB, then retrieve it via export_yaml."""
+        from hermes_state import SessionDB
+        from hermes_cli.workflows import workflow_to_yaml, workflow_from_yaml
+
+        wf = self.WorkflowDefinition(
+            name="db-test-wf",
+            description="DB integration test",
+            pattern="pipeline",
+            phases=[
+                self.PhaseSpec(name="research", goal="Research {goal}", toolsets=["web"]),
+                self.PhaseSpec(name="draft", goal="Write draft", toolsets=["file"]),
+            ],
+        )
+        yaml_str = workflow_to_yaml(wf)
+        workflow_id = "test-wf-db-001"
+
+        sdb = SessionDB()
+        try:
+            sdb.workflow_save_definition(workflow_id, yaml_str)
+            exported = sdb.workflow_export_yaml(workflow_id)
+            self.assertIsNotNone(exported, "workflow_export_yaml returned None after save")
+            self.assertIn("db-test-wf", exported)
+            self.assertIn("research", exported)
+        finally:
+            sdb.workflow_delete(workflow_id)
+            sdb.close()
+
+    def test_ensure_workflow_row_idempotent(self):
+        """_ensure_workflow_row is idempotent — calling it twice doesn't error."""
+        from hermes_state import SessionDB
+
+        workflow_id = "test-ensure-001"
+        sdb = SessionDB()
+        try:
+            # Call twice — should not raise
+            sdb._ensure_workflow_row(workflow_id)
+            sdb._ensure_workflow_row(workflow_id)
+
+            # Should appear in list
+            wfs = sdb.workflow_list_all()
+            ids = [w["workflow_id"] for w in wfs]
+            self.assertIn(workflow_id, ids)
+        finally:
+            sdb.workflow_delete(workflow_id)
+            sdb.close()
+
+    def test_checkpoint_upsert_auto_registers(self):
+        """checkpoint_upsert auto-creates the workflow row."""
+        from hermes_state import SessionDB
+
+        workflow_id = "test-auto-reg-001"
+        sdb = SessionDB()
+        try:
+            # checkpoint_upsert should auto-create the workflow row
+            sdb.checkpoint_upsert(workflow_id, "phase1", status="pending")
+
+            # Verify workflow exists
+            wfs = sdb.workflow_list_all()
+            ids = [w["workflow_id"] for w in wfs]
+            self.assertIn(workflow_id, ids, "workflow not auto-registered by checkpoint_upsert")
+        finally:
+            sdb.workflow_delete(workflow_id)
+            sdb.close()
+
+    def test_export_yaml_none_for_missing_definition(self):
+        """workflow_export_yaml returns None when definition_yaml is not set."""
+        from hermes_state import SessionDB
+
+        workflow_id = "test-no-def-001"
+        sdb = SessionDB()
+        try:
+            sdb._ensure_workflow_row(workflow_id)
+            exported = sdb.workflow_export_yaml(workflow_id)
+            self.assertIsNone(exported, "export_yaml should return None when no definition saved")
+        finally:
+            sdb.workflow_delete(workflow_id)
+            sdb.close()
+
+
+class TestWorkflowEndToEnd(unittest.TestCase):
+    """Full end-to-end: create YAML → list → slash command → override → export."""
+
+    def setUp(self):
+        self._tmp_personal = tempfile.TemporaryDirectory()
+        self._personal_dir = Path(self._tmp_personal.name)
+        # Clear the skill_commands cache
+        import agent.skill_commands as sc
+        sc._skill_commands = {}
+
+    def tearDown(self):
+        self._tmp_personal.cleanup()
+        import agent.skill_commands as sc
+        sc._skill_commands = {}
+
+    def test_full_cycle_save_load_override(self):
+        """End-to-end: create workflow YAML, verify slash command, project override."""
+        from hermes_cli.workflows import (
+            workflow_to_yaml, workflow_from_yaml, list_workflows,
+            load_workflow, save_workflow, delete_workflow,
+            PhaseSpec, WorkflowDefinition,
+        )
+        import agent.skill_commands as sc
+
+        # Step 1: Create a personal workflow YAML
+        wf_personal = WorkflowDefinition(
+            name="e2e-test",
+            description="Personal — 2 phases",
+            pattern="pipeline",
+            phases=[
+                PhaseSpec(name="research", goal="Research {goal}", toolsets=["web"]),
+                PhaseSpec(name="draft", goal="Write draft", context_from="research",
+                          toolsets=["file"]),
+            ],
+        )
+        yaml_str = workflow_to_yaml(wf_personal)
+        (self._personal_dir / "e2e-test.yaml").write_text(yaml_str, encoding="utf-8")
+
+        # Step 2: Verify list_workflows returns it
+        with patch("hermes_cli.workflows._personal_workflows_dir",
+                   return_value=self._personal_dir):
+            with patch("hermes_cli.workflows._project_workflows_dir",
+                       return_value=None):
+                wfs = list_workflows()
+                self.assertIn("e2e-test", wfs)
+                wf = wfs["e2e-test"]
+                self.assertEqual(wf.source_tier, "personal")
+                self.assertEqual(len(wf.phases), 2)
+
+                # Step 3: Verify slash command scanning
+                cmds = sc.scan_skill_commands()
+                self.assertIn("/e2e-test", cmds)
+                self.assertEqual(cmds["/e2e-test"]["kind"], "workflow")
+                self.assertEqual(cmds["/e2e-test"]["source_tier"], "personal")
+
+                # Step 4: Verify build_workflow_invocation_message works
+                msg = sc.build_workflow_invocation_message(
+                    "/e2e-test", user_instruction="test goal", task_id="e2e-task-001"
+                )
+                self.assertIsNotNone(msg)
+                self.assertIn("e2e-test", msg)
+                self.assertIn("test goal", msg)
+                self.assertIn("execute_code", msg.lower())
+
+        # Step 5: Create project override and verify it overrides
+        with tempfile.TemporaryDirectory() as tmp_proj:
+            proj_root = Path(tmp_proj)
+            proj_hermes = proj_root / ".hermes" / "workflows"
+            proj_hermes.mkdir(parents=True)
+
+            wf_project = WorkflowDefinition(
+                name="e2e-test",
+                description="Project override — 1 phase",
+                pattern="pipeline",
+                phases=[
+                    PhaseSpec(name="single", goal="Do everything in one shot",
+                              toolsets=["web", "file"]),
+                ],
+            )
+            (proj_hermes / "e2e-test.yaml").write_text(
+                workflow_to_yaml(wf_project), encoding="utf-8"
+            )
+
+            with patch("hermes_cli.workflows._personal_workflows_dir",
+                       return_value=self._personal_dir):
+                with patch("hermes_cli.workflows._project_workflows_dir",
+                           return_value=proj_hermes):
+                    wfs = list_workflows(cwd=proj_root)
+                    self.assertIn("e2e-test", wfs)
+                    wf = wfs["e2e-test"]
+                    self.assertEqual(wf.source_tier, "project",
+                                     "Project should override personal")
+                    self.assertEqual(wf.description, "Project override — 1 phase")
+                    self.assertEqual(len(wf.phases), 1,
+                                     "Project version should have 1 phase")
+
+                    # Step 6: load_workflow returns project version
+                    loaded = load_workflow("e2e-test", cwd=proj_root)
+                    self.assertIsNotNone(loaded)
+                    self.assertEqual(loaded.source_tier, "project")
+
+                    # Step 7: Save a new workflow via save_workflow
+                    new_wf = WorkflowDefinition(
+                        name="saved-via-api",
+                        description="Created via save_workflow API",
+                        pattern="adversarial",
+                        phases=[
+                            PhaseSpec(name="investigate", goal="Investigate {goal}",
+                                      toolsets=["web"], review_agents=2),
+                        ],
+                        settings={"timeout_minutes": 15},
+                    )
+                    saved_path = save_workflow(new_wf, tier="personal")
+                    self.assertTrue(saved_path.exists())
+                    self.assertIn("saved-via-api.yaml", str(saved_path))
+
+                    # Step 8: delete_workflow cleans up
+                    result = delete_workflow("saved-via-api")
+                    self.assertTrue(result)
+                    self.assertFalse(saved_path.exists())
+
+    def test_delete_workflow_project_first(self):
+        """delete_workflow removes project override before personal."""
+        from hermes_cli.workflows import delete_workflow, workflow_to_yaml, WorkflowDefinition, PhaseSpec
+        from hermes_state import SessionDB
+
+        # Create personal
+        wf = WorkflowDefinition(
+            name="del-test",
+            description="To delete",
+            pattern="pipeline",
+            phases=[PhaseSpec(name="step1", goal="Do step 1")],
+        )
+        yaml_str = workflow_to_yaml(wf)
+        (self._personal_dir / "del-test.yaml").write_text(yaml_str, encoding="utf-8")
+
+        # Create project override
+        with tempfile.TemporaryDirectory() as tmp_proj:
+            proj_root = Path(tmp_proj)
+            proj_hermes = proj_root / ".hermes" / "workflows"
+            proj_hermes.mkdir(parents=True)
+            (proj_hermes / "del-test.yaml").write_text(yaml_str, encoding="utf-8")
+
+            with patch("hermes_cli.workflows._personal_workflows_dir",
+                       return_value=self._personal_dir):
+                with patch("hermes_cli.workflows._project_workflows_dir",
+                           return_value=proj_hermes):
+                    # Delete should remove project override first
+                    result = delete_workflow("del-test")
+                    self.assertTrue(result)
+                    self.assertFalse((proj_hermes / "del-test.yaml").exists())
+                    # Personal version should still exist
+                    self.assertTrue((self._personal_dir / "del-test.yaml").exists())
+
+                    # Second delete removes personal
+                    # (Need to return None for project dir now)
+                    with patch("hermes_cli.workflows._project_workflows_dir",
+                               return_value=None):
+                        result2 = delete_workflow("del-test")
+                        self.assertTrue(result2)
+                        self.assertFalse((self._personal_dir / "del-test.yaml").exists())
