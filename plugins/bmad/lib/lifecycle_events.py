@@ -231,6 +231,113 @@ def _resolve_task_id() -> str:
     return os.environ.get("HERMES_KANBAN_TASK", "")
 
 
+# Module-level publisher reference — set by ACP adapter or LifecycleBridge
+# so hooks can emit ACP events directly without signature changes.
+_current_publisher: Any = None
+_publisher_lock = threading.Lock()
+
+
+def set_current_publisher(publisher: Any) -> None:
+    """Set the ACP SessionEventPublisher for the current session.
+
+    Plugins and the ACP adapter call this when a session starts so
+    hooks can emit ACP events directly alongside bus capture.
+    """
+    global _current_publisher
+    with _publisher_lock:
+        _current_publisher = publisher
+
+
+def get_current_publisher() -> Any:
+    """Return the current ACP publisher, or None."""
+    with _publisher_lock:
+        return _current_publisher
+
+
+def clear_current_publisher() -> None:
+    """Clear the current publisher — called on session teardown."""
+    global _current_publisher
+    with _publisher_lock:
+        _current_publisher = None
+
+
+def _emit_acp_if_available(
+    event_type: str,
+    session_id: str,
+    task_id: str,
+    payload: Dict[str, Any],
+) -> None:
+    """Emit an ACP event via the current publisher if one is set.
+
+    Fire-and-forget: errors are logged but never raised.
+    """
+    publisher = get_current_publisher()
+    if publisher is None:
+        return
+
+    try:
+        if event_type == "on_session_end":
+            completed = payload.get("completed", False)
+            interrupted = payload.get("interrupted", False)
+            if interrupted:
+                outcome = "cancelled"
+            elif not completed:
+                outcome = "error"
+            else:
+                outcome = "completed"
+            publisher.session_end(
+                outcome=outcome,
+                summary=(
+                    "Session completed" if completed
+                    else "Session interrupted" if interrupted
+                    else "Session ended without completion"
+                ),
+                reason={
+                    "model": payload.get("model", ""),
+                    "platform": payload.get("platform", ""),
+                },
+                meta={"task_id": task_id},
+            )
+        elif event_type == "pre_llm_call":
+            publisher.session_heartbeat(
+                agent_state="thinking",
+                current_tool=None,
+                iteration=None,
+                meta={"task_id": task_id},
+            )
+        elif event_type == "post_llm_call":
+            publisher.session_heartbeat(
+                agent_state="responding",
+                current_tool="llm_response",
+                iteration=None,
+                meta={
+                    "task_id": task_id,
+                    "tool_call_count": payload.get(
+                        "tool_call_count_this_turn", 0
+                    ),
+                },
+            )
+        elif event_type == "post_tool_call":
+            error = payload.get("error")
+            if error:
+                publisher.tool_call_result(
+                    tool_call_id=payload.get(
+                        "tool_call_id", f"unknown-{task_id}"
+                    ),
+                    tool_name=payload.get("tool_name", "unknown"),
+                    success=False,
+                    error=str(error)[:500],
+                    meta={"task_id": task_id},
+                )
+    except Exception:
+        logger.debug(
+            "Failed to emit ACP %s for session %s",
+            event_type,
+            session_id,
+            exc_info=True,
+        )
+
+
 def capture_event(
     session_id: str,
     event_type: str,
@@ -238,6 +345,9 @@ def capture_event(
     task_id: Optional[str] = None,
 ) -> Optional[LifecycleEvent]:
     """Capture a lifecycle event and push it to the bus.
+
+    If an ACP publisher is currently registered (via set_current_publisher),
+    also emits the event as an ACP session event.
 
     Returns the event if captured, None if the hook is disabled or
     the event was deduplicated.
@@ -259,5 +369,12 @@ def capture_event(
             event_type,
             session_id,
             event.task_id,
+        )
+        # Also emit ACP event if publisher is available
+        _emit_acp_if_available(
+            event_type=event_type,
+            session_id=session_id,
+            task_id=event.task_id,
+            payload=payload or {},
         )
     return event if enqueued else None
