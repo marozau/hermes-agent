@@ -131,6 +131,13 @@ def build_system_prompt_parts(agent: Any, system_message: Optional[str] = None) 
     if tool_guidance:
         stable_parts.append(" ".join(tool_guidance))
 
+    # Workflow orchestration guidance — inject when both execute_code and
+    # delegate_task are available so the model can write multi-phase
+    # orchestration scripts inside the code execution sandbox.
+    if "execute_code" in agent.valid_tool_names and "delegate_task" in agent.valid_tool_names:
+        from agent.workflow_prompt_fragment import WORKFLOW_ORCHESTRATION_PROMPT
+        stable_parts.append(WORKFLOW_ORCHESTRATION_PROMPT)
+
     # Computer-use (macOS) — goes in as its own block rather than being
     # merged into tool_guidance because the content is multi-paragraph.
     if "computer_use" in agent.valid_tool_names:

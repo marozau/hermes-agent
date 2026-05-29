@@ -29,6 +29,7 @@ Remote execution additionally requires Python 3 in the terminal backend.
 """
 
 import base64
+import contextvars
 import functools
 import json
 import logging
@@ -42,11 +43,30 @@ import tempfile
 import threading
 import time
 import uuid
+from typing import Any, Dict, List, Optional
 
 _IS_WINDOWS = platform.system() == "Windows"
 from typing import Any, Dict, List, Optional
 
 from tools.thread_context import propagate_context_to_thread
+
+# ContextVar for passing the parent AIAgent to sandbox RPC threads,
+# enabling delegate_task dispatch from within execute_code scripts.
+# Set by the agent loop (run_agent.py) before tools are dispatched;
+# inherited by RPC threads via propagate_context_to_thread.
+_SANDBOX_AGENT: contextvars.ContextVar[Optional[Any]] = contextvars.ContextVar(
+    "_SANDBOX_AGENT", default=None
+)
+
+
+def set_sandbox_agent(agent: Any) -> None:
+    """Store the current AIAgent reference for sandbox delegate_task dispatch."""
+    _SANDBOX_AGENT.set(agent)
+
+
+def get_sandbox_agent() -> Optional[Any]:
+    """Retrieve the AIAgent reference for sandbox delegate_task dispatch."""
+    return _SANDBOX_AGENT.get(None)
 
 # Availability gate.  On Windows we fall back to loopback TCP for the
 # sandbox RPC transport (AF_UNIX is unreliable on Windows Python) — see
@@ -66,6 +86,7 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
     "search_files",
     "patch",
     "terminal",
+    "delegate_task",
 ])
 
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
@@ -250,8 +271,14 @@ _TOOL_STUBS = {
     "terminal": (
         "terminal",
         "command: str, timeout: int = None, workdir: str = None",
-        '"""Run a shell command (foreground only). Returns dict with "output" and "exit_code"."""',
+        '"""Run a shell command (foreground only). Returns dict with "output" and "exit_code".\"""',
         '{"command": command, "timeout": timeout, "workdir": workdir}',
+    ),
+    "delegate_task": (
+        "delegate_task",
+        "goal: str = None, context: str = None, toolsets: list = None, tasks: list = None, max_iterations: int = None, acp_command: str = None, acp_args: list = None, role: str = None",
+        '"""Spawn subagents to work on tasks in isolated contexts. Returns list of {summary, ...} per task.\"""',
+        '{"goal": goal, "context": context, "toolsets": toolsets, "tasks": tasks, "max_iterations": max_iterations, "acp_command": acp_command, "acp_args": acp_args, "role": role}',
     ),
 }
 
@@ -536,6 +563,34 @@ def _rpc_server_loop(
                     conn.sendall((resp + "\n").encode())
                     continue
 
+                # delegate_task dispatch: the standard handle_function_call
+                # rejects it as an _AGENT_LOOP_TOOLS, so we dispatch directly
+                # using the sandbox agent reference set by the parent.
+                if tool_name == "delegate_task":
+                    agent = get_sandbox_agent()
+                    if agent is None:
+                        result = json.dumps({
+                            "error": "delegate_task: no agent context — "
+                                     "orchestration scripts must run within an agent session."
+                        })
+                    else:
+                        try:
+                            result = agent._dispatch_delegate_task(tool_args)
+                        except Exception as exc:
+                            logger.error(
+                                "delegate_task failed in sandbox: %s", exc, exc_info=True
+                            )
+                            result = tool_error(str(exc))
+                    tool_call_counter[0] += 1
+                    call_duration = time.monotonic() - call_start
+                    tool_call_log.append({
+                        "tool": tool_name,
+                        "args_preview": str(tool_args)[:80],
+                        "duration": round(call_duration, 2),
+                    })
+                    conn.sendall((result + "\n").encode())
+                    continue
+
                 # Strip forbidden terminal parameters
                 if tool_name == "terminal" and isinstance(tool_args, dict):
                     for param in _TERMINAL_BLOCKED_PARAMS:
@@ -809,6 +864,29 @@ def _rpc_poll_loop(
                             f"Tool call limit reached ({max_tool_calls}). "
                             "No more tool calls allowed in this execution."
                         )
+                    })
+                # delegate_task dispatch via sandbox agent (same as local path)
+                elif tool_name == "delegate_task":
+                    agent = get_sandbox_agent()
+                    if agent is None:
+                        tool_result = json.dumps({
+                            "error": "delegate_task: no agent context — "
+                                     "orchestration scripts must run within an agent session."
+                        })
+                    else:
+                        try:
+                            tool_result = agent._dispatch_delegate_task(tool_args)
+                        except Exception as exc:
+                            logger.error(
+                                "delegate_task failed in remote sandbox: %s", exc, exc_info=True
+                            )
+                            tool_result = tool_error(str(exc))
+                    tool_call_counter[0] += 1
+                    call_duration = time.monotonic() - call_start
+                    tool_call_log.append({
+                        "tool": tool_name,
+                        "args_preview": str(tool_args)[:80],
+                        "duration": round(call_duration, 2),
                     })
                 else:
                     # Strip forbidden terminal parameters

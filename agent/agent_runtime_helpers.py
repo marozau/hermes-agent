@@ -1612,6 +1612,14 @@ def invoke_tool(agent, function_name: str, function_args: dict, effective_task_i
     tools. Used by the concurrent execution path; the sequential path retains
     its own inline invocation for backward-compatible display handling.
     """
+    # Make the agent available to sandboxed RPC threads so delegate_task
+    # can be dispatched from within execute_code orchestration scripts.
+    try:
+        from tools.code_execution_tool import set_sandbox_agent
+        set_sandbox_agent(agent)
+    except Exception:
+        pass
+
     # Check plugin hooks for a block directive before executing anything.
     block_message: Optional[str] = None
     if not pre_tool_block_checked:
