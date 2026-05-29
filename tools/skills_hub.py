@@ -2890,6 +2890,256 @@ class OptionalSkillSource(SkillSource):
 
 
 # ---------------------------------------------------------------------------
+# Local skills source adapter
+# ---------------------------------------------------------------------------
+
+
+def _resolve_profile_skills_dir() -> Path:
+    """Return the active profile's skills directory.
+
+    Uses the module-level ``SKILLS_DIR`` which is already profile-aware
+    via ``get_hermes_home()`` (reads ``HERMES_HOME`` env var).
+    """
+    return SKILLS_DIR
+
+
+def _resolve_external_dirs() -> List[Path]:
+    """Return external skills directories from config, or empty list."""
+    try:
+        from agent.skill_utils import get_external_skills_dirs
+        return get_external_skills_dirs()
+    except Exception:
+        return []
+
+
+def _skill_name_from_identifier(identifier: str) -> str:
+    """Extract skill name from an identifier like ``'local/mlops/axolotl'``."""
+    if "/" in identifier:
+        parts = identifier.split("/", 1)
+        if parts[0] == "local":
+            identifier = parts[1]
+    return identifier.rsplit("/", 1)[-1]
+
+
+def _split_frontmatter(content: str) -> dict:
+    """Parse YAML frontmatter from SKILL.md content.
+
+    Returns an empty dict when there is no frontmatter or parsing fails.
+    """
+    if not content.startswith("---"):
+        return {}
+    match = re.search(r'\n---\s*\n', content[3:])
+    if not match:
+        return {}
+    yaml_text = content[3:match.start() + 3]
+    try:
+        parsed = yaml.safe_load(yaml_text)
+        return parsed if isinstance(parsed, dict) else {}
+    except yaml.YAMLError:
+        return {}
+
+
+class LocalSource(SkillSource):
+    """Scan the active profile's local skills directory for installed skills.
+
+    Reads from ``~/.hermes/skills/`` (default profile) or
+    ``~/.hermes/profiles/<name>/skills/`` (named profiles), plus any
+    external directories configured via ``skills.external_dirs``.
+
+    This is the highest-priority source — before any network sources —
+    because locally installed skills are always preferred.
+    """
+
+    def __init__(self):
+        self._skills_dir = SKILLS_DIR
+        self._all_dirs: List[Path] = [self._skills_dir]
+        try:
+            self._all_dirs.extend(_resolve_external_dirs())
+        except Exception:
+            pass
+
+    def source_id(self) -> str:
+        return "local"
+
+    def trust_level_for(self, identifier: str) -> str:
+        return "builtin"
+
+    # -- search -----------------------------------------------------------
+
+    def search(self, query: str, limit: int = 10) -> List[SkillMeta]:
+        results: List[SkillMeta] = []
+        query_lower = query.lower()
+
+        for meta in self._scan_all():
+            searchable = f"{meta.name} {meta.description} {' '.join(meta.tags)}".lower()
+            if query_lower in searchable:
+                results.append(meta)
+            if len(results) >= limit:
+                break
+
+        return results
+
+    # -- fetch ------------------------------------------------------------
+
+    def fetch(self, identifier: str) -> Optional[SkillBundle]:
+        # identifier format: "local/<rel-path>" or just skill name
+        if identifier.startswith("local/"):
+            rel = identifier[len("local/"):]
+        else:
+            rel = identifier
+
+        skill_dir = self._find_skill_dir(rel)
+        if not skill_dir:
+            return None
+
+        return self._bundle_from_dir(skill_dir)
+
+    # -- inspect ----------------------------------------------------------
+
+    def inspect(self, identifier: str) -> Optional[SkillMeta]:
+        skill_name = _skill_name_from_identifier(identifier)
+        for meta in self._scan_all():
+            if meta.name == skill_name:
+                return meta
+        return None
+
+    # -- convenience methods ----------------------------------------------
+
+    def search_skills(self, name: str) -> Optional[SkillMeta]:
+        """Find a skill by exact name match (for programmatic use)."""
+        for meta in self._scan_all():
+            if meta.name == name:
+                return meta
+        return None
+
+    def get_skill_bundle(self, name: str) -> Optional[SkillBundle]:
+        """Fetch a skill bundle by name (for programmatic use)."""
+        skill_dir = self._find_skill_dir(name)
+        if not skill_dir:
+            return None
+        return self._bundle_from_dir(skill_dir)
+
+    # -- internal helpers -------------------------------------------------
+
+    def _find_skill_dir(self, name_or_rel: str) -> Optional[Path]:
+        """Find a skill directory by name or relative path."""
+        from agent.skill_utils import iter_skill_index_files
+
+        # Try exact path first
+        for scan_dir in self._all_dirs:
+            candidate = scan_dir / name_or_rel
+            if candidate.is_dir() and (candidate / "SKILL.md").exists():
+                try:
+                    candidate.resolve().relative_to(scan_dir.resolve())
+                except ValueError:
+                    continue
+                return candidate
+
+        # Fall back to name-only search
+        name_only = name_or_rel.rsplit("/", 1)[-1]
+        for scan_dir in self._all_dirs:
+            if not scan_dir.is_dir():
+                continue
+            for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
+                if skill_md.parent.name == name_only:
+                    return skill_md.parent
+
+        return None
+
+    def _scan_all(self) -> List[SkillMeta]:
+        """Enumerate all local skills with metadata."""
+        from agent.skill_utils import iter_skill_index_files
+
+        results: List[SkillMeta] = []
+        seen: set = set()
+
+        for scan_dir in self._all_dirs:
+            if not scan_dir.is_dir():
+                continue
+            for skill_md in iter_skill_index_files(scan_dir, "SKILL.md"):
+                parent = skill_md.parent
+                name = parent.name
+                if name in seen:
+                    continue
+
+                try:
+                    content = skill_md.read_text(encoding="utf-8")
+                except (OSError, UnicodeDecodeError):
+                    continue
+
+                fm = _split_frontmatter(content)
+                raw_name = fm.get("name", parent.name)
+                name = raw_name if isinstance(raw_name, str) else parent.name
+                if name in seen:
+                    continue
+
+                desc = fm.get("description", "")
+                if not isinstance(desc, str):
+                    desc = ""
+
+                tags = []
+                meta_block = fm.get("metadata", {})
+                if isinstance(meta_block, dict):
+                    hermes_meta = meta_block.get("hermes", {})
+                    if isinstance(hermes_meta, dict):
+                        tags = hermes_meta.get("tags", [])
+
+                try:
+                    rel_path = str(parent.relative_to(scan_dir))
+                except ValueError:
+                    rel_path = str(parent)
+
+                seen.add(name)
+                results.append(SkillMeta(
+                    name=name,
+                    description=desc[:200],
+                    source="local",
+                    identifier=f"local/{rel_path}",
+                    trust_level="builtin",
+                    path=rel_path,
+                    tags=tags if isinstance(tags, list) else [],
+                ))
+
+        return results
+
+    def _rel_path(self, skill_dir: Path) -> str:
+        """Get relative path from the nearest skills root."""
+        for scan_dir in self._all_dirs:
+            try:
+                return str(skill_dir.relative_to(scan_dir))
+            except ValueError:
+                continue
+        return str(skill_dir)
+
+    def _bundle_from_dir(self, skill_dir: Path) -> Optional[SkillBundle]:
+        """Build a SkillBundle from a skill directory on disk."""
+        files: Dict[str, Union[str, bytes]] = {}
+        for f in skill_dir.rglob("*"):
+            if (
+                f.is_file()
+                and not f.name.startswith(".")
+                and "__pycache__" not in f.parts
+                and f.suffix != ".pyc"
+            ):
+                rel_path = str(f.relative_to(skill_dir))
+                try:
+                    files[rel_path] = f.read_bytes()
+                except OSError:
+                    continue
+
+        if not files:
+            return None
+
+        return SkillBundle(
+            name=skill_dir.name,
+            files=files,
+            source="local",
+            identifier=f"local/{self._rel_path(skill_dir)}",
+            trust_level="builtin",
+        )
+
+
+# ---------------------------------------------------------------------------
 # Shared cache helpers (used by multiple adapters)
 # ---------------------------------------------------------------------------
 
@@ -3543,16 +3793,17 @@ def create_source_router(auth: Optional[GitHubAuth] = None) -> List[SkillSource]
     extra_taps = taps_mgr.list_taps()
 
     sources: List[SkillSource] = [
-        OptionalSkillSource(),        # Official optional skills (highest priority)
-        HermesIndexSource(auth=auth), # Centralized index (search + resolved install paths)
+        LocalSource(),                 # Local filesystem skills (highest priority)
+        OptionalSkillSource(),         # Official optional skills
+        HermesIndexSource(auth=auth),  # Centralized index (search + resolved install paths)
         SkillsShSource(auth=auth),
         WellKnownSkillSource(),
-        UrlSource(),                  # Direct HTTP(S) URL to a SKILL.md file
+        UrlSource(),                   # Direct HTTP(S) URL to a SKILL.md file
         GitHubSource(auth=auth, extra_taps=extra_taps),
         ClawHubSource(),
         ClaudeMarketplaceSource(auth=auth),
         LobeHubSource(),
-        BrowseShSource(),   # browse.sh: 169+ site-specific browser automation skills
+        BrowseShSource(),              # browse.sh: 169+ site-specific browser automation skills
     ]
 
     return sources
