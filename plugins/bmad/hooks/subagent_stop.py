@@ -55,16 +55,29 @@ def _find_matching_rule(project_dir, parent_skill: str, goal: str) -> tuple[str,
     return None
 
 
-def subagent_stop(ctx, child_result: dict) -> None:
+def subagent_stop(ctx, **kwargs) -> None:
     """Post-completion hook for delegate_task children.
 
-    Extracts goal/parent_skill/task_id from *child_result*, appends
-    an entry to _subagent-log.yaml, and updates workflow-status.yaml
-    for any artifact paths mentioned in the child's summary.
+    The runtime hook bus (tools/delegate_tool.py:2272) passes individual
+    kwargs ``parent_session_id``, ``child_role``, ``child_summary``,
+    ``child_status``, ``duration_ms``. The body below works on the BMAD
+    canonical ``child_result`` dict shape; translate at the boundary so
+    we don't have to rewrite ``_process_child``.
 
-    Signature matches Hermes hook contract: ``def hook(ctx, **kwargs)``.
     Must NEVER raise — exceptions are caught and logged.
     """
+    child_result = {
+        # parent_session_id is the only id-like field we have from the bus;
+        # keep it under task_id for log keying. If a caller passes task_id
+        # explicitly (e.g. tests), prefer that.
+        "task_id": kwargs.get("task_id", kwargs.get("parent_session_id", "unknown")),
+        "goal": kwargs.get("goal", ""),
+        "status": kwargs.get("child_status", kwargs.get("status", "unknown")),
+        "summary": kwargs.get("child_summary", kwargs.get("summary", "")) or "",
+        "parent_skill_name": kwargs.get(
+            "parent_skill_name", kwargs.get("child_role") or "unknown",
+        ),
+    }
     try:
         _process_child(ctx, child_result)
     except Exception:

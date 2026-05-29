@@ -15,6 +15,8 @@ hooks:
   - post_llm_call
   - transform_terminal_output
   - subagent_stop
-provides_tools: []
+provides_tools:
+  - bmad_judge_phase
+  - bmad_judge_plan
 requires_env: []
 min_hermes_version: "0.14.0"

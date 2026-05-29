@@ -14,7 +14,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def on_session_start(ctx) -> None:
+def on_session_start(ctx, **kwargs) -> None:
     """Detect BMAD project and warm the status cache.
 
     If the session's working directory contains ``bmad/config.yaml``
