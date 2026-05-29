@@ -68,6 +68,25 @@ def get_sandbox_agent() -> Optional[Any]:
     """Retrieve the AIAgent reference for sandbox delegate_task dispatch."""
     return _SANDBOX_AGENT.get(None)
 
+
+# Lazily-imported SessionDB singleton for sandbox checkpointing.
+# Instantiated on first use so it inherits the parent process's
+# state.db path without needing an explicit bootstrap step.
+_session_db = None
+
+
+def _get_session_db():
+    """Return the shared SessionDB for sandbox checkpoint operations.
+
+    Creates the instance on first call — the parent process's state.db
+    path is used via the default constructor.
+    """
+    global _session_db
+    if _session_db is None:
+        from hermes_state import SessionDB
+        _session_db = SessionDB()
+    return _session_db
+
 # Availability gate.  On Windows we fall back to loopback TCP for the
 # sandbox RPC transport (AF_UNIX is unreliable on Windows Python) — see
 # ``_use_tcp_rpc`` in ``_execute_local`` below.  That makes execute_code
@@ -76,7 +95,7 @@ logger = logging.getLogger(__name__)
 
 SANDBOX_AVAILABLE = True
 
-# The 7 tools allowed inside the sandbox. The intersection of this list
+# The 9 tools allowed inside the sandbox. The intersection of this list
 # and the session's enabled tools determines which stubs are generated.
 SANDBOX_ALLOWED_TOOLS = frozenset([
     "web_search",
@@ -87,6 +106,8 @@ SANDBOX_ALLOWED_TOOLS = frozenset([
     "patch",
     "terminal",
     "delegate_task",
+    "checkpoint_save",
+    "checkpoint_load",
 ])
 
 # Resource limit defaults (overridable via config.yaml → code_execution.*)
@@ -276,9 +297,21 @@ _TOOL_STUBS = {
     ),
     "delegate_task": (
         "delegate_task",
-        "goal: str = None, context: str = None, toolsets: list = None, tasks: list = None, max_iterations: int = None, acp_command: str = None, acp_args: list = None, role: str = None",
-        '"""Spawn subagents to work on tasks in isolated contexts. Returns list of {summary, ...} per task.\"""',
-        '{"goal": goal, "context": context, "toolsets": toolsets, "tasks": tasks, "max_iterations": max_iterations, "acp_command": acp_command, "acp_args": acp_args, "role": role}',
+        "goal: str = None, context: str = None, toolsets: list = None, tasks: list = None, max_iterations: int = None, acp_command: str = None, acp_args: list = None, role: str = None, workflow_id: str = None, phase: str = None",
+        '"""Spawn subagents to work on tasks in isolated contexts. Returns list of {summary, ...} per task.\\n\\nWhen workflow_id + phase are set, the result is auto-checkpointed for pause/resume."""',
+        '{"goal": goal, "context": context, "toolsets": toolsets, "tasks": tasks, "max_iterations": max_iterations, "acp_command": acp_command, "acp_args": acp_args, "role": role, "workflow_id": workflow_id, "phase": phase}',
+    ),
+    "checkpoint_save": (
+        "checkpoint_save",
+        "workflow_id: str, phase: str, status: str = 'completed', result_cache: str = None",
+        '"""Save a workflow checkpoint. Called explicitly to record non-delegate_task state changes."""',
+        '{"workflow_id": workflow_id, "phase": phase, "status": status, "result_cache": result_cache}',
+    ),
+    "checkpoint_load": (
+        "checkpoint_load",
+        "workflow_id: str",
+        '"""Load all checkpoints for a workflow. Returns {phase: {status, agent_id, result_cache, timestamp}}."""',
+        '{"workflow_id": workflow_id}',
     ),
 }
 
@@ -326,6 +359,9 @@ _COMMON_HELPERS = '''\
 # Convenience helpers (avoid common scripting pitfalls)
 # ---------------------------------------------------------------------------
 
+# Helper: newline character, avoids \\n escaping issues inside triple-quoted strings.
+_NL = chr(10)
+
 def json_parse(text: str):
     """Parse JSON tolerant of control characters (strict=False).
     Use this instead of json.loads() when parsing output from terminal()
@@ -355,6 +391,107 @@ def retry(fn, max_attempts=3, delay=2):
             if attempt < max_attempts - 1:
                 time.sleep(delay * (2 ** attempt))
     raise last_err
+
+
+def adversarial_review(results, task_spec, num_reviewers=1, toolsets=None):
+    """Spawn N adversarial reviewers to check subagent results against a task spec.
+
+    Each reviewer receives the original task specification and all primary
+    subagent results. They are instructed to identify contradictions, factual
+    errors, and missing information. Only results that survive review (no
+    reviewer raises a defect) pass through to the caller.
+
+    Args:
+        results: List of result dicts from prior delegate_task calls. Each must
+                 have a \"summary\" key.
+        task_spec: The original task specification the subagents were given.
+        num_reviewers: How many adversarial reviewers to spawn (default 1).
+                       All run in parallel; even one defect disqualifies a result.
+        toolsets: Optional list of toolsets for reviewers (defaults to
+                  [\"terminal\", \"web\", \"file\"]).
+
+    Returns:
+        dict with keys:
+          - passed: List of result summaries that survived review.
+          - defects: List of {reviewer, finding, result_index} for each defect found.
+          - all_reviews: Raw reviewer summaries for transparency.
+    """
+    if toolsets is None:
+        toolsets = ["terminal", "web", "file"]
+
+    # Build the reviewer tasks
+    reviewer_tasks = []
+    for i in range(num_reviewers):
+        reviewer_tasks.append({
+            "goal": (
+                f"You are adversarial reviewer {i+1}/{num_reviewers}. "
+                "Your job is to find EVERY flaw, contradiction, factual error, "
+                "and missing piece of information in the subagent results below. "
+                "Be ruthlessly critical — false claims, unsupported assertions, "
+                "and logical gaps are ALL defects."
+                + _NL + _NL +
+                "For each result, state explicitly whether it is CLEAN or DEFECTIVE. "
+                "If DEFECTIVE, state which result index is affected and what the "
+                "specific error is. Format your response as:"
+                + _NL +
+                "  RESULT 0: CLEAN | DEFECTIVE — <specific error>"
+                + _NL +
+                "  RESULT 1: CLEAN | DEFECTIVE — <specific error>"
+                + _NL +
+                "  ..."
+                + _NL +
+                "Then give a one-line verdict: VERDICT: <summary>"
+            ),
+            "context": (
+                "ORIGINAL TASK SPECIFICATION:"
+                + _NL +
+                task_spec +
+                _NL + _NL +
+                "SUBTASK RESULTS TO REVIEW ({} results):"
+                + _NL.format(len(results))
+                + json.dumps([
+                    {"index": idx, "summary": r.get("summary", str(r))}
+                    for idx, r in enumerate(results)
+                ], indent=2)
+            ),
+            "toolsets": toolsets,
+        })
+
+    # Spawn all reviewers in parallel
+    reviews = delegate_task(tasks=reviewer_tasks)
+
+    # Parse defects from reviewer responses
+    passed = []
+    defects = []
+    defective_indices = set()
+
+    for reviewer_idx, review in enumerate(reviews):
+        review_text = review.get("summary", "") if isinstance(review, dict) else str(review)
+        for line in review_text.splitlines():
+            line_upper = line.strip().upper()
+            if line_upper.startswith("RESULT ") and "DEFECTIVE" in line_upper:
+                # Extract result index from "RESULT N: DEFECTIVE — ..."
+                try:
+                    result_idx = int(line_upper.split("RESULT ")[1].split(":")[0].strip())
+                    defective_indices.add(result_idx)
+                    defects.append({
+                        "reviewer": reviewer_idx,
+                        "finding": line.strip(),
+                        "result_index": result_idx,
+                    })
+                except (ValueError, IndexError):
+                    pass
+
+    # Pass only results not flagged by any reviewer
+    for idx, result in enumerate(results):
+        if idx not in defective_indices:
+            passed.append(result.get("summary", str(result)))
+
+    return {
+        "passed": passed,
+        "defects": defects,
+        "all_reviews": [r.get("summary", str(r)) for r in reviews],
+    }
 
 '''
 
@@ -574,6 +711,17 @@ def _rpc_server_loop(
                                      "orchestration scripts must run within an agent session."
                         })
                     else:
+                        # ── Auto-checkpointing ──
+                        # When workflow_id + phase are set, mark the phase as
+                        # 'running' before dispatch, then 'completed' with the
+                        # result cached after the subagent returns.
+                        workflow_id = tool_args.get("workflow_id") if isinstance(tool_args, dict) else None
+                        phase = tool_args.get("phase") if isinstance(tool_args, dict) else None
+                        if workflow_id and phase:
+                            try:
+                                _get_session_db().checkpoint_mark_running(workflow_id, phase)
+                            except Exception:
+                                pass  # Non-fatal — checkpoint is best-effort
                         try:
                             result = agent._dispatch_delegate_task(tool_args)
                         except Exception as exc:
@@ -581,6 +729,60 @@ def _rpc_server_loop(
                                 "delegate_task failed in sandbox: %s", exc, exc_info=True
                             )
                             result = tool_error(str(exc))
+                            # Mark failed if phase was set
+                            if workflow_id and phase:
+                                try:
+                                    _get_session_db().checkpoint_upsert(
+                                        workflow_id, phase,
+                                        status="failed",
+                                        result_cache=result[:5000],
+                                    )
+                                except Exception:
+                                    pass
+                        else:
+                            # Auto-save completed checkpoint on success
+                            if workflow_id and phase:
+                                try:
+                                    _get_session_db().checkpoint_upsert(
+                                        workflow_id, phase,
+                                        status="completed",
+                                        result_cache=(
+                                            result if isinstance(result, str) else
+                                            json.dumps(result) if result is not None else ""
+                                        )[:10000],
+                                    )
+                                except Exception:
+                                    pass
+                    tool_call_counter[0] += 1
+                    call_duration = time.monotonic() - call_start
+                    tool_call_log.append({
+                        "tool": tool_name,
+                        "args_preview": str(tool_args)[:80],
+                        "duration": round(call_duration, 2),
+                    })
+                    conn.sendall((result + "\n").encode())
+                    continue
+
+                # checkpoint_save / checkpoint_load dispatch
+                if tool_name in ("checkpoint_save", "checkpoint_load"):
+                    try:
+                        sdb = _get_session_db()
+                        if tool_name == "checkpoint_save":
+                            wf_id = tool_args.get("workflow_id", "")
+                            ph = tool_args.get("phase", "")
+                            st = tool_args.get("status", "completed")
+                            rc = tool_args.get("result_cache")
+                            sdb.checkpoint_upsert(wf_id, ph, status=st, result_cache=rc)
+                            result = json.dumps({"ok": True})
+                        else:  # checkpoint_load
+                            wf_id = tool_args.get("workflow_id", "")
+                            data = sdb.checkpoint_load(wf_id)
+                            result = json.dumps(data)
+                    except Exception as exc:
+                        logger.error(
+                            "checkpoint tool failed in sandbox: %s", exc, exc_info=True
+                        )
+                        result = tool_error(str(exc))
                     tool_call_counter[0] += 1
                     call_duration = time.monotonic() - call_start
                     tool_call_log.append({
@@ -1202,12 +1404,17 @@ def execute_code(
     timeout = _cfg.get("timeout", DEFAULT_TIMEOUT)
     max_tool_calls = _cfg.get("max_tool_calls", DEFAULT_MAX_TOOL_CALLS)
 
-    # Determine which tools the sandbox can call
+    # Determine which tools the sandbox can call.
+    # checkpoint_save/checkpoint_load are sandbox-only — always include them
+    # even when the parent session doesn't expose them as top-level tools.
     session_tools = set(enabled_tools) if enabled_tools else set()
     sandbox_tools = frozenset(SANDBOX_ALLOWED_TOOLS & session_tools)
 
     if not sandbox_tools:
         sandbox_tools = SANDBOX_ALLOWED_TOOLS
+    else:
+        # Ensure checkpoint tools are always available in the sandbox.
+        sandbox_tools = sandbox_tools | frozenset(["checkpoint_save", "checkpoint_load"])
 
     # --- Set up temp directory with hermes_tools.py and script.py ---
     tmpdir = tempfile.mkdtemp(prefix="hermes_sandbox_")

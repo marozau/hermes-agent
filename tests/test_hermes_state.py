@@ -3374,3 +3374,282 @@ class TestApplyWalProbe:
         assert any("journal_mode=WAL" in sql for sql in conn.executed), (
             "set-pragma must fire when probe returns 'delete'"
         )
+
+
+# =========================================================================
+# Workflow checkpointing
+# =========================================================================
+
+class TestWorkflowCheckpoints:
+    """Tests for the workflow_checkpoints table and SessionDB checkpoint methods."""
+
+    def test_upsert_creates_checkpoint(self, db):
+        """checkpoint_upsert creates a new row."""
+        db.checkpoint_upsert("wf-1", "research", status="pending")
+        rows = db.checkpoint_load("wf-1")
+        assert len(rows) == 1
+        assert rows["research"]["status"] == "pending"
+        assert rows["research"]["agent_id"] is None
+        assert rows["research"]["result_cache"] is None
+        assert isinstance(rows["research"]["timestamp"], float)
+
+    def test_upsert_updates_existing_row(self, db):
+        """checkpoint_upsert on an existing (workflow_id, phase) updates the row."""
+        db.checkpoint_upsert("wf-1", "research", status="pending")
+        db.checkpoint_upsert("wf-1", "research", status="completed",
+                             agent_id="agent-42",
+                             result_cache='{"summary": "done"}')
+        rows = db.checkpoint_load("wf-1")
+        assert len(rows) == 1
+        assert rows["research"]["status"] == "completed"
+        assert rows["research"]["agent_id"] == "agent-42"
+        assert rows["research"]["result_cache"] == '{"summary": "done"}'
+        assert isinstance(rows["research"]["timestamp"], float)
+
+    def test_upsert_multiple_phases(self, db):
+        """Multiple phases for the same workflow are independent."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="running")
+        db.checkpoint_upsert("wf-1", "review", status="pending")
+        rows = db.checkpoint_load("wf-1")
+        assert len(rows) == 3
+        assert rows["research"]["status"] == "completed"
+        assert rows["draft"]["status"] == "running"
+        assert rows["review"]["status"] == "pending"
+
+    def test_upsert_multiple_workflows(self, db):
+        """Different workflows are completely isolated."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-2", "research", status="pending")
+        assert len(db.checkpoint_load("wf-1")) == 1
+        assert len(db.checkpoint_load("wf-2")) == 1
+        assert db.checkpoint_load("wf-1")["research"]["status"] == "completed"
+        assert db.checkpoint_load("wf-2")["research"]["status"] == "pending"
+
+    # --- checkpoint_bulk_status ---
+
+    def test_bulk_status_seeds_multiple_phases(self, db):
+        """checkpoint_bulk_status creates rows for multiple phases at once."""
+        db.checkpoint_bulk_status("wf-1", ["research", "draft", "review"])
+        rows = db.checkpoint_load("wf-1")
+        assert len(rows) == 3
+        assert all(v["status"] == "pending" for v in rows.values())
+
+    def test_bulk_status_with_explicit_status(self, db):
+        """checkpoint_bulk_status accepts a status override."""
+        db.checkpoint_bulk_status("wf-1", ["setup", "teardown"], status="completed")
+        rows = db.checkpoint_load("wf-1")
+        assert rows["setup"]["status"] == "completed"
+        assert rows["teardown"]["status"] == "completed"
+
+    def test_bulk_status_overwrites_existing(self, db):
+        """Bulk status overwrites existing rows for the same phases."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="failed")
+        db.checkpoint_bulk_status("wf-1", ["research", "draft", "review"],
+                                  status="pending")
+        rows = db.checkpoint_load("wf-1")
+        assert rows["research"]["status"] == "pending"
+        assert rows["draft"]["status"] == "pending"
+        assert rows["review"]["status"] == "pending"
+
+    # --- checkpoint_load ---
+
+    def test_load_empty_workflow(self, db):
+        """checkpoint_load returns empty dict for a non-existent workflow."""
+        result = db.checkpoint_load("nonexistent")
+        assert result == {}
+
+    def test_load_returns_all_fields(self, db):
+        """checkpoint_load returns status, agent_id, result_cache, timestamp."""
+        db.checkpoint_upsert("wf-1", "research", status="completed",
+                             agent_id="a1", result_cache="cache")
+        rows = db.checkpoint_load("wf-1")
+        r = rows["research"]
+        assert set(r.keys()) == {"status", "agent_id", "result_cache", "timestamp"}
+        assert r["status"] == "completed"
+        assert r["agent_id"] == "a1"
+        assert r["result_cache"] == "cache"
+
+    # --- checkpoint_completed_phases ---
+
+    def test_completed_phases_returns_only_completed(self, db):
+        """checkpoint_completed_phases returns only phases with status='completed'."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="completed")
+        db.checkpoint_upsert("wf-1", "review", status="pending")
+        db.checkpoint_upsert("wf-1", "publish", status="failed")
+
+        completed = db.checkpoint_completed_phases("wf-1")
+        assert set(completed) == {"research", "draft"}
+
+    def test_completed_phases_empty_workflow(self, db):
+        """checkpoint_completed_phases returns empty list for new workflow."""
+        assert db.checkpoint_completed_phases("no-such-wf") == []
+
+    def test_completed_phases_none_completed(self, db):
+        """Returns empty list when all phases are pending/failed."""
+        db.checkpoint_upsert("wf-1", "research", status="pending")
+        db.checkpoint_upsert("wf-1", "draft", status="failed")
+        assert db.checkpoint_completed_phases("wf-1") == []
+
+    # --- checkpoint_clear ---
+
+    def test_clear_removes_all_phases(self, db):
+        """checkpoint_clear deletes all rows for the workflow."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="completed")
+        db.checkpoint_clear("wf-1")
+        assert db.checkpoint_load("wf-1") == {}
+
+    def test_clear_only_affects_target_workflow(self, db):
+        """checkpoint_clear does not affect other workflows."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-2", "research", status="completed")
+        db.checkpoint_clear("wf-1")
+        assert db.checkpoint_load("wf-1") == {}
+        assert len(db.checkpoint_load("wf-2")) == 1
+
+    def test_clear_idempotent(self, db):
+        """Clearing a non-existent workflow is a no-op."""
+        db.checkpoint_clear("nonexistent")  # Should not raise
+
+    # --- checkpoint_mark_running ---
+
+    def test_mark_running_creates_row(self, db):
+        """checkpoint_mark_running creates a row with status='running'."""
+        db.checkpoint_mark_running("wf-1", "research")
+        rows = db.checkpoint_load("wf-1")
+        assert rows["research"]["status"] == "running"
+
+    def test_mark_running_updates_existing(self, db):
+        """mark_running updates a pending phase to running."""
+        db.checkpoint_upsert("wf-1", "research", status="pending")
+        db.checkpoint_mark_running("wf-1", "research")
+        assert db.checkpoint_load("wf-1")["research"]["status"] == "running"
+
+    def test_mark_running_preserves_result_cache(self, db):
+        """mark_running overwrites status but correctly preserves/clears result_cache.
+
+        The ON CONFLICT clause for checkpoint_mark_running only sets status
+        and timestamp.  Verify that pre-existing result_cache survives the
+        status-only update (or document the current behaviour if it doesn't)."""
+        db.checkpoint_upsert("wf-1", "research", status="completed",
+                             result_cache="stale-cache")
+        db.checkpoint_mark_running("wf-1", "research")
+        row = db.checkpoint_load("wf-1")["research"]
+        assert row["status"] == "running"
+        # mark_running's ON CONFLICT only updates status + timestamp.
+        # result_cache should survive.
+        assert row["result_cache"] == "stale-cache"
+
+    # --- checkpoint_list_active ---
+
+    def test_list_active_includes_incomplete_workflows(self, db):
+        """checkpoint_list_active returns workflows with non-completed phases."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="pending")
+        active = db.checkpoint_list_active()
+        assert len(active) == 1
+        assert active[0]["workflow_id"] == "wf-1"
+        assert active[0]["total"] == 2
+        assert active[0]["completed"] == 1
+        assert active[0]["pending"] == 1
+        assert active[0]["running"] == 0
+        assert active[0]["failed"] == 0
+
+    def test_list_active_excludes_fully_completed_workflows(self, db):
+        """Fully completed workflows are excluded."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="completed")
+        assert db.checkpoint_list_active() == []
+
+    def test_list_active_multiple_workflows(self, db):
+        """Multiple active workflows all appear."""
+        db.checkpoint_upsert("wf-1", "research", status="completed")
+        db.checkpoint_upsert("wf-1", "draft", status="pending")
+        db.checkpoint_upsert("wf-2", "setup", status="running")
+        active = db.checkpoint_list_active()
+        assert len(active) == 2
+        wf_ids = {a["workflow_id"] for a in active}
+        assert wf_ids == {"wf-1", "wf-2"}
+
+    def test_list_active_counts_failed(self, db):
+        """Failed phases are counted correctly."""
+        db.checkpoint_upsert("wf-1", "research", status="failed")
+        db.checkpoint_upsert("wf-1", "draft", status="completed")
+        active = db.checkpoint_list_active()
+        assert active[0]["failed"] == 1
+        assert active[0]["completed"] == 1
+        assert active[0]["total"] == 2
+
+    def test_list_active_empty(self, db):
+        """Returns empty list when no checkpoints exist."""
+        assert db.checkpoint_list_active() == []
+
+    # --- End-to-end resumption workflow ---
+
+    def test_full_resumption_workflow(self, db):
+        """Simulate a complete pause/resume cycle:
+
+        1. Seed phases as pending
+        2. Mark 'research' running, then completed
+        3. Mark 'draft' running (simulate interruption)
+        4. On resume: check completed phases, skip 'research', re-run 'draft'
+        """
+        wf_id = "wf-resume-test"
+
+        # Step 1: Seed all phases
+        db.checkpoint_bulk_status(wf_id, ["research", "draft", "review"],
+                                  status="pending")
+
+        # Step 2: Run research phase to completion
+        db.checkpoint_mark_running(wf_id, "research")
+        db.checkpoint_upsert(wf_id, "research", status="completed",
+                             agent_id="agent-1",
+                             result_cache='{"summary": "research done"}')
+
+        # Verify research is completed
+        assert "research" in db.checkpoint_completed_phases(wf_id)
+
+        # Step 3: Start draft phase but "crash" — left as running
+        db.checkpoint_mark_running(wf_id, "draft")
+
+        # --- Simulate resume ---
+        cached = db.checkpoint_load(wf_id)
+        completed = {p for p, v in cached.items() if v["status"] == "completed"}
+        assert completed == {"research"}
+
+        # On resume, re-run non-completed phases
+        to_rerun = [p for p in cached if p not in completed]
+        assert set(to_rerun) == {"draft", "review"}
+
+        # Re-run draft
+        db.checkpoint_mark_running(wf_id, "draft")
+        db.checkpoint_upsert(wf_id, "draft", status="completed",
+                             agent_id="agent-2",
+                             result_cache='{"summary": "draft done"}')
+
+        # Re-run review
+        db.checkpoint_mark_running(wf_id, "review")
+        db.checkpoint_upsert(wf_id, "review", status="completed",
+                             agent_id="agent-3",
+                             result_cache='{"summary": "review done"}')
+
+        # Now all phases are completed
+        completed_phases = db.checkpoint_completed_phases(wf_id)
+        assert set(completed_phases) == {"research", "draft", "review"}
+
+        # Active list is empty (fully completed)
+        assert db.checkpoint_list_active() == []
+
+    def test_workflow_id_isolation_is_strict(self, db):
+        """Two workflows can share phase names without interference."""
+        db.checkpoint_upsert("wf-a", "research", status="completed")
+        db.checkpoint_upsert("wf-b", "research", status="pending")
+        db.checkpoint_upsert("wf-a", "draft", status="running")
+
+        assert db.checkpoint_load("wf-a")["research"]["status"] == "completed"
+        assert db.checkpoint_load("wf-b")["research"]["status"] == "pending"
+        assert db.checkpoint_completed_phases("wf-a") == ["research"]
+        assert db.checkpoint_completed_phases("wf-b") == []
