@@ -31,6 +31,27 @@ SUPPORTED_EXTENSIONS: tuple[str, ...] = (
     ".md", ".yaml", ".yml", ".json", ".txt", ".py",
 )
 
+# Known BMAD phases (must match criteria.yaml)
+_KNOWN_PHASES: frozenset[str] = frozenset({
+    "analysis", "planning", "solutioning", "implementation",
+})
+
+
+def _load_criteria() -> dict:
+    """Load criteria.yaml, cached at module level."""
+    global _CRITERIA_CACHE
+    if _CRITERIA_CACHE is not None:
+        return _CRITERIA_CACHE
+    criteria_path = Path(__file__).resolve().parent / "criteria.yaml"
+    try:
+        _CRITERIA_CACHE = yaml.safe_load(criteria_path.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError):
+        _CRITERIA_CACHE = {"phases": {}}
+    return _CRITERIA_CACHE
+
+
+_CRITERIA_CACHE: dict | None = None
+
 # Regex patterns (re.MULTILINE for multiline matching)
 _HEADING_PATTERN = re.compile(r"^(#{1,6})\s+(.+)$", re.MULTILINE)
 _TABLE_ROW_PATTERN = re.compile(r"^\|.+\|$", re.MULTILINE)
