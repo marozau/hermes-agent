@@ -222,6 +222,12 @@ def register() -> None:
     """Register DeepSeek and OpenAI dispatchers."""
     _register_one("deepseek")
     _register_one("openai")
+    # Story 8.4: also register embedding dispatchers
+    try:
+        _register_embedding_one("deepseek")
+        _register_embedding_one("openai")
+    except Exception:
+        pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -321,10 +327,16 @@ def embeddings(
 
 def _register_embedding_one(provider_name: str) -> None:
     """Register a single provider name with the embeddings adapter."""
-    from hermes_llm import register_embedding_dispatch
+    try:
+        from hermes_llm import register_embedding_dispatch
+    except ImportError:
+        from lib.hermes_llm import register_embedding_dispatch
     register_embedding_dispatch(provider_name, embeddings)
 
 
 # Auto-register embeddings dispatch alongside chat dispatch
-_register_embedding_one("deepseek")
-_register_embedding_one("openai")
+try:
+    _register_embedding_one("deepseek")
+    _register_embedding_one("openai")
+except Exception:
+    pass  # registration deferred to register() call
