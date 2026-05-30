@@ -401,12 +401,18 @@ def classify_exception(exc: BaseException) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PROVIDER_DISPATCH: dict[str, Callable[..., dict]] = {}
+_EMBEDDING_DISPATCH: dict[str, Callable[..., list[float]]] = {}
 
 
 def register_provider_dispatch(provider: str, fn: Callable[..., dict]) -> None:
     """Register a provider implementation. Epic 4 (dream-orchestrator) calls
     this at startup to wire anthropic / openai / deepseek transports."""
     _PROVIDER_DISPATCH[provider] = fn
+
+
+def register_embedding_dispatch(provider: str, fn: Callable[..., list[float]]) -> None:
+    """Story 8.4: register an embedding provider implementation."""
+    _EMBEDDING_DISPATCH[provider] = fn
 
 
 def _call_provider_api(
@@ -651,3 +657,84 @@ def llm_call(
         f"'{spec.response_model.__name__}'. first_error={parse_err_1!r}; "
         f"final_error={final_err!r}"
     ) from final_err
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 8.4: Embedding calls via llm_embed (FR-37, Hard Invariant #2)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def llm_embed(
+    text: str,
+    workload: str = "recall_embed",
+    *,
+    observability_dir: Optional[str] = None,
+    providers_config: Optional[dict[str, WorkloadSpec]] = None,
+) -> Optional[list[float]]:
+    """Story 8.4: canonical embedding call site.
+
+    Routes through providers.yaml like llm_call. Returns embedding vector
+    or None on failure (fail-open per Story 7.6 skip-ladder discipline).
+
+    Hard Invariant #2: this is the only sanctioned embedding call site.
+    Cross-provider fallback is enforced (Hard Invariant #10).
+    """
+    config = providers_config if providers_config is not None else load_providers_config()
+    wl = config.get(workload)
+    if wl is None:
+        logger.warning("llm_embed: workload '%s' not in providers.yaml", workload)
+        return None
+
+    t0 = _time.monotonic()
+    chain: list[ProviderSpec] = [wl.primary] + [
+        fb for fb in wl.fallback
+        if wl.same_provider_ok or fb.provider != wl.primary.provider
+    ]
+
+    last_exc: Optional[BaseException] = None
+    tried: list[str] = []
+
+    for prov in chain:
+        fn = _EMBEDDING_DISPATCH.get(prov.provider)
+        if fn is None:
+            tried.append(prov.provider)
+            last_exc = NotImplementedError(
+                f"No embedding dispatch for provider '{prov.provider}'"
+            )
+            continue
+        try:
+            vec = fn(prov, text)
+            elapsed_ms = (_time.monotonic() - t0) * 1000
+            _write_telemetry(
+                workload=workload, model=prov.model,
+                tokens_in=len(text.split()), tokens_out=0,
+                cache_read_tokens=0, latency_ms=elapsed_ms,
+                schema_status="embedding", outcome="ok", error=None,
+                idempotency_key=None, observability_dir=observability_dir,
+            )
+            return vec
+        except Exception as exc:
+            last_exc = exc
+            tried.append(prov.provider)
+            category = classify_exception(exc)
+            logger.warning(
+                "Embedding fallback: %s/%s failed (category=%s) -> %s",
+                prov.provider, prov.model, category,
+                "next" if len(tried) < len(chain) else "exhausted",
+            )
+            continue
+
+    elapsed_ms = (_time.monotonic() - t0) * 1000
+    _write_telemetry(
+        workload=workload, model="unknown",
+        tokens_in=len(text.split()), tokens_out=0,
+        cache_read_tokens=0, latency_ms=elapsed_ms,
+        schema_status="embedding", outcome="failed",
+        error=f"exhausted: tried={tried}",
+        idempotency_key=None, observability_dir=observability_dir,
+    )
+    logger.warning(
+        "llm_embed: all providers exhausted for workload '%s': tried=%s",
+        workload, tried,
+    )
+    return None  # fail-open

@@ -222,3 +222,109 @@ def register() -> None:
     """Register DeepSeek and OpenAI dispatchers."""
     _register_one("deepseek")
     _register_one("openai")
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 8.4: Embedding dispatch (OpenAI-compatible /embeddings endpoint)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def embeddings(
+    provider: "ProviderSpec",
+    text: str,
+) -> list[float]:
+    """Call an OpenAI-compatible /embeddings API endpoint.
+
+    Works for DeepSeek (deepseek-embed-v2) and OpenAI (text-embedding-3-small)
+    since both use the same POST /embeddings JSON schema.
+
+    Args:
+        provider: ProviderSpec from providers.yaml (model, timeout, base_url).
+        text: The text to embed.
+
+    Returns:
+        list[float] — the embedding vector.
+
+    Raises:
+        ValueError: On missing API key, HTTP error, or unexpected response shape.
+    """
+    api_key = _resolve_api_key(provider.provider)
+    base = provider.base_url or _DEFAULT_BASE_URLS.get(
+        provider.provider,
+        f"https://api.{provider.provider}.com/v1",
+    )
+    timeout = provider.timeout
+
+    body = {
+        "model": provider.model,
+        "input": text,
+    }
+
+    headers = {
+        "Authorization": f"Bearer {api_key}",
+        "content-type": "application/json",
+    }
+    headers.update(provider.extra_headers)
+
+    try:
+        with httpx.Client(timeout=httpx.Timeout(timeout)) as client:
+            resp = client.post(
+                f"{base.rstrip('/')}/embeddings",
+                headers=headers,
+                content=json.dumps(body),
+            )
+    except httpx.TimeoutException as exc:
+        from hermes_llm import ProviderError
+        raise ProviderError(
+            f"Embeddings request timed out after {timeout}s "
+            f"(provider={provider.provider}, model={provider.model})",
+            provider=provider.provider,
+            model=provider.model,
+            category="timeout",
+            raw_error=exc,
+        ) from exc
+    except httpx.HTTPError as exc:
+        from hermes_llm import ProviderError
+        raise ProviderError(
+            f"Embeddings HTTP error ({provider.provider}): {exc}",
+            provider=provider.provider,
+            model=provider.model,
+            category="unknown",
+            raw_error=exc,
+        ) from exc
+
+    if resp.status_code != 200:
+        from hermes_llm import ProviderError, classify_http_status
+        try:
+            err_body = resp.json()
+        except Exception:
+            err_body = {"raw": resp.text[:500]}
+        category = classify_http_status(resp.status_code)
+        raise ProviderError(
+            f"Embeddings API ({provider.provider}) returned "
+            f"{resp.status_code}: {json.dumps(err_body)}",
+            provider=provider.provider,
+            model=provider.model,
+            category=category,
+            status_code=resp.status_code,
+        )
+
+    data = resp.json()
+    embeddings_list = data.get("data", [])
+    if not embeddings_list:
+        raise ValueError(
+            f"Embeddings response ({provider.provider}) has no data: "
+            f"{json.dumps(data)[:500]}"
+        )
+    return embeddings_list[0].get("embedding", [])
+
+
+def _register_embedding_one(provider_name: str) -> None:
+    """Register a single provider name with the embeddings adapter."""
+    from hermes_llm import register_embedding_dispatch
+    register_embedding_dispatch(provider_name, embeddings)
+
+
+# Auto-register embeddings dispatch alongside chat dispatch
+_register_embedding_one("deepseek")
+_register_embedding_one("openai")
