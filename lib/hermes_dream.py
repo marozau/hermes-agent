@@ -311,7 +311,7 @@ def _build_refine_prompt(
             "",
             "The previous pass flagged potential contradictions. For each pair, decide:",
             "  (a) supersede the existing entry (set op: supersede, target_entry_id: existing_id)",
-            "  (b) merge the bodies (set op: update, target_entry_id: existing_id, append new body)",
+            "  (b) update the existing entry (set op: update, target_entry_id: existing_id, append new body)",
             "  (c) discard the new entry as already-covered (drop it from proposals)",
             "Verify against the raw layer when uncertain.",
             "",
@@ -1215,12 +1215,7 @@ def create_dream_artifact(
                             f"→ candidate for domain-vocab.txt extension"
                         )
 
-                # Write category_weights to memory.patch (proposal only — Hard Invariant #4)
-                category_weights = {}
-                for nudge in nudges["low_hit_rate"]:
-                    category_weights[nudge["category"]] = {"direction": "down", "hit_rate": nudge["hit_rate"]}
-                for nudge in nudges["high_hit_rate"]:
-                    category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
+                # m1: category_weights already computed at line 959; just report count.
                 if category_weights:
                     report_lines += ["", f"**Category weights included in memory.patch:** "
                                         f"{len(category_weights)} category(es)."]
