@@ -522,7 +522,10 @@ def _aggregate(
     """Format the reviewer output into canonical Markdown.
 
     Handles both LLM-delegated and subprocess (OCR) results.
+    F-4 fix: runs consensus classification via ocr_triage.merge_findings.
     """
+    from plugins.bmad.lib.ocr_triage import merge_findings, normalize_ocr_finding
+
     lines: list[str] = []
     lines.append("# Code Review — adversarial multi-reviewer fan-out")
     lines.append("")
@@ -561,6 +564,7 @@ def _aggregate(
         lines.append("")
 
     # OCR section (Epic 8 — OI-12: one of 4 independent sources)
+    ocr_findings_raw: list[dict] = []
     for ocr_result in ocr_results:
         elapsed = ocr_result.get("elapsed_seconds", "?")
         lines.append(f"## OCR (Open Code Review)")
@@ -573,10 +577,35 @@ def _aggregate(
             summary = ocr_result.get("summary", "")
             if summary and summary != "[]":
                 lines.append(summary)
+                # Parse for consensus
+                try:
+                    import json
+                    ocr_findings_raw = json.loads(summary)
+                except (json.JSONDecodeError, TypeError):
+                    pass
             else:
                 lines.append("_(no findings returned)_")
         lines.append(f"_OCR completed in {elapsed}s_")
         lines.append("")
+
+    # F-4: Consensus classification (OI-12)
+    if ocr_findings_raw:
+        try:
+            merged = merge_findings(ocr_findings=ocr_findings_raw)
+            if merged:
+                lines.append("---")
+                lines.append("## Consensus Signal")
+                lines.append("")
+                for f in merged:
+                    sources_str = "+".join(sorted(f.sources))
+                    lines.append(
+                        f"- **{f.classification}** [{f.severity}] "
+                        f"`{f.file}:{f.line}` — {f.message} "
+                        f"_(source: {sources_str})_"
+                    )
+                lines.append("")
+        except Exception as e:
+            logger.debug("[bmad:code-review] Consensus classification failed: %s", e)
 
     # Triage hint at the end
     lines.append("---")

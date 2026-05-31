@@ -181,24 +181,27 @@ def fan_out(
             try:
                 raw_result = fn(**kwargs)
                 elapsed = _time.monotonic() - start
+                # F-2 fix: raw_result is OCRResult, iterate .findings
+                # F-3 fix: .severity is str, not Enum — no .value
+                findings_list = raw_result.findings if hasattr(raw_result, "findings") else []
                 results.append({
                     "index": len(results),
                     "goal": f"[subprocess:{label}]",
                     "task_id": None,
-                    "status": "success",
+                    "status": "success" if getattr(raw_result, "success", True) else "failure",
                     "summary": json.dumps([{
                         "rule_id": f.rule_id,
                         "file": f.file,
                         "line": f.line,
-                        "severity": f.severity.value,
+                        "severity": f.severity,
                         "message": f.message,
                         "source": f.source,
-                    } for f in raw_result]) if raw_result else "[]",
+                    } for f in findings_list]) if findings_list else "[]",
                     "parent_skill_name": parent_skill,
                     "source": "ocr",
                     "kind": "subprocess",
                     "elapsed_seconds": round(elapsed, 2),
-                    "findings": raw_result,
+                    "findings": findings_list,
                 })
             except Exception as exc:
                 elapsed = _time.monotonic() - start
