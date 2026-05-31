@@ -41,8 +41,8 @@ _STOP_WORDS = frozenset({
 })
 
 _SENTENCE_RE = re.compile(r"[.!?;\n]+")
-_WORD_RE = re.compile(r"\b[a-zA-Z0-9][\w\-]*[a-zA-Z0-9]\b|\b[a-zA-Z0-9]\b")
-_UPPER_RE = re.compile(r"[A-Z]")
+_WORD_RE = re.compile(r"\b\w[\w\-]*\w\b|\b\w\b", re.UNICODE)  # D3: Unicode-aware
+_UPPER_RE = re.compile(r"\w", re.UNICODE)  # Unicode letter check (replaces ASCII-only [A-Z])
 _DIGIT_RE = re.compile(r"\d")
 
 
@@ -71,7 +71,7 @@ def _tokenize_sentences(text: str) -> tuple[list[list[str]], list[str]]:
 
 def _is_uppercase(word: str) -> bool:
     """True if word is ALL UPPERCASE (not just first-letter capitalized)."""
-    return word == word.upper() and _UPPER_RE.search(word) is not None
+    return word == word.upper() and any(c.isupper() for c in word)
 
 
 def _is_title_case(word: str) -> bool:

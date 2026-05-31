@@ -124,7 +124,10 @@ def chat_completions(
                 content=json.dumps(body),
             )
     except httpx.TimeoutException as exc:
-        from hermes_llm import ProviderError
+        try:
+            from hermes_llm import ProviderError
+        except ImportError:
+            from lib.hermes_llm import ProviderError
         raise ProviderError(
             f"Chat completions request timed out after {timeout}s "
             f"(provider={provider.provider}, model={provider.model})",
@@ -134,7 +137,10 @@ def chat_completions(
             raw_error=exc,
         ) from exc
     except httpx.HTTPError as exc:
-        from hermes_llm import ProviderError
+        try:
+            from hermes_llm import ProviderError
+        except ImportError:
+            from lib.hermes_llm import ProviderError
         raise ProviderError(
             f"Chat completions HTTP error ({provider.provider}): {exc}",
             provider=provider.provider,
@@ -150,7 +156,10 @@ def chat_completions(
     )
 
     if resp.status_code != 200:
-        from hermes_llm import ProviderError, classify_http_status
+        try:
+            from hermes_llm import ProviderError, classify_http_status
+        except ImportError:
+            from lib.hermes_llm import ProviderError, classify_http_status
         try:
             err_body = resp.json()
         except Exception:
@@ -212,7 +221,10 @@ def chat_completions(
 
 def _register_one(provider_name: str) -> None:
     """Register a single provider name with the chat_completions adapter."""
-    from hermes_llm import register_provider_dispatch
+    try:
+        from hermes_llm import register_provider_dispatch
+    except ImportError:
+        from lib.hermes_llm import register_provider_dispatch
 
     register_provider_dispatch(provider_name, chat_completions)
     logger.info("registered provider dispatch: %s (chat completions)", provider_name)
@@ -226,7 +238,7 @@ def register() -> None:
     try:
         _register_embedding_one("deepseek")
         _register_embedding_one("openai")
-    except Exception:
+    except (ImportError, AttributeError):
         pass
 
 
@@ -280,7 +292,10 @@ def embeddings(
                 content=json.dumps(body),
             )
     except httpx.TimeoutException as exc:
-        from hermes_llm import ProviderError
+        try:
+            from hermes_llm import ProviderError
+        except ImportError:
+            from lib.hermes_llm import ProviderError
         raise ProviderError(
             f"Embeddings request timed out after {timeout}s "
             f"(provider={provider.provider}, model={provider.model})",
@@ -290,7 +305,10 @@ def embeddings(
             raw_error=exc,
         ) from exc
     except httpx.HTTPError as exc:
-        from hermes_llm import ProviderError
+        try:
+            from hermes_llm import ProviderError
+        except ImportError:
+            from lib.hermes_llm import ProviderError
         raise ProviderError(
             f"Embeddings HTTP error ({provider.provider}): {exc}",
             provider=provider.provider,
@@ -300,7 +318,10 @@ def embeddings(
         ) from exc
 
     if resp.status_code != 200:
-        from hermes_llm import ProviderError, classify_http_status
+        try:
+            from hermes_llm import ProviderError, classify_http_status
+        except ImportError:
+            from lib.hermes_llm import ProviderError, classify_http_status
         try:
             err_body = resp.json()
         except Exception:
@@ -338,5 +359,5 @@ def _register_embedding_one(provider_name: str) -> None:
 try:
     _register_embedding_one("deepseek")
     _register_embedding_one("openai")
-except Exception:
+except (ImportError, AttributeError):
     pass  # registration deferred to register() call

@@ -89,3 +89,28 @@ workloads:
         timeout: 600
     cache: "1h"
     same_provider_ok: true  # DN3: Opus→Sonnet is intentional tier fallback
+
+  # Story 8.4: embedding recall — DeepSeek primary, OpenAI cross-provider fallback.
+  recall_embed:
+    primary:
+      provider: deepseek
+      model: deepseek-embed-v2
+      max_tokens: 0
+      timeout: 3
+    fallback:
+      - provider: openai
+        model: text-embedding-3-small
+        max_tokens: 0
+        timeout: 3
+    cache: "5m"
+
+  # Story 8.6: LLM reranker — DeepSeek Flash for cheap reranking.
+  # No fallback: fail-open to score-based ranking at the caller.
+  preflight_rerank:
+    primary:
+      provider: deepseek
+      model: deepseek-v4-flash
+      max_tokens: 200
+      timeout: 5
+    fallback: []
+    cache: "5m"

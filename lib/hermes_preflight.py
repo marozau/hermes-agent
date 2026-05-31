@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -69,6 +70,8 @@ class TrajectoryHit:
     entry_source: str = ""          # frontmatter source (e.g. "user-correction")
     # Story 9.1: access count for strength factor
     access_count: int = 0           # from frontmatter; 0 if missing
+    # Story 8.4: hybrid score (set by apply_hybrid_scoring when embeddings available)
+    hybrid_score: Optional[float] = None  # None = use bm25_score in ranker
 
 
 @dataclass
@@ -255,32 +258,40 @@ def enrich_query_with_yake(
 # In-process LRU embedding cache — OrderedDict[sha256(text), vec]
 _embedding_cache: "OrderedDict[str, list[float]]" = OrderedDict()
 _EMBEDDING_CACHE_MAX = 1024
+_embedding_lock = threading.Lock()  # D4: defensive lock for cache mutations
 
 # Cosine similarity weights for hybrid scoring
 _HYBRID_COSINE_WEIGHT = 0.7
 _HYBRID_BM25_WEIGHT = 0.3
 
 
-def _text_hash(text: str) -> str:
-    """SHA-256 of text for cache key."""
-    return hashlib.sha256(text.encode("utf-8")).hexdigest()
+def _text_hash(text: str, provider: str = "", model: str = "") -> str:
+    """SHA-256 of text+provider+model for cache key. P9: provider-aware."""
+    if not isinstance(text, str):
+        return "__sentinel__"
+    key = f"{provider}:{model}:{text}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
 
 
-def _get_cached_embedding(text: str) -> Optional[list[float]]:
-    """Check LRU cache for existing embedding."""
-    key = _text_hash(text)
-    if key in _embedding_cache:
-        _embedding_cache.move_to_end(key)
-        return _embedding_cache[key]
+def _get_cached_embedding(text: str, provider: str = "", model: str = "") -> Optional[list[float]]:
+    """Check LRU cache for existing embedding. P9: provider-aware key."""
+    key = _text_hash(text, provider, model)
+    with _embedding_lock:
+        if key in _embedding_cache:
+            _embedding_cache.move_to_end(key)
+            return _embedding_cache[key]
     return None
 
 
-def _cache_embedding(text: str, vec: list[float]) -> None:
-    """Store embedding in LRU cache."""
-    key = _text_hash(text)
-    _embedding_cache[key] = vec
-    if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
-        _embedding_cache.popitem(last=False)
+def _cache_embedding(text: str, vec: list[float], provider: str = "", model: str = "") -> None:
+    """Store embedding in LRU cache. P8: skip empty vectors. P9: provider-aware key."""
+    if not vec:  # P8: don't cache empty vectors
+        return
+    key = _text_hash(text, provider, model)
+    with _embedding_lock:
+        _embedding_cache[key] = vec
+        if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
+            _embedding_cache.popitem(last=False)
 
 
 def _cosine_similarity(a: list[float], b: list[float]) -> float:
@@ -296,16 +307,22 @@ def _cosine_similarity(a: list[float], b: list[float]) -> float:
 
 
 def _get_embedding(text: str, workload: str = "recall_embed") -> Optional[list[float]]:
-    """Get embedding for text, using cache + llm_embed. Returns None on failure."""
-    cached = _get_cached_embedding(text)
+    """Get embedding for text, using cache + llm_embed. Returns None on failure.
+
+    P10: consistent truncation to 500 chars for cache key alignment.
+    P8: empty vectors treated as None (fail-open).
+    """
+    truncated = text[:500]  # P10: consistent truncation for query and candidate
+    cached = _get_cached_embedding(truncated)
     if cached is not None:
         return cached
     try:
         from lib.hermes_llm import llm_embed
-        vec = llm_embed(text, workload)
-        if vec is not None:
-            _cache_embedding(text, vec)
-        return vec
+        vec = llm_embed(truncated, workload)
+        if vec:  # P8: empty list is falsy — don't cache, return None
+            _cache_embedding(truncated, vec)
+            return vec
+        return None
     except Exception as e:
         logger.debug("Embedding failed for text[:50]: %s", e)
         return None
@@ -327,15 +344,20 @@ def apply_hybrid_scoring(
     hits: list[TrajectoryHit],
     query_text: str,
     config: Optional[dict] = None,
-) -> list[TrajectoryHit]:
+) -> tuple[list[TrajectoryHit], str]:
     """Story 8.4: Apply hybrid BM25 + cosine scoring to hits.
 
     When embeddings are available:
-        base = 0.7 * cosine_sim(query, candidate) + 0.3 * bm25_normalized
+        hybrid = 0.7 * cosine_sim(query, candidate) + 0.3 * bm25_normalized
     When embeddings fail:
-        base = bm25_normalized (fail-open)
+        hybrid = bm25_normalized (fail-open; AC3)
 
-    Returns hits with updated bm25_score (which now reflects the hybrid base).
+    Returns (hits, embedding_source) where embedding_source is one of:
+        "disabled" — config flag off
+        "ok" — embeddings used for at least one candidate
+        "cache" — all hits served from LRU cache
+        "failed" — query embedding failed; fell back to pure BM25
+        "partial" — some candidate embeddings failed
     """
     # Check config flag
     use_embeddings = True
@@ -345,30 +367,47 @@ def apply_hybrid_scoring(
             use_embeddings = bool(recall_cfg.get("use_embeddings", True))
 
     if not use_embeddings or not hits:
-        return hits
+        return hits, "disabled"
 
-    # Get query embedding
+    # Normalize BM25 scores once
+    bm25_normalized = _normalize_bm25_scores(hits)
+
+    # Get query embedding — fail-open to pure BM25 (AC3)
     query_vec = _get_embedding(query_text)
     if query_vec is None:
-        # Fail-open: embedding unavailable, use pure BM25
-        logger.debug("Hybrid scoring: embedding unavailable, falling back to BM25")
-        return hits
+        logger.debug("Hybrid scoring: query embedding unavailable, falling back to BM25")
+        for i, h in enumerate(hits):
+            h.hybrid_score = bm25_normalized[i]
+        return hits, "failed"
 
-    # Get candidate embeddings
-    bm25_normalized = _normalize_bm25_scores(hits)
+    # Get candidate embeddings and compute hybrid scores
+    all_from_cache = True
+    any_failed = False
     for i, h in enumerate(hits):
-        cand_vec = _get_embedding(h.content[:500])
+        cand_text = h.content[:500]
+        cand_vec = _get_embedding(cand_text)
         if cand_vec is not None:
             cos_sim = _cosine_similarity(query_vec, cand_vec)
-            h.bm25_score = (
+            h.hybrid_score = (
                 _HYBRID_COSINE_WEIGHT * cos_sim
                 + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
             )
+            # Check if this came from cache vs fresh call
+            if _text_hash(cand_text) not in _embedding_cache:
+                all_from_cache = False
         else:
-            # Candidate embedding failed — use pure BM25 for this one
-            h.bm25_score = _HYBRID_BM25_WEIGHT * bm25_normalized[i]
+            # Candidate embedding failed — use pure BM25 for this one (AC3)
+            h.hybrid_score = bm25_normalized[i]
+            any_failed = True
 
-    return hits
+    if any_failed:
+        source = "partial"
+    elif all_from_cache:
+        source = "cache"
+    else:
+        source = "ok"
+
+    return hits, source
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -501,7 +540,11 @@ def retrieve_trajectories(
     if not domains:
         return []
 
-    safe_terms = " OR ".join(_fts5_safe_term(d) for d in domains)
+    safe_terms = " OR ".join(
+        _fts5_safe_term(d) for d in domains if d and d.strip()
+    )
+    if not safe_terms:
+        return []
     query = f"TRAJECTORY ({safe_terms})"
     try:
         results = session_search_fn(query, limit)
@@ -643,8 +686,8 @@ def rank_trajectories(
         "superseded": 0.2,
         "unknown": 0.6,
     }
-    # Story 8.3: source boost for user-corrections
-    correction_source_boost = 0.3
+    # Story 8.3: source boost for user-corrections (multiplicative, matching upstream)
+    correction_source_boost = 1.3
 
     if config_path:
         cfg_path = Path(config_path)
@@ -667,6 +710,12 @@ def rank_trajectories(
                         recency_form = "power_law"
                     if isinstance(rec_cfg.get("exponent"), (int, float)):
                         recency_exponent = float(rec_cfg["exponent"])
+                        if recency_exponent >= 0:
+                            logger.warning(
+                                "rank_trajectories: recency.exponent must be < 0, got %s — using default -0.3",
+                                recency_exponent,
+                            )
+                            recency_exponent = -0.3
                 # Story 8.3: read type_boosts config
                 tb = cfg.get("type_boosts")
                 if isinstance(tb, dict):
@@ -681,7 +730,12 @@ def rank_trajectories(
 
     now = time.time()
     for h in hits:
-        bm25_c = weights["bm25"] * h.bm25_score
+        # P7: use hybrid_score when available (already weighted by apply_hybrid_scoring)
+        # to avoid double-weighting BM25 through the ranker's bm25 weight.
+        if h.hybrid_score is not None:
+            bm25_c = h.hybrid_score  # already 0.7*cosine + 0.3*bm25_normalized
+        else:
+            bm25_c = weights["bm25"] * h.bm25_score
 
         # Story 8.2: power-law recency
         # P18: clamp recency to [0, 1] — no future-timestamp boost.
@@ -704,7 +758,7 @@ def rank_trajectories(
         # Story 8.3: apply type boost and source boost
         entry_type = getattr(h, 'entry_type', 'unknown')
         type_w = type_boosts.get(entry_type, 1.0)
-        source_boost = 0.0
+        source_boost = 1.0
         entry_source = getattr(h, 'entry_source', '')
         if entry_source == "user-correction":
             source_boost = correction_source_boost
@@ -712,9 +766,9 @@ def rank_trajectories(
         # Story 9.1: strength factor from access_count
         # (reads defensively — 0 if missing, so 8.3 ships first)
         access_count = getattr(h, 'access_count', 0) or 0
-        strength = 1.0 + 0.1 * math.log(1 + access_count)
+        strength = 1.0 + 0.1 * math.log(1 + max(0, access_count))
 
-        h.score = four_factor * type_w * strength + source_boost
+        h.score = four_factor * type_w * strength * source_boost
 
     return sorted(hits, key=lambda h: h.score, reverse=True)
 
@@ -747,20 +801,28 @@ def _parse_rerank_indices(raw_content: str, max_idx: int) -> Optional[list[int]]
     """Parse reranker response. Returns list of valid indices or None on failure.
 
     Pydantic-gated: RerankIndices schema (Hard Invariant #11).
+    P18: handles both list and dict-with-"indices" shapes.
     """
     try:
         from pydantic import BaseModel, Field, conint
 
+        # P19: build schema dynamically from _RERANK_TOP_N
+        _IDX_MAX = _RERANK_TOP_N - 1  # e.g. 7 when _RERANK_TOP_N=8
+
         class RerankIndices(BaseModel):
-            indices: list[conint(ge=0, le=7)] = Field(..., max_length=3)
+            indices: list[conint(ge=0, le=_IDX_MAX)] = Field(..., max_length=3)
 
         # Try to extract JSON array from the response
         import json as _json
         import re as _re
         text = raw_content.strip()
-        # Try direct parse first
+
+        # P18: try direct parse first — handle both list and dict shapes
         try:
             parsed = _json.loads(text)
+            # P18: unwrap {"indices": [...]} dict shape
+            if isinstance(parsed, dict):
+                parsed = parsed.get("indices")
             if isinstance(parsed, list):
                 result = RerankIndices(indices=parsed)
                 return [i for i in result.indices if i < max_idx]
@@ -825,6 +887,10 @@ def rerank_with_llm(
         )
         result = llm_call(spec)
         content = result.get("content", "") if isinstance(result, dict) else str(result)
+        # P22: distinguish empty response from parse failure
+        if not content or not content.strip():
+            logger.debug("Rerank: empty response from LLM")
+            return hits[:_RERANK_TOP_K], "empty-response"
     except Exception as e:
         logger.warning("Rerank LLM call failed: %s — falling back to score-based", e)
         return hits[:_RERANK_TOP_K], "failed"
@@ -1026,27 +1092,31 @@ def record_verify_citations(
     _atomic_append(log_path / f"{today}.jsonl", row)
 
 
+_citations_lock = threading.Lock()  # D4: defensive lock for persist_citations read-modify-write
+
+
 def persist_citations(session_id: str, entry_ids: list[str]) -> None:
     """DN3 / Story 7.7: persist preflight citations for trajectory writer."""
     if not entry_ids:
         return
     p = _preflight_dir() / "last-cited.json"
     p.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    try:
-        existing = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    except Exception:
-        existing = {}
-    existing[session_id] = {
-        "entry_ids": entry_ids,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, (json.dumps(existing, indent=2) + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.replace(tmp, p)
+    with _citations_lock:
+        try:
+            existing = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except Exception:
+            existing = {}
+        existing[session_id] = {
+            "entry_ids": entry_ids,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (json.dumps(existing, indent=2) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, p)
 
 
 def read_citations(session_id: str) -> list[str]:
@@ -1068,6 +1138,7 @@ def read_citations(session_id: str) -> list[str]:
 _gates: "OrderedDict[str, PreflightGate]" = OrderedDict()
 _GATES_MAX = 1024  # P17 LRU bound
 _HYDRATED = True  # stub — Bug 2 fix removed disk hydration
+_gates_lock = threading.Lock()  # D4: defensive lock for gate mutations
 
 
 # ─�─ Bug 2 fix compat stubs ─────────────────────────────────────────────────
@@ -1129,31 +1200,31 @@ def _materialize_gate_from_log(session_id: str, enabled: bool) -> PreflightGate:
 
 
 def get_or_create_gate(session_id: str, enabled: bool = True) -> PreflightGate:
-    if session_id in _gates:
-        gate = _gates[session_id]
-        gate.enabled = enabled
-        _gates.move_to_end(session_id)
+    with _gates_lock:
+        if session_id in _gates:
+            gate = _gates[session_id]
+            gate.enabled = enabled
+            _gates.move_to_end(session_id)
+            return gate
+        # Bug 2 fix: derive gate state from telemetry log instead of gates.json.
+        gate = _materialize_gate_from_log(session_id, enabled)
+        if len(_gates) >= _GATES_MAX:
+            _gates.popitem(last=False)
+
+        # P17b: carry forward turn_count from recently-active gates.
+        # Context compression creates a new session_id mid-conversation.
+        # Without this, the warm-up gate resets to 0 on every compression.
+        carried = 0
+        _now = time.monotonic()
+        for _sid, _gate in reversed(list(_gates.items())):
+            if _gate._last_invoked_at > 0 and (_now - _gate._last_invoked_at) < 30.0:
+                carried = _gate.turn_count
+                break
+
+        if carried > 0:
+            gate.turn_count = carried
+        _gates[session_id] = gate
         return gate
-    # Bug 2 fix: derive gate state from telemetry log instead of gates.json.
-    gate = _materialize_gate_from_log(session_id, enabled)
-    if len(_gates) >= _GATES_MAX:
-        _gates.popitem(last=False)
-
-    # P17b: carry forward turn_count from recently-active gates.
-    # Context compression creates a new session_id mid-conversation.
-    # Without this, the warm-up gate resets to 0 on every compression.
-    carried = 0
-    _now = time.monotonic()
-    for _sid, _gate in reversed(list(_gates.items())):
-        if _gate._last_invoked_at > 0 and (_now - _gate._last_invoked_at) < 30.0:
-            carried = _gate.turn_count
-            break
-
-    gate = PreflightGate(enabled=enabled, session_id=session_id)
-    if carried > 0:
-        gate.turn_count = carried
-    _gates[session_id] = gate
-    return gate
 
 
 def should_run_preflight(
@@ -1244,30 +1315,32 @@ def should_run_preflight(
     )
     hits = _filter_stale_trajectories(hits)  # P11 / FR-33
     # Story 8.4: apply hybrid BM25 + embedding scoring before ranking
-    embedding_source = ""
+    embedding_source = "disabled"
+    cfg_for_preflight = _load_config()
     if hits:
-        cfg = _load_config()
-        pre_hits = len(hits)
-        hits = apply_hybrid_scoring(hits, message, config=cfg)
-        if pre_hits > 0 and hits and hits[0].bm25_score != 0:
-            # Check if embeddings were actually used (score changed from pure BM25)
-            if any(h.bm25_score > 1.0 for h in hits):
-                embedding_source = "provider"
-            elif _embedding_cache:
-                embedding_source = "cache"
+        hits, embedding_source = apply_hybrid_scoring(hits, message, config=cfg_for_preflight)
     ranked = rank_trajectories(hits, config_path)
     primary_domain = intent.domains[0] if intent.domains else None
     # Story 8.6: LLM reranker — operate on top-N=8 before dedupe_and_cap
     rerank_outcome = ""
-    cfg = _load_config()
     top_n_for_rerank = ranked[:_RERANK_TOP_N]
-    if top_n_for_rerank and cfg.get("recall", {}).get("use_reranker", False):
+    if top_n_for_rerank and cfg_for_preflight.get("recall", {}).get("use_reranker", False):
         top_n_for_rerank, rerank_outcome = rerank_with_llm(
-            top_n_for_rerank, message, config=cfg,
+            top_n_for_rerank, message, config=cfg_for_preflight,
         )
-        # Replace the top-N in ranked with reranked results
-        ranked = top_n_for_rerank + ranked[_RERANK_TOP_N:]
-    deduped = dedupe_and_cap(ranked, primary_domain=primary_domain)
+        # P6: preserve un-promoted positions — append the rest of top-N after reranked
+        reranked_set = set(id(h) for h in top_n_for_rerank)
+        un_promoted = [h for h in ranked[:_RERANK_TOP_N] if id(h) not in reranked_set]
+        ranked = top_n_for_rerank + un_promoted + ranked[_RERANK_TOP_N:]
+    # P5: read top_k from config, validate [1,3], pass to dedupe_and_cap
+    recall_cfg = cfg_for_preflight.get("recall", {})
+    configured_top_k = 3
+    if isinstance(recall_cfg, dict) and "top_k" in recall_cfg:
+        try:
+            configured_top_k = validate_top_k(int(recall_cfg["top_k"]))
+        except ValueError as e:
+            logger.warning("config.recall.top_k invalid: %s — using default 3", e)
+    deduped = dedupe_and_cap(ranked, k=configured_top_k, primary_domain=primary_domain)
     # Story 8.5: truncated_count = entries that scored but were capped out
     truncated_count = max(0, len(ranked) - len(deduped))
     heads_up = format_heads_up(deduped)

@@ -1,6 +1,13 @@
 # CLAUDE.md — Hermes Auto-Dream Implementation Playbook
 
-> Read on session start when working in `~/usr-local/hermes/`. The PRD and architecture are the contract; this file is the index + the non-negotiables. Anything ambiguous after reading this file is in the planning artifacts — read them, don't invent.
+> ## ⮕ You are inside the Epic 8 + 9 development worktree.
+>
+> Working directory: **`~/usr-local/hermes-autodream/worktree/hermes-agent/`** (the cwd of this session should already be here — if not, `cd` here before anything else).
+> Branch: **`feature/auto-dream-epic-8-9`** — branched off `main` at `fac95ab15`. All commits land on this branch and carry code only.
+> Workspace root: **`~/usr-local/hermes-autodream/`** — holds `AGENTS.md` (handoff brief, read once) and **`planning-artifacts/`** (the plan; PRD, architecture, epics, `sprint-status.yaml`, `workflow-status.yaml`, research). Planning state lives at the workspace level, *outside* this git checkout — feature-branch commits don't churn on story-tracking files. Edit those artifacts directly at `~/usr-local/hermes-autodream/planning-artifacts/`; there is no second copy.
+> Parent dev tree: **`~/usr-local/hermes/`** — the original main checkout that shares this repo's `.git/`. Do NOT edit code there during Epic 8 + 9. The user owns the eventual `git merge feature/auto-dream-epic-8-9` step from that tree.
+>
+> Read on session start. The PRD and architecture are the contract; this file is the index + the non-negotiables. Anything ambiguous after reading this file is in the planning artifacts — read them, don't invent.
 
 ---
 
@@ -30,7 +37,9 @@ Read 1→4 always; 5 to know status; 6–11 when the specific subsystem is touch
 
 ## Implementation order (dependency-driven)
 
-The architecture's §7.3 mapped to epic.story:
+**V1 (Epics 1–7) is code-complete on `main`.** Active development on this branch is **Epic 8 + 9 only.** Read `../../AGENTS.md` (the handoff brief at the package root) §9–10 for the per-story breakdown, and pick the next ready story from `planning-artifacts/sprint-status.yaml`.
+
+Historical V1 build order (preserved for context; do not re-implement):
 
 1. Epic 1 stories 1.1 → 1.5 — typed memory + canonical writer + reader changes
 2. Epic 1 → migrate existing memory writers to `add_entry()` (Story 1.5; grep until clean)
@@ -44,7 +53,12 @@ The architecture's §7.3 mapped to epic.story:
 10. Epic 7 → flip preflight to live; wire verify self-report fields (Story 7.7)
 11. Phase-4 readiness review → unpause Prefect schedules
 
-**Do not skip ahead.** Each later story assumes earlier ones are in place; in particular, Epic 4 cannot ship before Epic 1 (typed entries) and Epic 2 (raw layer) are in.
+Epic 8 + 9 build order (current — drive from `sprint-status.yaml`):
+
+12. Epic 8 stories 8.1 → 8.6 — recall quality (YAKE keyword extractor, hybrid scoring, dedup tuning, LLM rerank workload, calibration harness, polish workload)
+13. Epic 9 stories 9.1 → 9.3 — feedback-loop closure (verify-match edge, reinforcement counter on typed entries, category promote/demote inputs for skill-dream)
+
+**Do not skip ahead within Epic 8/9.** 9.x depends on the calibration harness from 8.5; check `sprint-status.yaml` `dependencies:` before starting any story.
 
 ---
 
@@ -192,38 +206,89 @@ Never:
 
 ## How to pick up a story
 
-1. Open `planning-artifacts/epics.md`; find the next pending story in the implementation order (§"Implementation order" above).
-2. Open the relevant FR in `planning-artifacts/prd-hermes-2026-05-12.md` (the FR Coverage Map in epics.md tells you which FR a story closes).
-3. Open the relevant ADR / pattern in `planning-artifacts/architecture.md`.
-4. Implement against the Given/When/Then ACs in the story.
-5. Update `planning-artifacts/workflow-status.yaml` when the epic-level milestone changes.
-6. If you discover an ambiguity not resolved by docs 1–4, look at the relevant research doc (read order above). If still ambiguous, write it down as an Open Question and surface it — do not silently invent.
+1. Open `planning-artifacts/sprint-status.yaml`. Find the next story in `backlog` whose `dependencies:` are all `done`. Promote it to `ready-for-dev`.
+2. Open `planning-artifacts/epics.md` and find the matching `### Story X.Y:` block.
+3. Read the AC list. Each AC is `Given / When / Then` — that's your tests-first checklist.
+4. Open the `**Reference:**` line at the bottom of the story; it names the PR #4480 commit you're porting from (Epic 8/9) and the Hard Invariant you must not violate.
+5. Open the relevant FR in `planning-artifacts/prd-hermes-2026-05-12.md` and the relevant ADR / pattern in `planning-artifacts/architecture.md`.
+6. Implement against the Given/When/Then ACs. Sync `lib/*` and `plugins/preflight/*` edits to `~/.hermes/` (see §"Sync discipline" above).
+7. Move the story through `in-progress` → `review` → `done` in `sprint-status.yaml` as you progress. Update `workflow-status.yaml` only when an epic-level milestone changes.
+8. If you discover an ambiguity not resolved by docs 1–6, look at the relevant research doc (read order above). If still ambiguous, write it down as an Open Question and surface it — **do not silently invent**.
 
 ---
 
 ## Key paths (cheat sheet)
 
 ```
-~/usr-local/hermes/                      ← BMAD project root (you are here)
-  planning-artifacts/                    ← the plan
-  CLAUDE.md                              ← this file
+~/usr-local/hermes-autodream/                     ← workspace root (Epic 8+9 handoff package)
+├── AGENTS.md                                     ← handoff brief (read once at start)
+├── planning-artifacts/                           ← ★ THE PLAN — single source of truth (edit here)
+│   ├── prd-hermes-2026-05-12.md
+│   ├── architecture.md
+│   ├── epics.md
+│   ├── workflow-status.yaml                      ← phase + epic-level status
+│   ├── sprint-status.yaml                        ← per-story status; update as you work
+│   └── research/
+└── worktree/
+    └── hermes-agent/                             ← ★ YOU ARE HERE — branch feature/auto-dream-epic-8-9
+        ├── CLAUDE.md                             ← this file (planning artifacts NOT under this dir)
+        ├── lib/                                  ← canonical helpers — EDIT HERE
+        │   ├── hermes_memory.py
+        │   ├── hermes_llm.py
+        │   ├── hermes_preflight.py
+        │   ├── hermes_recall.py
+        │   ├── hermes_dream.py
+        │   ├── hermes_trust.py
+        │   └── _hermes_paths.py
+        ├── plugins/preflight/                    ← bundled preflight plugin
+        ├── plugins/bmad/                         ← BMAD plugin
+        ├── hermes_cli/plugins.py                 ← VALID_HOOKS lives here
+        ├── agent/transports/                     ← provider transports (anthropic/chat_completions/codex/bedrock)
+        ├── agent/prompt_caching.py               ← cache_control breakpoint plumbing
+        ├── agent/retry_utils.py                  ← jittered backoff
+        └── tests/                                ← pytest suites
 
-~/.hermes/                               ← Hermes runtime workspace (the substrate)
-  hermes-agent/                          ← the Python codebase to extend
-    hermes_cli/plugins.py                ← VALID_HOOKS lives here (add pre_task_start in Phase 4)
-    agent/transports/                    ← provider transports (anthropic/chat_completions/codex/bedrock)
-    agent/prompt_caching.py              ← cache_control breakpoint plumbing
-    agent/retry_utils.py                 ← jittered backoff
-  lib/                                   ← NEW: hermes_memory.py + hermes_llm.py go here
-  plugins/preflight/                     ← NEW: the preflight plugin
-  dreams/                                ← NEW: providers.yaml, audit.jsonl, <dream_id>/...
-  raw/<project>/<role>/YYYY-MM-DD.jsonl  ← NEW: immutable raw layer
-  preflight/                             ← NEW: config.yaml, domain-vocab.txt, log/...
-  dream-orchestrator/flows/              ← NEW: Prefect flow definitions
-  skills/agent/{trajectory-memory,failure-taxonomy,verify}/SKILL.md  ← existing FAMA-derived
-  skills/{hermes-attestation-guardian,soul-guardian}/                ← trust-plane skills
-  observability/{llm_calls.jsonl, advisory.jsonl}                    ← telemetry sinks
+~/.hermes/                                        ← Hermes RUNTIME workspace (the substrate at runtime)
+  hermes-agent/                                   ← runtime checkout of the Python codebase
+  lib/                                            ← RUNTIME copy of lib/* — sync from worktree after edits
+  hermes-agent/plugins/preflight/                 ← RUNTIME copy of bundled plugin
+  dreams/providers.yaml                           ← live workload routing; Epic 8.4 + 8.6 add entries here
+  dreams/<dream_id>/                              ← copy-on-write artifacts
+  dreams/audit.jsonl                              ← hash-chained audit
+  raw/<project>/<role>/YYYY-MM-DD.jsonl           ← append-only raw layer
+  preflight/                                      ← config.yaml + domain-vocab.txt + log/
+  preflight/log/<YYYY-MM-DD>.jsonl                ← preflight telemetry (gate-state source of truth)
+  dream-orchestrator/flows/                       ← Prefect flow definitions
+  skills/agent/{trajectory-memory,failure-taxonomy,verify}/SKILL.md
+  skills/{hermes-attestation-guardian,soul-guardian}/
+  observability/{llm_calls.jsonl, advisory.jsonl}
+  profiles/<profile-name>/                        ← profile-scoped HERMES_HOME
+
+~/usr-local/hermes/                               ← parent main checkout (SHARES .git with this worktree)
+                                                  ← do NOT edit code here during Epic 8+9; user merges into main from here
 ```
+
+### Sync discipline — worktree → runtime
+
+After editing any `lib/*.py` or `plugins/preflight/*.py` file in this worktree, copy it into `~/.hermes/` so the running agent picks it up:
+
+```bash
+# From this worktree root:
+cp lib/hermes_<file>.py ~/.hermes/lib/hermes_<file>.py
+rm -f ~/.hermes/lib/__pycache__/hermes_<file>.cpython-*.pyc
+
+cp plugins/preflight/__init__.py ~/.hermes/hermes-agent/plugins/preflight/__init__.py
+rm -f ~/.hermes/hermes-agent/plugins/preflight/__pycache__/__init__.cpython-*.pyc
+```
+
+Audit drift before each commit:
+
+```bash
+for f in lib/*.py; do diff -q "$f" "$HOME/.hermes/$f"; done
+for f in plugins/preflight/*.py; do diff -q "$f" "$HOME/.hermes/hermes-agent/$f"; done
+```
+
+Silent drift has bitten this project twice — treat it as P0 once observed.
 
 ---
 

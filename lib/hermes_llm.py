@@ -222,7 +222,7 @@ def load_providers_config(
                 f"(got {cache!r})"
             )
 
-        same_provider_ok = bool(wl.get("same_provider_ok", False))
+        same_provider_ok = wl.get("same_provider_ok", False) in (True, "true", "True", 1)
 
         # Hard Invariant #10: cross-provider fallback ENFORCED at load time.
         # DN3: per-workload `same_provider_ok: true` opt-in for Opus→Sonnet.

@@ -167,10 +167,11 @@ class TestHybridScoring:
             return different_vec
 
         with mock.patch("lib.hermes_preflight._get_embedding", side_effect=mock_embed):
-            result = apply_hybrid_scoring(hits, "set up k3d", config={"recall": {"use_embeddings": True}})
+            result, source = apply_hybrid_scoring(hits, "set up k3d", config={"recall": {"use_embeddings": True}})
 
         # Both hits should have updated scores
         assert len(result) == 2
+        assert source == "ok"
         # The k3d hit should score higher due to cosine similarity
         assert result[0].id == "a" or result[0].score >= result[1].score
 
@@ -180,9 +181,11 @@ class TestHybridScoring:
             TrajectoryHit(id="a", content="test", bm25_score=0.5),
         ]
         with mock.patch("lib.hermes_preflight._get_embedding", return_value=None):
-            result = apply_hybrid_scoring(hits, "test query", config={"recall": {"use_embeddings": True}})
+            result, source = apply_hybrid_scoring(hits, "test query", config={"recall": {"use_embeddings": True}})
         # Should not crash; scores unchanged
         assert len(result) == 1
+        assert source == "failed"
+        assert result[0].hybrid_score is not None  # BM25 normalized set
 
     def test_disabled_via_config(self):
         """When recall.use_embeddings is false, no embedding calls."""
@@ -198,9 +201,10 @@ class TestHybridScoring:
             return None
 
         with mock.patch("lib.hermes_preflight._get_embedding", side_effect=counting_embed):
-            result = apply_hybrid_scoring(hits, "test", config={"recall": {"use_embeddings": False}})
+            result, source = apply_hybrid_scoring(hits, "test", config={"recall": {"use_embeddings": False}})
 
         assert call_count == 0  # No embedding calls made
+        assert source == "disabled"
         assert result[0].bm25_score == 0.5  # Unchanged
 
 
@@ -216,9 +220,10 @@ class TestLatencyBudget:
         """Default config enables embeddings."""
         hits = [TrajectoryHit(id="a", content="test", bm25_score=0.5)]
         with mock.patch("lib.hermes_preflight._get_embedding", return_value=[0.1, 0.2]):
-            result = apply_hybrid_scoring(hits, "test", config={})
+            result, source = apply_hybrid_scoring(hits, "test", config={})
         # Should attempt embeddings (default true)
         assert len(result) == 1
+        assert source in ("ok", "cache", "partial")
 
     def test_config_flag_false(self):
         """Config flag false disables embeddings entirely."""
