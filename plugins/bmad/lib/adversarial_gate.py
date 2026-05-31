@@ -23,8 +23,8 @@ DEFAULT_ADVERSARIAL_MODEL = "claude-opus-4-20250514"
 def _build_review_goal(story: StorySpec, project_dir: Path) -> str:
     """Build the adversarial reviewer's goal prompt.
 
-    The reviewer is given the story spec, ACs, and project context,
-    and asked to verify the implementation.
+    AC-7.8.5: Includes explicit no-write tool restrictions (Epic 6
+    retrospective action item 6.1).
     """
     acs = "\n".join(
         f"  {i+1}. {p}" for i, p in enumerate(story.success_predicates)
@@ -34,6 +34,12 @@ def _build_review_goal(story: StorySpec, project_dir: Path) -> str:
 ## Adversarial Review: Story {story.id} — {story.title}
 
 You are an adversarial code reviewer. Your job is to find problems.
+
+### ⚠️ Tool Restrictions (MANDATORY)
+USE ONLY these tools: Read, Grep, Glob, Bash (for read-only commands ONLY: `ls`, `cat`, `head`, `tail`, `git status`, `git diff`, `wc`).
+DO NOT CALL: Write, Edit, NotebookEdit, or any tool that mutates files.
+DO NOT use Bash to: cp, mv, rm, touch, > redirect, >> append, sed -i, mkdir, chmod, or any state-changing command.
+If you find drift or issues, REPORT them in your VERDICT — DO NOT fix them.
 
 ### Story Description
 {story.description or story.title}

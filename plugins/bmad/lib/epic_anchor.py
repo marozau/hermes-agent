@@ -54,6 +54,8 @@ class EpicSpec:
 
         Wave 0 has no unmet dependencies, wave 1 depends only on wave 0, etc.
         Returns list of waves, each a list of story IDs.
+
+        M-9: Raises CyclicDependencyError if a cycle is detected.
         """
         graph = self.dependency_graph()
         story_ids = set(graph.keys())
@@ -68,9 +70,11 @@ class EpicSpec:
         while remaining:
             wave = [sid for sid in remaining if in_progress.get(sid, 0) == 0]
             if not wave:
-                # Cycle detected — include remaining with a warning
-                logger.warning("[epic_anchor] Cycle detected in stories: %s", remaining)
-                wave = sorted(remaining)
+                # M-9: Raise on cycle instead of silently executing
+                raise CyclicDependencyError(
+                    f"Cycle detected in dependency graph among stories: "
+                    f"{', '.join(sorted(remaining))}"
+                )
             waves.append(sorted(wave))
             for sid in wave:
                 remaining.discard(sid)
@@ -78,6 +82,10 @@ class EpicSpec:
                     if sid in graph.get(dependent, []):
                         in_progress[dependent] -= 1
         return waves
+
+
+class CyclicDependencyError(ValueError):
+    """Raised when epic story dependencies contain a cycle."""
 
 
 # ── Parsing ──────────────────────────────────────────────────────────────────
@@ -154,6 +162,22 @@ def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> Epic
             story = next((s for s in stories if s.id == sid), None)
             if story:
                 story.success_predicates = predicates
+
+    # B-2: Extract verification_gate from per-story sections
+    vg_pattern = re.compile(
+        r"verification_gate[:\s]+(\S+)",
+        re.IGNORECASE,
+    )
+    for m in vg_pattern.finditer(text):
+        gate_value = m.group(1).strip().lower()
+        prefix = text[:m.start()]
+        last_heading = heading_pattern.findall(prefix)
+        if last_heading:
+            sid = last_heading[-1][0]
+            story = next((s for s in stories if s.id == sid), None)
+            if story:
+                story.verification_gate = gate_value
+                logger.debug("[epic_anchor] Story %s: verification_gate=%s", sid, gate_value)
 
     if not epic_id:
         # Infer from filename or first heading

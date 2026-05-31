@@ -259,7 +259,7 @@ class TestPredicateEvaluation:
 
     def test_shell_command_passes(self, project_dir):
         passed, total, failures = run_predicates(
-            ["true"], project_dir
+            ["shell:true"], project_dir
         )
         assert passed == 1
 
@@ -277,7 +277,7 @@ class TestPredicateEvaluation:
     def test_mixed_predicates(self, project_dir):
         (project_dir / "exists.txt").write_text("ok")
         passed, total, failures = run_predicates(
-            ["file_exists:exists.txt", "file_exists:nope.txt", "true"],
+            ["file_exists:exists.txt", "file_exists:nope.txt", "shell:true"],
             project_dir,
         )
         assert passed == 2
