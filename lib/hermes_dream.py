@@ -33,6 +33,7 @@ import json
 import logging
 import os
 import shutil
+import time
 from contextlib import contextmanager
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
@@ -108,6 +109,8 @@ class PassAuditEntry:
     proposals_removed: list[str]   # target_entry_ids
     outcome: str = "ok"            # "ok" | "validation-failed" | "empty"
     cost: CostInfo = field(default_factory=CostInfo)
+    # M1: duration_ms for latency delta in verdict
+    duration_ms: float = 0.0
 
 
 def _compute_proposal_diff(
@@ -307,9 +310,9 @@ def _build_refine_prompt(
             "## CONTRADICTIONS — Intra-Dream Contradiction Sweep (Story 10.5)",
             "",
             "The previous pass flagged potential contradictions. For each pair, decide:",
-            "  (a) supersede the existing entry (set op: supersede)",
-            "  (b) merge the bodies (set op: update, append the new body)",
-            "  (c) discard the new entry as already-covered (drop it from the patch)",
+            "  (a) supersede the existing entry (set op: supersede, target_entry_id: existing_id)",
+            "  (b) merge the bodies (set op: update, target_entry_id: existing_id, append new body)",
+            "  (c) discard the new entry as already-covered (drop it from proposals)",
             "Verify against the raw layer when uncertain.",
             "",
         ])
@@ -987,6 +990,7 @@ def create_dream_artifact(
                     except Exception:
                         pass
 
+                pass_start = time.monotonic()
                 pass_proposals, pass_cost, outcome = _run_consolidation_pass(
                     entries=entries,
                     raw_context=raw_ctx,
@@ -994,6 +998,7 @@ def create_dream_artifact(
                     previous_patch="\n".join(previous_patch_parts),
                     contradictions=contradictions,
                 )
+                pass_duration_ms = (time.monotonic() - pass_start) * 1000
                 per_pass_costs.append(pass_cost)
 
                 # P4: update last_valid on success
@@ -1012,6 +1017,7 @@ def create_dream_artifact(
                     proposals_removed=removed,
                     outcome=outcome,
                     cost=pass_cost,
+                    duration_ms=pass_duration_ms,
                 ))
                 all_pass_patches.append(pass_proposals)
 
@@ -1031,10 +1037,14 @@ def create_dream_artifact(
                     passes_dir.mkdir(parents=True, exist_ok=True)
                     _write_file_atomic(passes_dir / f"memory.patch.v{pass_idx + 1}", patches_yaml)
 
-                # P1: populate source_rows from multi-pass proposals
+                # M5: populate source_rows from proposals — use source_refs (raw-evidence id)
                 for p in pass_proposals:
                     if p.target_entry_id and p.target_entry_id not in {s.get("entry_id") for s in source_rows}:
-                        source_rows.append({"id": p.target_entry_id, "source": f"consolidation-pass-{pass_idx}", "entry_id": p.target_entry_id})
+                        source_rows.append({
+                            "id": p.source_refs[0] if p.source_refs else p.target_entry_id,
+                            "source": "multi-pass-consolidation",
+                            "entry_id": p.target_entry_id,
+                        })
 
                 logger.info("Pass %d/%d: %d proposals, outcome=%s, cost=%d/%d tokens",
                             pass_idx, effective_n, len(pass_proposals), outcome,
@@ -1045,9 +1055,15 @@ def create_dream_artifact(
                 proposals = last_valid_proposals
 
         # memory.patch (FR-16) — written FIRST so the recall harness can replay it.
-        if proposals:
+        # C1: Single YAML document with proposals + category_weights.
+        # This avoids the two-document concatenation bug where yaml.safe_load
+        # either raises ParserError or silently drops the second document.
+        if proposals or category_weights:
+            patch_doc: dict = {"proposals": [p.model_dump() for p in proposals]}
+            if category_weights:
+                patch_doc["category_weights"] = category_weights
             patches_yaml = _yaml.dump(
-                [p.model_dump() for p in proposals],
+                patch_doc,
                 default_flow_style=False, allow_unicode=True, sort_keys=False,
             )
             _write_file_atomic(artifact_dir / "memory.patch", patches_yaml)
@@ -1123,6 +1139,7 @@ def create_dream_artifact(
                 "proposals_removed": e.proposals_removed,
                 "outcome": e.outcome,
                 "cost": {"tokens_in": e.cost.tokens_in, "tokens_out": e.cost.tokens_out, "cache_read_tokens": e.cost.cache_read_tokens},
+                "duration_ms": round(e.duration_ms, 1),
             } for e in pass_audit_entries],
             per_pass_cost=[{
                 "tokens_in": c.tokens_in, "tokens_out": c.tokens_out, "cache_read_tokens": c.cache_read_tokens,
@@ -1205,17 +1222,7 @@ def create_dream_artifact(
                 for nudge in nudges["high_hit_rate"]:
                     category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
                 if category_weights:
-                    # C1: Write category_weights as YAML, not JSON.
-                    # yaml.safe_load only reads the first document; appending
-                    # JSON after a YAML list silently drops the weights.
-                    patch_path = artifact_dir / "memory.patch"
-                    existing = patch_path.read_text(encoding="utf-8") if patch_path.exists() else ""
-                    weight_yaml = _yaml.dump(
-                        {"category_weights": category_weights},
-                        default_flow_style=False, allow_unicode=True, sort_keys=False,
-                    )
-                    _write_file_atomic(patch_path, existing + "\n" + weight_yaml)
-                    report_lines += ["", f"**Category weights written to memory.patch:** "
+                    report_lines += ["", f"**Category weights included in memory.patch:** "
                                         f"{len(category_weights)} category(es)."]
 
                 # Write blind-spot vocab suggestions to preflight.patch
@@ -1270,6 +1277,10 @@ def create_dream_artifact(
                 single_cost = baseline_cmp.single_pass_cost.tokens_in + baseline_cmp.single_pass_cost.tokens_out
                 multi_cost = baseline_cmp.multi_pass_cost.tokens_in + baseline_cmp.multi_pass_cost.tokens_out
                 report_lines.append(f"**Cost delta:** {multi_cost - single_cost:+d} tokens")
+                # M1: latency delta
+                if pass_audit_entries:
+                    total_ms = sum(e.duration_ms for e in pass_audit_entries)
+                    report_lines.append(f"**Total consolidation latency:** {total_ms:.0f} ms")
                 report_lines.append(f"**VERDICT: {baseline_cmp.verdict}**")
 
         if dry_run:
@@ -1550,6 +1561,10 @@ def apply_dream(
         return {"status": "no_changes", "operations": 0, "hash": current_hash}
 
     proposals_raw = _yaml.safe_load(patch_path.read_text(encoding="utf-8"))
+    # C1: Handle both legacy list format and new dict format
+    # {"proposals": [...], "category_weights": {...}}
+    if isinstance(proposals_raw, dict):
+        proposals_raw = proposals_raw.get("proposals", [])
     if not isinstance(proposals_raw, list):
         return {"status": "no_changes", "operations": 0, "hash": current_hash}
 

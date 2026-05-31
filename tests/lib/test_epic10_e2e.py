@@ -46,31 +46,27 @@ def dream_env(tmp_path):
 # ---------------------------------------------------------------------------
 
 class TestC1MemoryPatchIntegrity:
-    """C1: memory.patch must be valid YAML throughout — no JSON appended."""
+    """C1: memory.patch must be a single valid YAML document with proposals + category_weights."""
 
-    def test_memory_patch_is_valid_yaml(self, dream_env):
-        """C1: yaml.safe_load(memory.patch) must return the full content,
-        not just the first YAML document (which would drop category_weights).
+    def test_memory_patch_is_valid_yaml_with_category_weights(self, dream_env):
+        """C1: yaml.safe_load(memory.patch) must return a dict with 'proposals' key,
+        and 'category_weights' must be present when nudges are seeded.
         """
-        from lib.hermes_dream import create_dream_artifact
+        import yaml
+        from lib.hermes_dream import create_dream_artifact, PatchProposal, CostInfo
 
         memory_dir, dreams_dir = dream_env
 
-        # Patch llm_call to return fixture proposals
-        mock_proposals = [
-            {
-                "op": "update",
-                "type": "fact",
-                "target_entry_id": "00000000",
-                "body": "User prefers dark mode (confirmed)",
-                "rationale": "reinforce",
-                "confidence": "high",
-                "risk_class": "additive",
-            },
-        ]
+        mock_nudges = {
+            "low_hit_rate": [{"category": "git", "hit_rate": 0.1, "unrelated_rate": 0.5}],
+            "high_hit_rate": [{"category": "docker", "hit_rate": 0.9, "unrelated_rate": 0.05}],
+            "blind_spots": [],
+        }
 
-        from lib.hermes_dream import PatchProposal, CostInfo
-        with mock.patch("lib.hermes_dream._run_consolidation_pass") as mock_pass:
+        with mock.patch("lib.hermes_dream._run_consolidation_pass") as mock_pass, \
+             mock.patch("lib.hermes_memory.build_hit_rate_report", return_value={"sessions": 28}), \
+             mock.patch("lib.hermes_memory.propose_category_weight_nudges", return_value=mock_nudges):
+
             mock_pass.return_value = (
                 [PatchProposal(
                     op="update", type="fact", target_entry_id="00000000",
@@ -92,13 +88,20 @@ class TestC1MemoryPatchIntegrity:
         patch_path = Path(dreams_dir) / dream_id / "memory.patch"
         assert patch_path.exists(), "memory.patch not written"
 
-        import yaml
         content = patch_path.read_text(encoding="utf-8")
-        # C1: yaml.safe_load must parse the ENTIRE file, not just first doc
+        # C1: Must parse as a single YAML document (no ParserError)
         parsed = yaml.safe_load(content)
-        assert parsed is not None, "memory.patch parsed as empty"
-        # Must be a list (the proposals), not a truncated first document
-        assert isinstance(parsed, list), f"Expected list, got {type(parsed)}"
+        assert isinstance(parsed, dict), f"Expected dict, got {type(parsed)}"
+        assert "proposals" in parsed, "Missing 'proposals' key"
+        assert isinstance(parsed["proposals"], list), "proposals must be a list"
+
+        # C1: category_weights must be present when nudges are seeded
+        assert "category_weights" in parsed, "category_weights missing from memory.patch"
+        cw = parsed["category_weights"]
+        assert "git" in cw, "git category should be in category_weights (low hit rate)"
+        assert cw["git"]["direction"] == "down"
+        assert "docker" in cw, "docker category should be in category_weights (high hit rate)"
+        assert cw["docker"]["direction"] == "up"
 
 
 # ---------------------------------------------------------------------------
@@ -260,10 +263,11 @@ class TestE2EMultiPass:
 
         artifact_dir = Path(dreams_dir) / dream_id
 
-        # C1: memory.patch is valid YAML
+        # C1: memory.patch is valid YAML dict with proposals key
         patch_content = (artifact_dir / "memory.patch").read_text(encoding="utf-8")
         parsed = _yaml.safe_load(patch_content)
-        assert parsed is not None and isinstance(parsed, list)
+        assert isinstance(parsed, dict) and "proposals" in parsed
+        assert isinstance(parsed["proposals"], list)
 
         # Manifest checks
         manifest = json.loads((artifact_dir / "manifest.json").read_text(encoding="utf-8"))
