@@ -17,8 +17,8 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 
-def transform_terminal_output(ctx, text: str, **kwargs) -> str | None:
-    """Prepend BMAD status header to *text* if inside a BMAD project.
+def transform_terminal_output(ctx, output: str, **kwargs) -> str | None:
+    """Prepend BMAD status header to terminal *output* if inside a BMAD project.
 
     Returns a new string with the header prepended, or ``None`` to
     pass through unchanged (when not in a BMAD project or when
@@ -54,7 +54,7 @@ def transform_terminal_output(ctx, text: str, **kwargs) -> str | None:
         if len(header) > 120:
             header = header[:117] + "..."
 
-        return f"{header}\n{text}"
+        return f"{header}\n{output}"
     except Exception:
         logger.exception("[bmad:transform_terminal_output] Header render failed")
         return None  # Hooks never raise
