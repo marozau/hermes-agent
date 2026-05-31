@@ -207,11 +207,19 @@ def bootstrap_workspace(
             )
 
     # ── Validate worktrees ──────────────────────────────────────────
+    seen_names: set[str] = set()
     for wt in worktrees:
         if not wt.get("name") or not wt.get("upstream") or not wt.get("branch"):
             raise ValueError(
                 f"Each worktree must have name, upstream, and branch: {wt}"
             )
+        # R3-m6: Case-insensitive duplicate detection
+        name_lower = wt["name"].lower()
+        if name_lower in seen_names:
+            raise ValueError(
+                f"Duplicate worktree name (case-insensitive): {wt['name']!r}"
+            )
+        seen_names.add(name_lower)
         upstream = Path(wt["upstream"]).expanduser()
         if not upstream.exists():
             raise ValueError(f"Upstream path does not exist: {upstream}")

@@ -63,7 +63,17 @@ def is_write_allowed(
     for wt in ws_config.worktrees:
         wt_root = root / wt.path
         try:
-            resolved.relative_to(wt_root.resolve())
+            rel_to_wt = resolved.relative_to(wt_root.resolve())
+            # R3-m5: Block writes to .git/ inside worktrees. The worktree's
+            # .git is a FILE pointing to upstream's .git/worktrees/<name>/ —
+            # unrestricted writes corrupt upstream.
+            rel_str = str(rel_to_wt)
+            if rel_str.startswith(".git") or rel_str == ".git":
+                logger.warning(
+                    "[bmad:workspace] Blocked write to .git/ inside worktree: %s",
+                    file_path,
+                )
+                return False
             return True
         except ValueError:
             continue

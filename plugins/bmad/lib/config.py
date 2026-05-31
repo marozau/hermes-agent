@@ -53,6 +53,33 @@ class WorktreeSpec(BaseModel):
             )
         return v
 
+    @field_validator("runtime_mirror")
+    @classmethod
+    def runtime_mirror_must_not_point_into_workspace(cls, v: str | None) -> str | None:
+        """B-4: Validate that runtime_mirror target is not under workspace paths.
+
+        The mirror writes outside pre_tool_call's boundary. If the target were
+        inside a worktree or planning-artifacts, it would silently corrupt
+        workspace state.  We can only validate that the expanded path is
+        absolute and does NOT contain 'worktree/' or 'planning-artifacts' as
+        path segments — a full validation against the actual workspace root
+        requires the WorkspaceConfig context (done at load time).
+        """
+        if v is None:
+            return v
+        expanded = Path(v).expanduser().resolve()
+        parts = set(expanded.parts)
+        # Must not point into a worktree or planning-artifacts
+        if "worktree" in parts:
+            raise ValueError(
+                f"runtime_mirror must not target a path containing 'worktree/': {v!r}"
+            )
+        if "planning-artifacts" in parts:
+            raise ValueError(
+                f"runtime_mirror must not target 'planning-artifacts/': {v!r}"
+            )
+        return v
+
 
 class WorkspaceConfig(BaseModel):
     """Top-level workspace configuration embedded in ``bmad/config.yaml``."""

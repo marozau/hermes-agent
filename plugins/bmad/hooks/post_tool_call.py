@@ -26,6 +26,16 @@ from pathlib import Path
 
 logger = logging.getLogger(__name__)
 
+# B-5: Dedicated runtime_mirror logger pinned to stderr. Prevents
+# re-entrancy if someone configures a FileHandler writing to
+# planning-artifacts/logs/ — the log write would trigger post_tool_call again.
+_mirror_logger = logging.getLogger("bmad.runtime_mirror")
+if not _mirror_logger.handlers:
+    _mirror_handler = logging.StreamHandler()  # stderr by default
+    _mirror_handler.setFormatter(logging.Formatter("%(name)s %(levelname)s: %(message)s"))
+    _mirror_logger.addHandler(_mirror_handler)
+    _mirror_logger.propagate = False  # Never propagate to root logger's file handlers
+
 # Ordered: most specific first
 PATH_RULES: list[tuple[re.Pattern, str, str]] = [
     (re.compile(r"planning-artifacts/solutioning-gate-check.*\.md$"), "solutioning", "solutioning-gate-check"),
@@ -123,13 +133,25 @@ def _try_runtime_mirror(
                 continue
 
             # File belongs to this worktree
-            mirror_root = Path(os.path.expanduser(runtime_mirror))
+            mirror_root = Path(os.path.expanduser(runtime_mirror)).resolve()
             if not mirror_root.exists():
                 logger.warning(
                     "[bmad:runtime_mirror] Mirror dir missing: %s — skipping",
                     mirror_root,
                 )
                 return  # AC-6.8.5: warn, don't block
+
+            # B-4: Validate mirror target is NOT under workspace paths
+            # (worktrees, planning-artifacts, bmad/). This check fires at
+            # hook-time, complementing the config-load validator.
+            mirror_parts = set(mirror_root.parts)
+            if "worktree" in mirror_parts or "planning-artifacts" in mirror_parts:
+                logger.error(
+                    "[bmad:runtime_mirror] BLOCKED: mirror target %s is inside "
+                    "workspace — would bypass write boundary (B-4)",
+                    mirror_root,
+                )
+                return
 
             dest = mirror_root / rel
 
@@ -147,12 +169,21 @@ def _try_runtime_mirror(
             dest.parent.mkdir(parents=True, exist_ok=True)
             shutil.copy2(str(resolved), str(dest))
 
+            # R3-m14: fsync the destination to prevent metadata visibility
+            # race on APFS under heavy I/O
+            try:
+                fd = os.open(str(dest), os.O_RDONLY)
+                os.fsync(fd)
+                os.close(fd)
+            except OSError:
+                pass
+
             # Clean matching __pycache__/*.pyc (WI-5)
             _clean_pycache(dest)
 
-            # AC-6.8.7: Telemetry
-            logger.info(
-                "[bmad:runtime_mirror] %s → %s",
+            # AC-6.8.7: Telemetry — use dedicated stderr-only logger (B-5)
+            _mirror_logger.info(
+                "%s → %s",
                 resolved, dest,
             )
             return  # Only mirror to first matching worktree
