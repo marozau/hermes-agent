@@ -1,131 +1,76 @@
-version: "3.9"
-
+#
+# docker-compose.yml for Hermes Agent
+#
+# Usage:
+#   HERMES_UID=$(id -u) HERMES_GID=$(id -g) docker compose up -d
+#
+# Set HERMES_UID / HERMES_GID to the host user that owns ~/.hermes so
+# files created inside the container stay readable/writable on the host.
+# The s6-overlay stage2 hook remaps the internal `hermes` user to these
+# values via usermod/groupmod; each supervised service then drops to that
+# user via `s6-setuidgid`.
+#
+# Security notes:
+#   - The dashboard service binds to 127.0.0.1 by default. It stores API
+#     keys; exposing it on LAN without auth is unsafe. If you want remote
+#     access, use an SSH tunnel or put it behind a reverse proxy that
+#     adds authentication — do NOT pass --insecure --host 0.0.0.0.
+#   - If you override entrypoint, keep `/init` as the first command in
+#     the chain (or let docker use the image's default ENTRYPOINT,
+#     which is `["/init", "/opt/hermes/docker/main-wrapper.sh"]`).
+#     `/init` is s6-overlay's PID 1 — it runs the cont-init.d scripts
+#     (chown, profile reconcile, dashboard toggle) and sets up the
+#     supervision tree before any service starts. Bypassing it skips
+#     all of that setup and the gateway will not work correctly.
+#   - The gateway's API server is off unless you uncomment API_SERVER_KEY
+#     and API_SERVER_HOST. See docs/user-guide/api-server.md before doing
+#     this on an internet-facing host.
+#
 services:
-  qdrant:
-    image: qdrant/qdrant:${QDRANT_TAG:-latest}
-    container_name: hermes-qdrant
-    ports:
-      - "${QDRANT_HTTP_PORT:-6333}:6333"
-      - "${QDRANT_GRPC_PORT:-6334}:6334"
+  gateway:
+    build: .
+    image: hermes-agent
+    container_name: hermes
+    restart: unless-stopped
+    network_mode: host
     volumes:
-      - qdrant-data:/qdrant/storage
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - |
-          bash -c '
-            exec 3<>/dev/tcp/localhost/6333
-            printf "GET /readyz HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n" >&3
-            grep -q "200 OK" <&3
-          '
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    networks:
-      - hermes-net
-    restart: unless-stopped
+      - ~/.hermes:/opt/data
+    environment:
+      - HERMES_UID=${HERMES_UID:-10000}
+      - HERMES_GID=${HERMES_GID:-10000}
+      # To expose the OpenAI-compatible API server beyond localhost,
+      # uncomment BOTH lines (API_SERVER_KEY is mandatory for auth):
+      # - API_SERVER_HOST=0.0.0.0
+      # - API_SERVER_KEY=${API_SERVER_KEY}
+      # Microsoft Teams — uncomment and fill in to enable Teams gateway.
+      # Register your bot at https://dev.botframework.com/ to get these values.
+      # - TEAMS_CLIENT_ID=${TEAMS_CLIENT_ID}
+      # - TEAMS_CLIENT_SECRET=${TEAMS_CLIENT_SECRET}
+      # - TEAMS_TENANT_ID=${TEAMS_TENANT_ID}
+      # - TEAMS_ALLOWED_USERS=${TEAMS_ALLOWED_USERS}
+      # - TEAMS_PORT=${TEAMS_PORT:-3978}
+      # Google Chat — uncomment and fill in to enable the Google Chat gateway.
+      # See website/docs/user-guide/messaging/google_chat.md for the full setup.
+      # The SA JSON path must point to a file mounted into the container —
+      # add a volume entry above (e.g. ``- ~/.hermes/google-chat-sa.json:/secrets/google-chat-sa.json:ro``)
+      # then set GOOGLE_CHAT_SERVICE_ACCOUNT_JSON to that mount path.
+      # - GOOGLE_CHAT_PROJECT_ID=${GOOGLE_CHAT_PROJECT_ID}
+      # - GOOGLE_CHAT_SUBSCRIPTION_NAME=${GOOGLE_CHAT_SUBSCRIPTION_NAME}
+      # - GOOGLE_CHAT_SERVICE_ACCOUNT_JSON=${GOOGLE_CHAT_SERVICE_ACCOUNT_JSON}
+      # - GOOGLE_CHAT_ALLOWED_USERS=${GOOGLE_CHAT_ALLOWED_USERS}
+    command: ["gateway", "run"]
 
-  prefect-server:
-    image: prefecthq/prefect:${PREFECT_TAG:-3-latest}
-    container_name: hermes-prefect-server
-    command:
-      - prefect
-      - server
-      - start
-      - --host
-      - 0.0.0.0
-      - --port
-      - "4200"
-    ports:
-      - "${PREFECT_SERVER_PORT:-4200}:4200"
+  dashboard:
+    image: hermes-agent
+    container_name: hermes-dashboard
+    restart: unless-stopped
+    network_mode: host
+    depends_on:
+      - gateway
     volumes:
-      - prefect-db:/root/.prefect
+      - ~/.hermes:/opt/data
     environment:
-      - PREFECT_SERVER_API_HOST=0.0.0.0
-      - PREFECT_SERVER_API_PORT=4200
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:4200/api/health')"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      - qdrant
-    networks:
-      - hermes-net
-    restart: unless-stopped
-
-  prefect-worker:
-    image: prefecthq/prefect:${PREFECT_TAG:-3-latest}
-    container_name: hermes-prefect-worker
-    command:
-      - prefect
-      - worker
-      - start
-      - --pool
-      - ${PREFECT_WORK_POOL:-hermes-pool}
-      - --type
-      - process
-    environment:
-      - PREFECT_API_URL=http://prefect-server:4200/api
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - python -c "import urllib.request; urllib.request.urlopen('http://prefect-server:4200/api/health')"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      prefect-server:
-        condition: service_healthy
-    networks:
-      - hermes-net
-    restart: unless-stopped
-
-  hermes-gateway:
-    build:
-      context: .
-      dockerfile: Dockerfile
-      args:
-        - HERMES_GIT_SHA=${HERMES_GIT_SHA:-}
-    image: hermes-gateway:${HERMES_TAG:-latest}
-    container_name: hermes-gateway
-    ports:
-      - "${HERMES_API_PORT:-8642}:8642"
-      - "${HERMES_WEBHOOK_PORT:-8648}:8648"
-    volumes:
-      - hermes-state:/opt/data
-    environment:
-      - HERMES_HOME=/opt/data
-      - QDRANT_URL=http://qdrant:6333
-    healthcheck:
-      test:
-        - CMD-SHELL
-        - python -c "import urllib.request; urllib.request.urlopen('http://localhost:8642/health')"
-      interval: 10s
-      timeout: 5s
-      retries: 5
-      start_period: 30s
-    depends_on:
-      qdrant:
-        condition: service_healthy
-    networks:
-      - hermes-net
-    restart: unless-stopped
-
-volumes:
-  qdrant-data:
-    name: hermes-qdrant-data
-  prefect-db:
-    name: hermes-prefect-db
-  hermes-state:
-    name: hermes-state
-
-networks:
-  hermes-net:
-    name: hermes-net
-    driver: bridge
+      - HERMES_UID=${HERMES_UID:-10000}
+      - HERMES_GID=${HERMES_GID:-10000}
+    # Localhost-only. For remote access, tunnel via `ssh -L 9119:localhost:9119`.
+    command: ["dashboard", "--host", "127.0.0.1", "--no-open"]

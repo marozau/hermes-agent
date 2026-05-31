@@ -12,7 +12,7 @@ import sys
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Set, Tuple
 
-from hermes_constants import get_config_path, get_default_hermes_root, get_hermes_home, get_skills_dir, is_termux
+from hermes_constants import get_config_path, get_skills_dir, is_termux
 
 logger = logging.getLogger(__name__)
 
@@ -324,72 +324,13 @@ def get_external_skills_dirs() -> List[Path]:
     return result
 
 
-def _get_shared_skills_dir() -> Optional[Path]:
-    """Return the shared skills directory when it should be loaded.
-
-    The shared directory is the default profile's ``skills/`` dir
-    (``<hermes_root>/skills/``).  It is included in the union loading
-    order for non-default profiles that have ``skills.shared: true``
-    in their config.
-
-    Returns ``None`` when the shared dir should NOT be loaded
-    (default profile, or skills.shared is absent/false).
-    """
-    # Only relevant in profile mode — when HERMES_HOME points inside
-    # <root>/profiles/<name>.  In the default profile the shared dir
-    # IS the local dir, so there's nothing to add.
-
-    hermes_home = get_hermes_home()
-    default_root = get_default_hermes_root()
-    try:
-        if hermes_home.resolve() == default_root.resolve():
-            return None  # default profile — no separate shared dir
-    except OSError:
-        return None
-
-    # Check config for skills.shared
-    config_path = get_config_path()
-    if not config_path.exists():
-        return None
-    try:
-        parsed = yaml_load(config_path.read_text(encoding="utf-8"))
-    except Exception:
-        return None
-    if not isinstance(parsed, dict):
-        return None
-
-    skills_cfg = parsed.get("skills")
-    if not isinstance(skills_cfg, dict):
-        return None
-    if not skills_cfg.get("shared"):
-        return None
-
-    shared = default_root / "skills"
-    return shared
-
-
 def get_all_skills_dirs() -> List[Path]:
-    """Return all skill directories in union loading order.
+    """Return all skill directories: local ``~/.hermes/skills/`` first, then external.
 
-    Loading order:
-    1. Local profile skills (``<hermes_home>/skills/``) — always first
-    2. Shared skills (``<root>/skills/``) — included when ``skills.shared``
-       is true AND the active profile is non-default
-    3. External dirs from ``skills.external_dirs`` in config
-
-    The local dir is always first (and always included even if it doesn't
-    exist yet — callers handle that).  External dirs follow in config order.
-
-    Precedence: when a skill exists in both local and shared (or external)
-    directories, the local copy wins because callers search in order and
-    stop at the first match.
+    The local dir is always first (and always included even if it doesn't exist
+    yet — callers handle that).  External dirs follow in config order.
     """
     dirs = [get_skills_dir()]
-
-    shared_dir = _get_shared_skills_dir()
-    if shared_dir is not None:
-        dirs.append(shared_dir)
-
     dirs.extend(get_external_skills_dirs())
     return dirs
 
