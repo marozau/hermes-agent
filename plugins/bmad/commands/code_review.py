@@ -53,6 +53,7 @@ Different profiles can have different reviewer policies (e.g. a
 from __future__ import annotations
 
 import logging
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -522,9 +523,9 @@ def _aggregate(
     """Format the reviewer output into canonical Markdown.
 
     Handles both LLM-delegated and subprocess (OCR) results.
-    F-4 fix: runs consensus classification via ocr_triage.merge_findings.
+    F-4 fix + N-1 fix: runs consensus classification with ALL sources.
     """
-    from plugins.bmad.lib.ocr_triage import merge_findings, normalize_ocr_finding
+    from plugins.bmad.lib.ocr_triage import merge_findings
 
     lines: list[str] = []
     lines.append("# Code Review — adversarial multi-reviewer fan-out")
@@ -588,10 +589,18 @@ def _aggregate(
         lines.append(f"_OCR completed in {elapsed}s_")
         lines.append("")
 
-    # F-4: Consensus classification (OI-12)
-    if ocr_findings_raw:
+    # N-1 fix: Extract LLM reviewer findings for multi-source consensus
+    llm_source_findings = _extract_llm_findings(llm_results, reviewers)
+
+    # F-4 + N-1: Consensus classification with ALL sources (OI-12)
+    if ocr_findings_raw or llm_source_findings:
         try:
-            merged = merge_findings(ocr_findings=ocr_findings_raw)
+            merged = merge_findings(
+                blind_findings=llm_source_findings.get("blind"),
+                edge_findings=llm_source_findings.get("edge"),
+                auditor_findings=llm_source_findings.get("auditor"),
+                ocr_findings=ocr_findings_raw if ocr_findings_raw else None,
+            )
             if merged:
                 lines.append("---")
                 lines.append("## Consensus Signal")
@@ -605,7 +614,7 @@ def _aggregate(
                     )
                 lines.append("")
         except Exception as e:
-            logger.debug("[bmad:code-review] Consensus classification failed: %s", e)
+            logger.warning("[bmad:code-review] Consensus classification failed: %s", e)
 
     # Triage hint at the end
     lines.append("---")
@@ -622,6 +631,98 @@ def _aggregate(
 
 
 # ── Helpers ─────────────────────────────────────────────────────────────────
+
+
+def _extract_llm_findings(llm_results: list[dict], reviewers: list[dict]) -> dict[str, list[dict]]:
+    """Extract structured findings from LLM reviewer summaries.
+
+    N-1 fix: parse LLM markdown output into dict format so merge_findings
+    can correlate them with OCR findings for multi-source consensus.
+
+    Each LLM reviewer gets a source key: 'blind', 'edge', 'auditor'.
+    Returns {source_key: [finding_dicts]}.
+    """
+    source_map = {}
+    for i, reviewer in enumerate(reviewers):
+        role = reviewer.get("role", "").lower()
+        if "blind" in role:
+            key = "blind"
+        elif "edge" in role:
+            key = "edge"
+        elif "acceptance" in role or "auditor" in role:
+            key = "auditor"
+        else:
+            key = f"llm_{i}"
+        if i < len(llm_results) and not llm_results[i].get("error"):
+            source_map[key] = _parse_llm_summary(llm_results[i].get("summary", ""), key)
+    return source_map
+
+
+# Regex for common file:line patterns in LLM reviewer output
+_FILE_LINE_RE = re.compile(
+    r"(?:^|\s|[`\"'])([a-zA-Z0-9_/.\\-]+\.(?:py|ts|tsx|js|rs|md|yaml|yml|json))"
+    r"(?:[:\s#]+)(\d+)",
+    re.MULTILINE,
+)
+
+# Severity keywords in LLM reviewer prose
+_SEV_KEYWORDS = {
+    "critical": "MAJOR",
+    "blocker": "MAJOR",
+    "major": "MAJOR",
+    "high": "MAJOR",
+    "should fix": "MINOR",
+    "minor": "MINOR",
+    "medium": "MINOR",
+    "low": "NIT",
+    "nit": "NIT",
+    "consider": "NIT",
+    "suggestion": "NIT",
+}
+
+
+def _parse_llm_summary(summary: str, source: str) -> list[dict]:
+    """Parse LLM markdown summary into finding dicts.
+
+    Best-effort extraction of file:line locations and severity from prose.
+    """
+    findings = []
+    if not summary:
+        return findings
+
+    # Split into paragraphs/bullets for per-finding extraction
+    blocks = re.split(r"\n(?=[-*#]|\d+\.)", summary)
+
+    for block in blocks:
+        matches = _FILE_LINE_RE.findall(block)
+        if not matches:
+            continue
+        # Take first file:line match per block
+        file_path, line_str = matches[0]
+        line_num = int(line_str)
+
+        # Guess severity from keywords in the block
+        severity = "MINOR"  # default for LLM findings
+        block_lower = block.lower()
+        for keyword, sev in _SEV_KEYWORDS.items():
+            if keyword in block_lower:
+                severity = sev
+                break
+
+        # Extract message: first sentence or first 200 chars
+        message = block.strip().split("\n")[0][:200]
+        # Strip markdown formatting
+        message = re.sub(r"[*#`\[\]()]", "", message).strip()
+
+        findings.append({
+            "file": file_path,
+            "line": line_num,
+            "message": message,
+            "severity": severity,
+            "source": source,
+        })
+
+    return findings
 
 
 def _resolve_project_dir(ctx) -> Path:
