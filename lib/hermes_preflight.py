@@ -20,6 +20,7 @@ import logging
 import math
 import os
 import re
+import threading
 import time
 from collections import OrderedDict
 from dataclasses import dataclass, field
@@ -64,6 +65,13 @@ class TrajectoryHit:
     has_resolution: bool = False
     score: float = 0.0
     entry_id: str = ""
+    # Story 8.3: type and source for scoring
+    entry_type: str = "unknown"     # typed entry type (preference, fact, etc.)
+    entry_source: str = ""          # frontmatter source (e.g. "user-correction")
+    # Story 9.1: access count for strength factor
+    access_count: int = 0           # from frontmatter; 0 if missing
+    # Story 8.4: hybrid score (set by apply_hybrid_scoring when embeddings available)
+    hybrid_score: Optional[float] = None  # None = use bm25_score in ranker
 
 
 @dataclass
@@ -100,6 +108,17 @@ class PreflightTelemetry:
     elapsed_ms: float
     mode: str = "live"       # P6: telemetry knows whether injection happened
     cited_entry_ids: list[str] = field(default_factory=list)
+    # Story 8.1: YAKE enrichment telemetry
+    intent_source: str = ""       # "rule-based" | "yake-fallback"
+    yake_terms: list[str] = field(default_factory=list)
+    # Story 8.5: hard cap telemetry
+    truncated_count: int = 0      # entries suppressed beyond top-K cap
+    # Story 8.4: embedding telemetry
+    embedding_source: str = ""     # "deepseek" | "openai" | "cache" | "failed" | ""
+    # Story 8.6: reranker telemetry
+    rerank_outcome: str = ""       # "disabled" | "ok" | "parse-failed" | "failed" | ""
+    # Story 9.3: category for hit-rate report (A4: derived from domains[0])
+    category: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -203,6 +222,197 @@ def classify_intent(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Story 8.1: YAKE keyword enrichment for FTS queries
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def enrich_query_with_yake(
+    base_domains: list[str],
+    message: str,
+) -> tuple[list[str], list[str]]:
+    """Story 8.1 / AC3: OR YAKE keywords into the recall query.
+
+    Returns (enriched_domains, yake_terms) where enriched_domains includes
+    both the original domain terms and the YAKE-derived terms.
+    yake_terms is the list of what was added (for telemetry).
+    """
+    try:
+        from lib._yake import extract_keywords
+        yake_terms = extract_keywords(message)[:8]
+    except Exception as e:
+        logger.debug("YAKE enrichment failed: %s", e)
+        return base_domains, []
+
+    if not yake_terms:
+        return base_domains, []
+
+    # Deduplicate: don't add terms already in base_domains
+    existing = {d.lower() for d in base_domains}
+    new_terms = [t for t in yake_terms if t.lower() not in existing]
+    enriched = base_domains + new_terms
+    return enriched, new_terms
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 8.4: Hybrid recall base-score (BM25 + embedding cosine)
+# ─────────────────────────────────────────────────────────────────────────────
+
+# In-process LRU embedding cache — OrderedDict[sha256(text), vec]
+_embedding_cache: "OrderedDict[str, list[float]]" = OrderedDict()
+_EMBEDDING_CACHE_MAX = 1024
+_embedding_lock = threading.Lock()  # D4: defensive lock for cache mutations
+
+# Cosine similarity weights for hybrid scoring
+_HYBRID_COSINE_WEIGHT = 0.7
+_HYBRID_BM25_WEIGHT = 0.3
+
+
+def _text_hash(text: str, provider: str = "", model: str = "") -> str:
+    """SHA-256 of text+provider+model for cache key. P9: provider-aware."""
+    if not isinstance(text, str):
+        return "__sentinel__"
+    key = f"{provider}:{model}:{text}"
+    return hashlib.sha256(key.encode("utf-8")).hexdigest()
+
+
+def _get_cached_embedding(text: str, provider: str = "", model: str = "") -> Optional[list[float]]:
+    """Check LRU cache for existing embedding. P9: provider-aware key."""
+    key = _text_hash(text, provider, model)
+    with _embedding_lock:
+        if key in _embedding_cache:
+            _embedding_cache.move_to_end(key)
+            return _embedding_cache[key]
+    return None
+
+
+def _cache_embedding(text: str, vec: list[float], provider: str = "", model: str = "") -> None:
+    """Store embedding in LRU cache. P8: skip empty vectors. P9: provider-aware key."""
+    if not vec:  # P8: don't cache empty vectors
+        return
+    key = _text_hash(text, provider, model)
+    with _embedding_lock:
+        _embedding_cache[key] = vec
+        if len(_embedding_cache) > _EMBEDDING_CACHE_MAX:
+            _embedding_cache.popitem(last=False)
+
+
+def _cosine_similarity(a: list[float], b: list[float]) -> float:
+    """Compute cosine similarity between two vectors."""
+    if not a or not b or len(a) != len(b):
+        return 0.0
+    dot = sum(x * y for x, y in zip(a, b))
+    norm_a = math.sqrt(sum(x * x for x in a))
+    norm_b = math.sqrt(sum(x * x for x in b))
+    if norm_a == 0 or norm_b == 0:
+        return 0.0
+    return dot / (norm_a * norm_b)
+
+
+def _get_embedding(text: str, workload: str = "recall_embed") -> Optional[list[float]]:
+    """Get embedding for text, using cache + llm_embed. Returns None on failure.
+
+    P10: consistent truncation to 500 chars for cache key alignment.
+    P8: empty vectors treated as None (fail-open).
+    """
+    truncated = text[:500]  # P10: consistent truncation for query and candidate
+    cached = _get_cached_embedding(truncated)
+    if cached is not None:
+        return cached
+    try:
+        from lib.hermes_llm import llm_embed
+        vec = llm_embed(truncated, workload)
+        if vec:  # P8: empty list is falsy — don't cache, return None
+            _cache_embedding(truncated, vec)
+            return vec
+        return None
+    except Exception as e:
+        logger.debug("Embedding failed for text[:50]: %s", e)
+        return None
+
+
+def _normalize_bm25_scores(hits: list[TrajectoryHit]) -> list[float]:
+    """Normalize BM25 scores to [0, 1] across the candidate set."""
+    if not hits:
+        return []
+    scores = [h.bm25_score for h in hits]
+    min_s = min(scores)
+    max_s = max(scores)
+    if max_s == min_s:
+        return [1.0] * len(scores)
+    return [(s - min_s) / (max_s - min_s) for s in scores]
+
+
+def apply_hybrid_scoring(
+    hits: list[TrajectoryHit],
+    query_text: str,
+    config: Optional[dict] = None,
+) -> tuple[list[TrajectoryHit], str]:
+    """Story 8.4: Apply hybrid BM25 + cosine scoring to hits.
+
+    When embeddings are available:
+        hybrid = 0.7 * cosine_sim(query, candidate) + 0.3 * bm25_normalized
+    When embeddings fail:
+        hybrid = bm25_normalized (fail-open; AC3)
+
+    Returns (hits, embedding_source) where embedding_source is one of:
+        "disabled" — config flag off
+        "ok" — embeddings used for at least one candidate
+        "cache" — all hits served from LRU cache
+        "failed" — query embedding failed; fell back to pure BM25
+        "partial" — some candidate embeddings failed
+    """
+    # Check config flag
+    use_embeddings = True
+    if config:
+        recall_cfg = config.get("recall", {})
+        if isinstance(recall_cfg, dict):
+            use_embeddings = bool(recall_cfg.get("use_embeddings", True))
+
+    if not use_embeddings or not hits:
+        return hits, "disabled"
+
+    # Normalize BM25 scores once
+    bm25_normalized = _normalize_bm25_scores(hits)
+
+    # Get query embedding — fail-open to pure BM25 (AC3)
+    query_vec = _get_embedding(query_text)
+    if query_vec is None:
+        logger.debug("Hybrid scoring: query embedding unavailable, falling back to BM25")
+        for i, h in enumerate(hits):
+            h.hybrid_score = bm25_normalized[i]
+        return hits, "failed"
+
+    # Get candidate embeddings and compute hybrid scores
+    all_from_cache = True
+    any_failed = False
+    for i, h in enumerate(hits):
+        cand_text = h.content[:500]
+        cand_vec = _get_embedding(cand_text)
+        if cand_vec is not None:
+            cos_sim = _cosine_similarity(query_vec, cand_vec)
+            h.hybrid_score = (
+                _HYBRID_COSINE_WEIGHT * cos_sim
+                + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
+            )
+            # Check if this came from cache vs fresh call
+            if _text_hash(cand_text) not in _embedding_cache:
+                all_from_cache = False
+        else:
+            # Candidate embedding failed — use pure BM25 for this one (AC3)
+            h.hybrid_score = bm25_normalized[i]
+            any_failed = True
+
+    if any_failed:
+        source = "partial"
+    elif all_from_cache:
+        source = "cache"
+    else:
+        source = "ok"
+
+    return hits, source
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Story 7.6 / FR-32: Skip ladder (cheap-first; P12 warm-up; P14 token match)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -285,6 +495,39 @@ def _resolve_entry_timestamp(entry_id: str) -> Optional[float]:
     return None
 
 
+# Cache for entry metadata (type, source, access_count) — avoids repeated reads
+_entry_meta_cache: "OrderedDict[str, dict]" = OrderedDict()
+_ENTRY_META_CACHE_MAX = 512
+
+
+def _resolve_entry_metadata(entry_id: str) -> dict:
+    """Story 8.3: look up entry type, source, access_count for scoring."""
+    if not entry_id:
+        return {}
+    if entry_id in _entry_meta_cache:
+        _entry_meta_cache.move_to_end(entry_id)
+        return _entry_meta_cache[entry_id]
+    try:
+        from lib.hermes_memory import read_entries
+    except Exception:
+        return {}
+    try:
+        for e in read_entries(read_only=True):
+            if e.get("id") == entry_id:
+                meta = {
+                    "type": e.get("type", "unknown"),
+                    "source": e.get("source", ""),
+                    "access_count": e.get("access_count", 0) or 0,
+                }
+                if len(_entry_meta_cache) >= _ENTRY_META_CACHE_MAX:
+                    _entry_meta_cache.popitem(last=False)
+                _entry_meta_cache[entry_id] = meta
+                return meta
+    except Exception:
+        pass
+    return {}
+
+
 def _fts5_safe_term(term: str) -> str:
     """P24: quote FTS5 terms to neutralize metacharacters."""
     return '"' + term.replace('"', '""') + '"'
@@ -299,7 +542,11 @@ def retrieve_trajectories(
     if not domains:
         return []
 
-    safe_terms = " OR ".join(_fts5_safe_term(d) for d in domains)
+    safe_terms = " OR ".join(
+        _fts5_safe_term(d) for d in domains if d and d.strip()
+    )
+    if not safe_terms:
+        return []
     query = f"TRAJECTORY ({safe_terms})"
     try:
         results = session_search_fn(query, limit)
@@ -350,6 +597,9 @@ def retrieve_trajectories(
         # Unknown timestamp → recency neutral (no boost).
         ts_for_hit = ts if ts is not None else 0.0
 
+        # Story 8.3: resolve entry metadata for type-boost scoring
+        meta = _resolve_entry_metadata(entry_id) if entry_id else {}
+
         hits.append(TrajectoryHit(
             id=entry_id or row.get("id", f"hit-{len(hits)}"),
             entry_id=entry_id,
@@ -359,6 +609,11 @@ def retrieve_trajectories(
             bm25_score=bm25_score,
             timestamp=ts_for_hit,
             has_resolution=(("→" in content) or ("->" in content)) and "fix" in content.lower(),
+            # Story 8.3: entry metadata for type-boost
+            entry_type=meta.get("type", "unknown"),
+            entry_source=meta.get("source", ""),
+            # Story 9.1: access count for strength factor
+            access_count=meta.get("access_count", 0) or 0,
         ))
 
     return hits
@@ -405,7 +660,12 @@ def rank_trajectories(
     hits: list[TrajectoryHit],
     config_path: Optional[str] = None,
 ) -> list[TrajectoryHit]:
-    """FR-30 four-factor scoring. P18: math.exp + recency clamped [0, 1]."""
+    """FR-30 four-factor scoring. P18: math.exp + recency clamped [0, 1].
+
+    Story 8.2: recency switched from exp(-Δdays/30) to power-law
+    (1 + hours_since_update) ** exponent, configurable via
+    recency: { form: power_law, exponent: -0.3 } in config.yaml.
+    """
     weights = {"bm25": 0.45, "recency": 0.25, "category": 0.20, "resolution": 0.10}
     category_weights: dict[str, float] = {
         "tool-misuse": 1.0,
@@ -415,6 +675,21 @@ def rank_trajectories(
         "hallucinated-api": 0.6,
         "requirement-drift": 0.6,
     }
+    # Story 8.2: recency config defaults
+    recency_form = "power_law"
+    recency_exponent = -0.3
+    # Story 8.3: type boost map defaults
+    type_boosts: dict[str, float] = {
+        "preference": 1.2,
+        "procedure": 1.1,
+        "fact": 1.0,
+        "trajectory": 1.0,
+        "episode": 0.8,
+        "superseded": 0.2,
+        "unknown": 0.6,
+    }
+    # Story 8.3: source boost for user-corrections (multiplicative, matching upstream)
+    correction_source_boost = 1.3
 
     if config_path:
         cfg_path = Path(config_path)
@@ -430,24 +705,220 @@ def rank_trajectories(
                     for k, v in cfg["category_weights"].items():
                         if isinstance(v, (int, float)):
                             category_weights[k] = float(v)
+                # Story 8.2: read recency config
+                rec_cfg = cfg.get("recency", {})
+                if isinstance(rec_cfg, dict):
+                    if rec_cfg.get("form") == "power_law":
+                        recency_form = "power_law"
+                    if isinstance(rec_cfg.get("exponent"), (int, float)):
+                        recency_exponent = float(rec_cfg["exponent"])
+                        if recency_exponent >= 0:
+                            logger.warning(
+                                "rank_trajectories: recency.exponent must be < 0, got %s — using default -0.3",
+                                recency_exponent,
+                            )
+                            recency_exponent = -0.3
+                # Story 8.3: read type_boosts config
+                tb = cfg.get("type_boosts")
+                if isinstance(tb, dict):
+                    for k, v in tb.items():
+                        if isinstance(v, (int, float)):
+                            type_boosts[k] = float(v)
+                # Story 8.3: read correction_source_boost
+                if isinstance(cfg.get("correction_source_boost"), (int, float)):
+                    correction_source_boost = float(cfg["correction_source_boost"])
             except Exception as e:
                 logger.warning("rank_trajectories: bad config: %s", e)
 
     now = time.time()
     for h in hits:
-        bm25_c = weights["bm25"] * h.bm25_score
-        # P18: math.exp; clamp recency to [0, 1] — no future-timestamp boost.
+        # P7: use hybrid_score when available (already weighted by apply_hybrid_scoring)
+        # to avoid double-weighting BM25 through the ranker's bm25 weight.
+        if h.hybrid_score is not None:
+            bm25_c = h.hybrid_score  # already 0.7*cosine + 0.3*bm25_normalized
+        else:
+            bm25_c = weights["bm25"] * h.bm25_score
+
+        # Story 8.2: power-law recency
+        # P18: clamp recency to [0, 1] — no future-timestamp boost.
         if h.timestamp > 0:
-            age_days = max(0.0, (now - h.timestamp) / 86400.0)
-            recency = min(1.0, max(0.0, math.exp(-age_days / 30.0)))
+            age_hours = max(0.0, (now - h.timestamp) / 3600.0)
+            if recency_form == "power_law":
+                recency = min(1.0, max(0.0, (1.0 + age_hours) ** recency_exponent))
+            else:
+                # Fallback to old exp form for backward compat
+                age_days = max(0.0, (now - h.timestamp) / 86400.0)
+                recency = min(1.0, max(0.0, math.exp(-age_days / 30.0)))
         else:
             recency = 0.0  # unknown timestamp → neutral
         rec_c = weights["recency"] * recency
+
         cat_c = weights["category"] * category_weights.get(h.category, 0.5)
         res_c = weights["resolution"] * (1.0 if h.has_resolution else 0.0)
-        h.score = bm25_c + rec_c + cat_c + res_c
+        four_factor = bm25_c + rec_c + cat_c + res_c
+
+        # Story 8.3: apply type boost and source boost
+        entry_type = getattr(h, 'entry_type', 'unknown')
+        type_w = type_boosts.get(entry_type, 1.0)
+        source_boost = 1.0
+        entry_source = getattr(h, 'entry_source', '')
+        if entry_source == "user-correction":
+            source_boost = correction_source_boost
+
+        # Story 9.1: strength factor from access_count
+        # (reads defensively — 0 if missing, so 8.3 ships first)
+        access_count = getattr(h, 'access_count', 0) or 0
+        strength = 1.0 + 0.1 * math.log(1 + max(0, access_count))
+
+        h.score = four_factor * type_w * strength * source_boost
 
     return sorted(hits, key=lambda h: h.score, reverse=True)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 8.6: LLM reranker — preflight_rerank workload
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Grep-able constant for the rerank prompt
+RERANK_PROMPT = """Given this query: {intent_summary}
+Which of these memories are most relevant?
+Return ONLY the numbers of the top 3 most relevant, as a JSON array.
+
+{candidates}"""
+
+_RERANK_TOP_N = 8  # candidates to feed to reranker
+_RERANK_TOP_K = 3  # final selection from reranker
+
+
+# A2: Pydantic gate for reranker output (Hard Invariant #11)
+try:
+    from pydantic import BaseModel as _RerankBM, Field as _RerankField, conint as _RerankConint
+    _IDX_MAX = _RERANK_TOP_N - 1
+    class RerankIndices(_RerankBM):
+        indices: list[_RerankConint(ge=0, le=_IDX_MAX)] = _RerankField(..., max_length=3)
+except ImportError:
+    RerankIndices = None  # type: ignore[assignment,misc]
+
+
+def _build_rerank_candidates(hits: list[TrajectoryHit], max_body: int = 200) -> str:
+    """Build the numbered candidate list for the rerank prompt."""
+    lines = []
+    for i, h in enumerate(hits[:_RERANK_TOP_N]):
+        body = h.content[:max_body].replace("\n", " ")
+        lines.append(f"[{i}] {body}")
+    return "\n".join(lines)
+
+
+def _parse_rerank_indices(raw_content: str, max_idx: int) -> Optional[list[int]]:
+    """Parse reranker response. Returns list of valid indices or None on failure.
+
+    Pydantic-gated: RerankIndices schema (Hard Invariant #11).
+    P18: handles both list and dict-with-"indices" shapes.
+    """
+    try:
+        from pydantic import BaseModel, Field, conint
+
+        # P19: build schema dynamically from _RERANK_TOP_N
+        _IDX_MAX = _RERANK_TOP_N - 1  # e.g. 7 when _RERANK_TOP_N=8
+
+        class RerankIndices(BaseModel):
+            indices: list[conint(ge=0, le=_IDX_MAX)] = Field(..., max_length=3)
+
+        # Try to extract JSON array from the response
+        import json as _json
+        import re as _re
+        text = raw_content.strip()
+
+        # P18: try direct parse first — handle both list and dict shapes
+        try:
+            parsed = _json.loads(text)
+            # P18: unwrap {"indices": [...]} dict shape
+            if isinstance(parsed, dict):
+                parsed = parsed.get("indices")
+            if isinstance(parsed, list):
+                result = RerankIndices(indices=parsed)
+                return [i for i in result.indices if i < max_idx]
+        except _json.JSONDecodeError:
+            pass
+        # Try to find JSON array in text
+        match = _re.search(r'\[[\d\s,]+\]', text)
+        if match:
+            parsed = _json.loads(match.group())
+            result = RerankIndices(indices=parsed)
+            return [i for i in result.indices if i < max_idx]
+    except Exception:
+        pass
+    return None
+
+
+def rerank_with_llm(
+    hits: list[TrajectoryHit],
+    query_text: str,
+    *,
+    config: Optional[dict] = None,
+) -> tuple[list[TrajectoryHit], str]:
+    """Story 8.6: LLM reranker via preflight_rerank workload.
+
+    Returns (reranked_hits, rerank_outcome) where rerank_outcome is one of:
+    - "disabled" — use_reranker is false
+    - "ok" — reranker returned valid indices
+    - "parse-failed" — reranker response couldn't be parsed
+    - "failed" — LLM call failed (fail-open to score-based)
+    - "not-enough-candidates" — fewer than 2 candidates, skip rerank
+
+    Fail-open: on any failure, returns the original top-3 from scoring.
+    """
+    # Check config flag
+    use_reranker = False
+    if config:
+        recall_cfg = config.get("recall", {})
+        if isinstance(recall_cfg, dict):
+            use_reranker = bool(recall_cfg.get("use_reranker", False))
+
+    if not use_reranker:
+        return hits[:_RERANK_TOP_K], "disabled"
+
+    if len(hits) < 2:
+        return hits[:_RERANK_TOP_K], "not-enough-candidates"
+
+    # Build prompt
+    candidates = _build_rerank_candidates(hits)
+    prompt = RERANK_PROMPT.format(
+        intent_summary=query_text[:200],
+        candidates=candidates,
+    )
+
+    # Call LLM via llm_call
+    try:
+        from lib.hermes_llm import LLMSpec, llm_call
+        spec = LLMSpec(
+            workload="preflight_rerank",
+            messages=[{"role": "user", "content": prompt}],
+            response_model=RerankIndices,  # HI #11: Pydantic gate
+            idempotency_key=f"rerank-{hashlib.sha256(query_text.encode()).hexdigest()[:16]}",
+        )
+        result = llm_call(spec)
+        content = result.get("content", "") if isinstance(result, dict) else str(result)
+        # P22: distinguish empty response from parse failure
+        if not content or not content.strip():
+            logger.debug("Rerank: empty response from LLM")
+            return hits[:_RERANK_TOP_K], "empty-response"
+    except Exception as e:
+        logger.warning("Rerank LLM call failed: %s — falling back to score-based", e)
+        return hits[:_RERANK_TOP_K], "failed"
+
+    # Parse response
+    indices = _parse_rerank_indices(content, len(hits))
+    if indices is None:
+        logger.debug("Rerank parse failed for content: %s", content[:200])
+        return hits[:_RERANK_TOP_K], "parse-failed"
+
+    # Select reranked hits
+    reranked = [hits[i] for i in indices if i < len(hits)]
+    if not reranked:
+        return hits[:_RERANK_TOP_K], "parse-failed"
+
+    return reranked[:_RERANK_TOP_K], "ok"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -465,7 +936,12 @@ def dedupe_and_cap(
 
     P21: when capping, guarantee ≥1 entry whose domain matches `primary_domain`
     (the user's top classified domain), if one exists among ranked hits.
+
+    Story 8.5: hard ceiling at k=3, validated from config.recall.top_k [1,3].
     """
+    # Story 8.5: enforce hard ceiling
+    k = min(k, 3)
+
     buckets: dict[tuple[str, str], list[TrajectoryHit]] = {}
     for h in ranked:
         buckets.setdefault((h.category, h.domain), []).append(h)
@@ -496,6 +972,13 @@ def dedupe_and_cap(
         deduped = capped
 
     return deduped[:k]
+
+
+def validate_top_k(value: int) -> int:
+    """Story 8.5: validate top_k config at startup. Must be [1, 3]."""
+    if not isinstance(value, int) or value < 1 or value > 3:
+        raise ValueError(f"top_k must be between 1 and 3, got {value}")
+    return value
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -582,6 +1065,12 @@ def write_preflight_telemetry(
         "elapsed_ms": round(telemetry.elapsed_ms, 2),
         "mode": telemetry.mode,
         "cited_entry_ids": telemetry.cited_entry_ids,
+        "intent_source": telemetry.intent_source,
+        "yake_terms": telemetry.yake_terms,
+        "truncated_count": telemetry.truncated_count,
+        "embedding_source": telemetry.embedding_source,
+        "rerank_outcome": telemetry.rerank_outcome,
+        "category": telemetry.category,  # A4: for Story 9.3 hit-rate report
     }, ensure_ascii=False, sort_keys=True) + "\n"
     _atomic_append(log_path / f"{today}.jsonl", row)
 
@@ -616,27 +1105,31 @@ def record_verify_citations(
     _atomic_append(log_path / f"{today}.jsonl", row)
 
 
+_citations_lock = threading.Lock()  # D4: defensive lock for persist_citations read-modify-write
+
+
 def persist_citations(session_id: str, entry_ids: list[str]) -> None:
     """DN3 / Story 7.7: persist preflight citations for trajectory writer."""
     if not entry_ids:
         return
     p = _preflight_dir() / "last-cited.json"
     p.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
-    try:
-        existing = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
-    except Exception:
-        existing = {}
-    existing[session_id] = {
-        "entry_ids": entry_ids,
-        "ts": datetime.now(timezone.utc).isoformat(),
-    }
-    tmp = p.with_suffix(p.suffix + ".tmp")
-    fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    try:
-        os.write(fd, (json.dumps(existing, indent=2) + "\n").encode("utf-8"))
-    finally:
-        os.close(fd)
-    os.replace(tmp, p)
+    with _citations_lock:
+        try:
+            existing = json.loads(p.read_text(encoding="utf-8")) if p.exists() else {}
+        except Exception:
+            existing = {}
+        existing[session_id] = {
+            "entry_ids": entry_ids,
+            "ts": datetime.now(timezone.utc).isoformat(),
+        }
+        tmp = p.with_suffix(p.suffix + ".tmp")
+        fd = os.open(str(tmp), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        try:
+            os.write(fd, (json.dumps(existing, indent=2) + "\n").encode("utf-8"))
+        finally:
+            os.close(fd)
+        os.replace(tmp, p)
 
 
 def read_citations(session_id: str) -> list[str]:
@@ -657,6 +1150,33 @@ def read_citations(session_id: str) -> list[str]:
 
 _gates: "OrderedDict[str, PreflightGate]" = OrderedDict()
 _GATES_MAX = 1024  # P17 LRU bound
+_HYDRATED = True  # stub — Bug 2 fix removed disk hydration
+_gates_lock = threading.Lock()  # D4: defensive lock for gate mutations
+
+
+# ─�─ Bug 2 fix compat stubs ─────────────────────────────────────────────────
+# These functions existed pre-Bug-2 (gates.json persistence). They are now
+# no-ops because gate state is derived from telemetry log. Kept only so the
+# V1 test file (test_hermes_preflight.py) can import without crashing.
+
+def _gates_path() -> Path:
+    """Stub — gates.json no longer used. Returns a path that won't exist."""
+    return _hermes_home() / "preflight" / "gates.json"
+
+
+def _ensure_hydrated() -> None:
+    """Stub — hydration now happens lazily in get_or_create_gate()."""
+    pass
+
+
+def _load_gates_from_disk() -> dict:
+    """Stub — gates.json no longer used."""
+    return {}
+
+
+def _save_gates_to_disk() -> None:
+    """Stub — gates.json no longer used."""
+    pass
 
 
 def _materialize_gate_from_log(session_id: str, enabled: bool) -> PreflightGate:
@@ -693,31 +1213,31 @@ def _materialize_gate_from_log(session_id: str, enabled: bool) -> PreflightGate:
 
 
 def get_or_create_gate(session_id: str, enabled: bool = True) -> PreflightGate:
-    if session_id in _gates:
-        gate = _gates[session_id]
-        gate.enabled = enabled
-        _gates.move_to_end(session_id)
+    with _gates_lock:
+        if session_id in _gates:
+            gate = _gates[session_id]
+            gate.enabled = enabled
+            _gates.move_to_end(session_id)
+            return gate
+        # Bug 2 fix: derive gate state from telemetry log instead of gates.json.
+        gate = _materialize_gate_from_log(session_id, enabled)
+        if len(_gates) >= _GATES_MAX:
+            _gates.popitem(last=False)
+
+        # P17b: carry forward turn_count from recently-active gates.
+        # Context compression creates a new session_id mid-conversation.
+        # Without this, the warm-up gate resets to 0 on every compression.
+        carried = 0
+        _now = time.monotonic()
+        for _sid, _gate in reversed(list(_gates.items())):
+            if _gate._last_invoked_at > 0 and (_now - _gate._last_invoked_at) < 30.0:
+                carried = _gate.turn_count
+                break
+
+        if carried > 0:
+            gate.turn_count = carried
+        _gates[session_id] = gate
         return gate
-    # Bug 2 fix: derive gate state from telemetry log instead of gates.json.
-    gate = _materialize_gate_from_log(session_id, enabled)
-    if len(_gates) >= _GATES_MAX:
-        _gates.popitem(last=False)
-
-    # P17b: carry forward turn_count from recently-active gates.
-    # Context compression creates a new session_id mid-conversation.
-    # Without this, the warm-up gate resets to 0 on every compression.
-    carried = 0
-    _now = time.monotonic()
-    for _sid, _gate in reversed(list(_gates.items())):
-        if _gate._last_invoked_at > 0 and (_now - _gate._last_invoked_at) < 30.0:
-            carried = _gate.turn_count
-            break
-
-    gate = PreflightGate(enabled=enabled, session_id=session_id)
-    if carried > 0:
-        gate.turn_count = carried
-    _gates[session_id] = gate
-    return gate
 
 
 def should_run_preflight(
@@ -764,6 +1284,20 @@ def should_run_preflight(
         session_search_fn=session_search_fn,
     )
 
+    # Story 8.1 / AC2: YAKE fallback when classify_intent fails
+    # (SMALL_NO_DOMAIN means no domain vocab matched AND message is short).
+    # If we have complexity or a longer message, try YAKE keywords instead
+    # of skipping.
+    intent_source = "rule-based"
+    yake_terms: list[str] = []
+    if reason == SkipReason.SMALL_NO_DOMAIN and intent.complexity:
+        # Complexity hit but no domain — try YAKE
+        enriched, yake_terms = enrich_query_with_yake(intent.domains, message)
+        if enriched:
+            intent.domains = enriched
+            intent_source = "yake-fallback"
+            reason = None  # override the skip
+
     if reason is not None:
         elapsed = (time.perf_counter() - t0) * 1000
         # P13 / FR-34: emit telemetry on skip path.
@@ -778,17 +1312,50 @@ def should_run_preflight(
             scores=[],
             elapsed_ms=elapsed,
             mode=mode,
+            intent_source=intent_source,
+            yake_terms=yake_terms,
         ), log_dir=log_dir)
         return gate, reason, None
 
     # Fire path.
+    # Story 8.1 / AC3: enrich query with YAKE keywords
+    enriched_domains, fire_yake_terms = enrich_query_with_yake(intent.domains, message)
+    if fire_yake_terms and not yake_terms:
+        yake_terms = fire_yake_terms
+        intent_source = "rule-based+yake"
     hits = retrieve_trajectories(
-        intent.domains, session_search_fn or _noop_search,
+        enriched_domains, session_search_fn or _noop_search,
     )
     hits = _filter_stale_trajectories(hits)  # P11 / FR-33
+    # Story 8.4: apply hybrid BM25 + embedding scoring before ranking
+    embedding_source = "disabled"
+    cfg_for_preflight = _load_config()
+    if hits:
+        hits, embedding_source = apply_hybrid_scoring(hits, message, config=cfg_for_preflight)
     ranked = rank_trajectories(hits, config_path)
     primary_domain = intent.domains[0] if intent.domains else None
-    deduped = dedupe_and_cap(ranked, primary_domain=primary_domain)
+    # Story 8.6: LLM reranker — operate on top-N=8 before dedupe_and_cap
+    rerank_outcome = ""
+    top_n_for_rerank = ranked[:_RERANK_TOP_N]
+    if top_n_for_rerank and cfg_for_preflight.get("recall", {}).get("use_reranker", False):
+        top_n_for_rerank, rerank_outcome = rerank_with_llm(
+            top_n_for_rerank, message, config=cfg_for_preflight,
+        )
+        # P6: preserve un-promoted positions — append the rest of top-N after reranked
+        reranked_set = set(id(h) for h in top_n_for_rerank)
+        un_promoted = [h for h in ranked[:_RERANK_TOP_N] if id(h) not in reranked_set]
+        ranked = top_n_for_rerank + un_promoted + ranked[_RERANK_TOP_N:]
+    # P5: read top_k from config, validate [1,3], pass to dedupe_and_cap
+    recall_cfg = cfg_for_preflight.get("recall", {})
+    configured_top_k = 3
+    if isinstance(recall_cfg, dict) and "top_k" in recall_cfg:
+        try:
+            configured_top_k = validate_top_k(int(recall_cfg["top_k"]))
+        except ValueError as e:
+            logger.warning("config.recall.top_k invalid: %s — using default 3", e)
+    deduped = dedupe_and_cap(ranked, k=configured_top_k, primary_domain=primary_domain)
+    # Story 8.5: truncated_count = entries that scored but were capped out
+    truncated_count = max(0, len(ranked) - len(deduped))
     heads_up = format_heads_up(deduped)
 
     elapsed = (time.perf_counter() - t0) * 1000
@@ -816,6 +1383,12 @@ def should_run_preflight(
         elapsed_ms=elapsed,
         mode=mode,
         cited_entry_ids=[],
+        intent_source=intent_source,
+        yake_terms=yake_terms,
+        truncated_count=truncated_count,
+        embedding_source=embedding_source,
+        rerank_outcome=rerank_outcome,
+        category=primary_domain or (intent.domains[0] if intent.domains else ""),  # A4
     ), log_dir=log_dir)
 
     if cited_ids:

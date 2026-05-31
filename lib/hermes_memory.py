@@ -551,6 +551,436 @@ def expire_entry(
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+# Story 9.1: reinforce_entry — bump access_count + last_hit_at on verified hits
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _has_prior_reinforce(entry_id: str, source: str, session_id: str = "", raw_dir: Optional[str] = None) -> bool:
+    """Check if a reinforce event with matching (entry_id, compound_key) already exists.
+
+    A3: Compound key = f"{source}:{session_id}" encoded in raw content field.
+    P1: Uses equality, not startswith, to avoid prefix-collision.
+    Scans today's and yesterday's JSONL files.
+    """
+    from datetime import timedelta
+    raw_root = _resolve_raw_dir(raw_dir)
+    project = os.environ.get("HERMES_PROJECT", "default")
+    role = os.environ.get("HERMES_ROLE", "engineer")
+    now = datetime.now(timezone.utc)
+    dates = [now.strftime("%Y-%m-%d"), (now - timedelta(days=1)).strftime("%Y-%m-%d")]
+    compound_key = f"{source}:{session_id}" if session_id else source
+
+    for date_str in dates:
+        raw_file = raw_root / project / role / f"{date_str}.jsonl"
+        if not raw_file.exists():
+            continue
+        try:
+            for line in raw_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+                if (row.get("kind") == "reinforce"
+                        and row.get("entry_id") == entry_id
+                        and row.get("content", "") == compound_key):
+                    return True
+        except FileNotFoundError:
+            continue
+        except OSError as e:
+            logger.warning("_has_prior_reinforce: OSError reading %s: %s", raw_file, e)
+            raise  # P4: fail-closed on permission/corruption errors
+    return False
+
+
+def reinforce_entry(
+    entry_id: str,
+    source: str = "verify-cited-hit",
+    *,
+    session_id: str = "",
+    memory_dir: Optional[str] = None,
+    raw_dir: Optional[str] = None,
+) -> None:
+    """Story 9.1: Bump access_count + set last_hit_at on a verified-cited entry.
+
+    A3: session_id parameter — idempotency keyed on (session_id, entry_id) via
+    compound content field "{source}:{session_id}" in the raw layer. This matches
+    AC3: "exactly once per (session, cited_id)."
+
+    Atomic frontmatter rewrite — body bytes unchanged (content-hash stable,
+    dream re-runs don't churn). Pairs with a raw-layer reinforce event
+    (Epic 2 invariant / FR-12).
+
+    P2: Frontmatter write happens BEFORE raw-layer append. If frontmatter
+    fails, no raw event is written; retry is safe.
+    P3: File-level lock prevents lost-update on concurrent verify hooks.
+    """
+    import fcntl
+
+    compound_key = f"{source}:{session_id}" if session_id else source
+
+    # Idempotency guard — check raw layer before doing any I/O
+    if _has_prior_reinforce(entry_id, source, session_id, raw_dir):
+        logger.debug("reinforce_entry: skip %s (already reinforced with key=%s)", entry_id, compound_key)
+        return
+
+    mem_path = _resolve_memory_dir(memory_dir)
+    filepath = mem_path / f"{entry_id}.md"
+    if not filepath.exists():
+        raise FileNotFoundError(f"Entry {entry_id} not found at {filepath}")
+
+    # P3: Per-entry file lock for read-modify-write atomicity
+    lock_path = mem_path / f".{entry_id}.lock"
+    lock_path.touch(exist_ok=True)
+    lock_fd = open(lock_path, "r+")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fm, body = _read_entry_file(entry_id, mem_path)
+        now = datetime.now(timezone.utc)
+
+        # Bump access_count (default 0 for pre-existing entries without the field)
+        current_count = fm.get("access_count", 0)
+        if not isinstance(current_count, int) or current_count < 0:
+            current_count = 0
+        fm["access_count"] = current_count + 1
+        fm["last_hit_at"] = now.isoformat()
+
+        # P2: Frontmatter write FIRST (atomic tmp+rename)
+        _write_entry_file(entry_id, fm, body, mem_path)
+
+        # Raw-layer pair AFTER frontmatter success
+        _append_raw_line(
+            entry_id=entry_id,
+            ts=now,
+            kind="reinforce",
+            content=compound_key,  # A3: compound key for (session, entry) dedup
+            evidence=None,
+            raw_dir_override=raw_dir,
+        )
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+    logger.debug("reinforce_entry: %s access_count=%d key=%s", entry_id, fm["access_count"], compound_key)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 9.2: Manifest-based dedup for trajectory recorder
+# ─────────────────────────────────────────────────────────────────────────────
+
+_MANIFEST_MAX_ENTRIES = 50
+_MANIFEST_SUMMARY_LEN = 80  # chars per entry summary
+
+
+def build_manifest(
+    memory_dir: Optional[str] = None,
+    *,
+    max_entries: int = _MANIFEST_MAX_ENTRIES,
+) -> str:
+    """Build a MANIFEST block listing up to `max_entries` trajectory entries.
+
+    Used by the trajectory recorder to instruct the LLM: "do NOT duplicate
+    these entries." Returns a formatted string suitable for injection into
+    the classifier prompt.
+
+    Entries are sorted by last_used_at (most recent first); capped at
+    max_entries (default 50, ~4 KB prompt budget).
+    """
+    entries = read_entries(memory_dir=memory_dir, read_only=True)
+    # Filter to trajectory-typed entries only
+    trajectories = [e for e in entries if e.get("type") == "trajectory"]
+    # Sort by last_used_at descending (most recently touched first)
+    trajectories.sort(
+        key=lambda e: e.get("last_used_at") or "",
+        reverse=True,
+    )
+    trajectories = trajectories[:max_entries]
+
+    if not trajectories:
+        return "MANIFEST (existing trajectories for this project+role):\n(none)\n"
+
+    lines = ["MANIFEST (existing trajectories for this project+role):"]
+    for e in trajectories:
+        eid = e.get("id")  # P13: guard legacy entries without id
+        if not eid:
+            continue
+        body_summary = (e.get("body") or "")[:_MANIFEST_SUMMARY_LEN].replace("\n", " ").strip()
+        lines.append(f"[{eid}] {body_summary}")
+    return "\n".join(lines) + "\n"
+
+
+# Pydantic schema for the dedup classifier response (Hard Invariant #11)
+_MANIFEST_DEDUP_PROMPT = """\
+Before extracting, check the MANIFEST. If the new pattern is
+already present, return {action: 'reinforce', id: '<existing_id>'}
+instead of a new entry.
+
+Respond with JSON matching one of:
+  {{"action": "reinforce", "id": "<existing_entry_id>"}}
+  {{"action": "new", "type": "<entry_type>", "body": "<entry_body>"}}
+"""
+
+
+def classify_trajectory_with_manifest(
+    failure_pattern: str,
+    manifest: str,
+    *,
+    workload: str = "trajectory_dedup",
+) -> dict:
+    """Story 9.2: Classify a failure pattern against existing trajectories.
+
+    Sends manifest + failure pattern to the LLM. Returns one of:
+      {"action": "reinforce", "id": "<id>"}
+      {"action": "new", "type": "...", "body": "..."}
+      {"action": "error", "reason": "..."}  (fail-open)
+
+    Routes through hermes_llm.llm_call (Hard Invariant #2).
+    Uses Pydantic to gate the LLM output (Hard Invariant #11).
+    """
+    try:
+        from pydantic import BaseModel, ConfigDict
+        from typing import Literal, Union
+    except ImportError:
+        return {"action": "error", "reason": "pydantic not available"}
+
+    EntryType = Literal["preference", "fact", "procedure", "episode", "trajectory", "unknown"]
+
+    class ReinforceAction(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # P8
+        action: Literal["reinforce"]
+        id: str
+
+    class NewEntryAction(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # P8
+        action: Literal["new"]
+        type: EntryType  # P7: constrained to valid entry types
+        body: str
+
+    class ClassifierResult(BaseModel):
+        """P10: Discriminated union for LLMSpec response_model gate."""
+        model_config = ConfigDict(extra="forbid")
+        action: Literal["reinforce", "new"]
+        id: str = ""
+        type: EntryType = "trajectory"
+        body: str = ""
+
+    prompt = (
+        f"{manifest}\n"
+        f"NEW FAILURE PATTERN:\n{failure_pattern}\n\n"
+        f"{_MANIFEST_DEDUP_PROMPT}"
+    )
+
+    try:
+        from lib.hermes_llm import llm_call, LLMSpec
+        spec = LLMSpec(
+            workload=workload,
+            messages=[{"role": "user", "content": prompt}],
+            response_model=ClassifierResult,  # P10: Pydantic gate at LLM layer
+        )
+        result = llm_call(spec)
+        content = result.get("content", "") if isinstance(result, dict) else str(result)
+        if not content or not content.strip():
+            return {"action": "error", "reason": "empty response"}
+
+        # P9: Use json.JSONDecoder().raw_decode for robust extraction
+        import json as _json
+        decoder = _json.JSONDecoder()
+        # Find first '{' and try raw_decode
+        brace_start = content.find('{')
+        if brace_start < 0:
+            return {"action": "error", "reason": "no JSON found"}
+        try:
+            parsed, _ = decoder.raw_decode(content, brace_start)
+        except _json.JSONDecodeError:
+            return {"action": "error", "reason": "malformed JSON"}
+
+        # Pydantic gate (Hard Invariant #11)
+        action = parsed.get("action")
+        if action == "reinforce":
+            validated = ReinforceAction(**parsed)
+            # P11: verify id appears in manifest before returning
+            if f"[{validated.id}]" not in manifest and f"[{validated.id} " not in manifest:
+                return {"action": "error", "reason": f"id_not_in_manifest: {validated.id}"}
+            return {"action": "reinforce", "id": validated.id}
+        elif action == "new":
+            validated = NewEntryAction(**parsed)
+            return {"action": "new", "type": validated.type, "body": validated.body}
+        else:
+            return {"action": "error", "reason": f"unknown action: {action}"}
+
+    except Exception as e:
+        logger.debug("classify_trajectory_with_manifest: failed: %s", e)
+        return {"action": "error", "reason": str(e)}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 9.3: Skill-dream hit-rate report builder
+# ─────────────────────────────────────────────────────────────────────────────
+
+def build_hit_rate_report(
+    preflight_log_dir: Optional[str] = None,
+    *,
+    min_fires: int = 20,
+) -> list[dict]:
+    """Story 9.3: Compute per-category hit-rate report for skill-dream consumption.
+
+    Joins preflight telemetry rows (~/.hermes/preflight/log/<date>.jsonl) with
+    verify_citation events for the same (session_id, intent_hash). Groups by
+    category and computes: {category, n_fired, n_matched_hit, n_matched_miss, hit_rate}.
+
+    Gated on ≥ min_fires (default 20) per category to avoid noise.
+    Returns list of dicts sorted by hit_rate ascending (worst categories first).
+    """
+    from collections import defaultdict
+    from pathlib import Path as _Path
+
+    if preflight_log_dir is None:
+        import os as _os
+        home = _os.environ.get("HERMES_HOME") or str(_Path.home() / ".hermes")
+        preflight_log_dir = str(_Path(home) / "preflight" / "log")
+
+    log_dir = _Path(preflight_log_dir)
+    if not log_dir.exists():
+        return []
+
+    # Collect all preflight + verify_citation rows
+    preflight_rows = []  # (session_id, intent_hash, category)
+    citation_rows = []   # (session_id, intent_hash, cited_ids)
+
+    for jsonl_file in sorted(log_dir.glob("*.jsonl")):
+        try:
+            for line in jsonl_file.read_text(encoding="utf-8").splitlines():
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    row = json.loads(line)
+                except json.JSONDecodeError:
+                    continue
+
+                event = row.get("event")
+                sid = row.get("session_id", "")
+                ih = row.get("intent_hash", "")
+
+                if event == "verify_citation":
+                    citation_rows.append((sid, ih, row.get("cited_ids", [])))
+                elif not event:
+                    # Regular preflight telemetry row
+                    # A4: prefer explicit category field, fall back to primary_domain, then domains[0]
+                    cat = row.get("category") or row.get("primary_domain") or (
+                        row.get("domains", ["unknown"])[0] if row.get("domains") else "unknown"
+                    )
+                    preflight_rows.append((sid, ih, cat))
+        except OSError:
+            continue
+
+    # Build a set of (session_id, intent_hash) that had verify_citation hits
+    citation_hits = set()
+    for sid, ih, cited_ids in citation_rows:
+        if cited_ids:
+            citation_hits.add((sid, ih))
+
+    # Group by category
+    cat_stats = defaultdict(lambda: {"n_fired": 0, "n_matched_hit": 0, "n_matched_miss": 0})
+    for sid, ih, cat in preflight_rows:
+        stats = cat_stats[cat]
+        stats["n_fired"] += 1
+        if (sid, ih) in citation_hits:
+            stats["n_matched_hit"] += 1
+        else:
+            stats["n_matched_miss"] += 1
+
+    # Build report, filtering by min_fires
+    report = []
+    for cat, stats in sorted(cat_stats.items()):
+        n = stats["n_fired"]
+        if n < min_fires:
+            continue
+        hit_rate = stats["n_matched_hit"] / n if n > 0 else 0.0
+        report.append({
+            "category": cat,
+            "n_fired": n,
+            "n_matched_hit": stats["n_matched_hit"],
+            "n_matched_miss": stats["n_matched_miss"],
+            "hit_rate": round(hit_rate, 4),
+        })
+
+    # Sort by hit_rate ascending (worst categories first)
+    report.sort(key=lambda r: r["hit_rate"])
+    return report
+
+
+# Story 9.3: Threshold constants (hard — don't drift without measuring)
+_HIT_RATE_LOW_THRESHOLD = 0.15
+_HIT_RATE_HIGH_THRESHOLD = 0.5
+_HIT_RATE_BLIND_SPOT_THRESHOLD = 0.05
+_UNRELATED_RATE_BLIND_SPOT = 0.6
+
+
+def propose_category_weight_nudges(
+    hit_rate_report: list[dict],
+    *,
+    low_threshold: float = _HIT_RATE_LOW_THRESHOLD,
+    high_threshold: float = _HIT_RATE_HIGH_THRESHOLD,
+    blind_spot_threshold: float = _HIT_RATE_BLIND_SPOT_THRESHOLD,
+    unrelated_rate_threshold: float = _UNRELATED_RATE_BLIND_SPOT,
+) -> dict:
+    """Story 9.3: Propose category weight nudges from hit-rate data.
+
+    Returns dict with keys:
+      - low_hit_rate: list of categories to nudge down
+      - high_hit_rate: list of categories to nudge up
+      - blind_spots: list of categories flagged as domain blind spots
+
+    All are PROPOSALS only — operator decides via Story 4.6's apply.
+    """
+    low = []
+    high = []
+    blind_spots = []
+
+    for row in hit_rate_report:
+        cat = row["category"]
+        hr = row["hit_rate"]
+        n = row["n_fired"]
+        # P14: derive unrelated_rate from match:miss (cited but didn't help),
+        # distinct from match:unrelated (no citation at all). Currently the
+        # telemetry schema doesn't distinguish these, so we use n_matched_miss
+        # as a proxy. When telemetry is extended, update this calculation.
+        unrelated_rate = row["n_matched_miss"] / n if n > 0 else 0.0
+
+        # P12: use <= / >= for boundary inclusion (flicker prevention)
+        if hr <= blind_spot_threshold and unrelated_rate > unrelated_rate_threshold:
+            blind_spots.append({
+                "category": cat,
+                "hit_rate": hr,
+                "unrelated_rate": round(unrelated_rate, 4),
+                "n_fired": n,
+                "action": "add_vocab_candidate",
+            })
+        elif hr <= low_threshold:
+            low.append({
+                "category": cat,
+                "hit_rate": hr,
+                "n_fired": n,
+                "action": "nudge_down",
+            })
+        elif hr >= high_threshold:
+            high.append({
+                "category": cat,
+                "hit_rate": hr,
+                "n_fired": n,
+                "action": "nudge_up",
+            })
+
+    return {
+        "low_hit_rate": low,
+        "high_hit_rate": high,
+        "blind_spots": blind_spots,
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 # Reader: read_entries (FR-4 filter, FR-5 bump, FR-6 legacy support)
 # ─────────────────────────────────────────────────────────────────────────────
 
@@ -644,6 +1074,8 @@ def read_entries(
             "valid_until": fm.get("valid_until"),
             "supersedes": fm.get("supersedes"),
             "evidence": fm.get("evidence"),
+            "access_count": fm.get("access_count", 0),  # Story 9.1
+            "last_hit_at": fm.get("last_hit_at"),         # Story 9.1
         })
 
     return entries

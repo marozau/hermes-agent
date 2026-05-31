@@ -99,7 +99,7 @@ def _record_verify_citation(
         os.close(fd)
 
 
-def emit(session_id: str, verify_cited: list[str] | None = None) -> None:
+def emit(session_id: str, verify_cited: list[str] | None = None, match: str | None = None) -> None:
     telemetry = _last_telemetry_for(session_id)
     preflight_top = _citations_for(session_id)
 
@@ -122,6 +122,33 @@ def emit(session_id: str, verify_cited: list[str] | None = None) -> None:
         intent_hash = telemetry.get("intent_hash", "")
         _record_verify_citation(session_id, intent_hash, verify_cited)
 
+    # Story 9.1: when verify reports match:hit for cited IDs, reinforce them.
+    # A3: session_id passed for (session, entry) idempotency key.
+    # P6: each ID wrapped individually — one failure doesn't abort the batch.
+    if match == "hit" and verify_cited:
+        try:
+            import sys as _sys
+            import os as _os
+            _hermes_home = _os.environ.get("HERMES_HOME") or str(_os.path.expanduser("~/.hermes"))
+            _lib_parent = _os.path.dirname(_os.path.join(_hermes_home, "lib"))
+            if _lib_parent not in _sys.path:
+                _sys.path.insert(0, _lib_parent)
+            from lib.hermes_memory import reinforce_entry
+            for cited_id in verify_cited:
+                if cited_id and cited_id.strip():
+                    try:
+                        reinforce_entry(
+                            cited_id.strip(),
+                            source="verify-cited-hit",
+                            session_id=session_id,
+                        )
+                    except Exception as e:
+                        print(f"[verify] reinforce {cited_id} failed: {e}", file=_sys.stderr)
+        except Exception as e:
+            # Fail-open: reinforcement is an improvement, not a blocker
+            import sys as _sys
+            print(f"[verify] reinforce setup failed: {e}", file=_sys.stderr)
+
     # The "preflight-cited" line is what preflight SUGGESTED (top-K). When
     # verify provides its own cited set, prefer that — it's the better
     # signal for the trajectory writer. Fall back to preflight's top-K for
@@ -130,6 +157,8 @@ def emit(session_id: str, verify_cited: list[str] | None = None) -> None:
     cited_str = ", ".join(display_cited) if display_cited else "none"
     print(f"preflight applied: {applied}")
     print(f"preflight-cited: {cited_str}")
+    if match is not None:
+        print(f"match: {match}")
 
 
 def main() -> None:
@@ -144,8 +173,16 @@ def main() -> None:
             "cited line (legacy behavior) and skips the follow-through write."
         ),
     )
+    parser.add_argument(
+        "--match",
+        choices=["hit", "miss", "unrelated"],
+        help=(
+            "Story 9.1: verify's judgment of whether cited entries helped. "
+            "When 'hit', reinforce_entry() is called for each cited ID."
+        ),
+    )
     args = parser.parse_args()
-    emit(args.session_id, _parse_cited_ids(args.cited_ids))
+    emit(args.session_id, _parse_cited_ids(args.cited_ids), match=args.match)
 
 
 if __name__ == "__main__":
