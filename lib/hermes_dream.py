@@ -34,6 +34,7 @@ import logging
 import os
 import shutil
 from contextlib import contextmanager
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Literal, Optional
@@ -66,6 +67,421 @@ class CostInfo(BaseModel):
     cache_read_tokens: int = 0
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 10.1: consolidation_passes config validation
+# ─────────────────────────────────────────────────────────────────────────────
+
+_CONSOLIDATION_PASSES_MIN = 1
+_CONSOLIDATION_PASSES_MAX = 3
+
+_DEFAULT_DEPTH_THRESHOLDS = {
+    "low":    {"signal_max": 0.3, "passes": 1},
+    "medium": {"signal_max": 0.6, "passes": 2},
+    "high":   {"signal_max": 1.0, "passes": 3},
+}
+
+
+def validate_consolidation_passes(n: int) -> None:
+    """Story 10.1: validate consolidation_passes is in [1, 3].
+
+    Raises ValueError on out-of-bounds — same pattern as Epic 8's validate_top_k.
+    """
+    if not isinstance(n, int) or n < _CONSOLIDATION_PASSES_MIN or n > _CONSOLIDATION_PASSES_MAX:
+        raise ValueError(
+            f"consolidation_passes must be an integer in "
+            f"[{_CONSOLIDATION_PASSES_MIN}, {_CONSOLIDATION_PASSES_MAX}], got {n}"
+        )
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 10.3: Per-pass audit trail dataclass
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class PassAuditEntry:
+    """Story 10.3: tracks what each consolidation pass added/modified/removed."""
+    pass_index: int
+    proposals_added: list[str]     # target_entry_ids
+    proposals_modified: list[str]  # target_entry_ids
+    proposals_removed: list[str]   # target_entry_ids
+    outcome: str = "ok"            # "ok" | "validation-failed" | "empty"
+    cost: CostInfo = field(default_factory=CostInfo)
+
+
+def _compute_proposal_diff(
+    prev: list[PatchProposal],
+    curr: list[PatchProposal],
+) -> tuple[list[str], list[str], list[str]]:
+    """Story 10.3: compute added/modified/removed target_entry_ids between passes."""
+    prev_ids = {p.target_entry_id for p in prev}
+    curr_ids = {p.target_entry_id for p in curr}
+    added = sorted(curr_ids - prev_ids)
+    removed = sorted(prev_ids - curr_ids)
+    # Modified: same id, different body or op
+    prev_map = {p.target_entry_id: p for p in prev}
+    curr_map = {p.target_entry_id: p for p in curr}
+    modified = sorted(
+        pid for pid in prev_ids & curr_ids
+        if prev_map[pid].body != curr_map[pid].body or prev_map[pid].op != curr_map[pid].op
+    )
+    return added, modified, removed
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 10.4: depth-dynamic N via signal_density_score
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _compute_signal_density(entries: list[dict]) -> float:
+    """Compute a signal-density score from entry metadata.
+
+    Heuristic: entries with higher access_count, more recent last_hit_at,
+    and diverse types indicate higher signal density. Range [0, 1].
+    """
+    if not entries:
+        return 0.0
+
+    # Factor 1: average access_count (log-scaled)
+    import math
+    avg_access = sum(e.get("access_count", 0) for e in entries) / len(entries)
+    access_score = min(1.0, math.log(1 + avg_access) / math.log(1 + 50))
+
+    # Factor 2: type diversity (more types = richer signal)
+    types = {e.get("type", "unknown") for e in entries}
+    diversity_score = min(1.0, len(types) / 5)
+
+    # Factor 3: entry count (more entries = more signal to consolidate)
+    count_score = min(1.0, len(entries) / 50)
+
+    # Weighted average
+    return round(0.4 * access_score + 0.3 * diversity_score + 0.3 * count_score, 4)
+
+
+def resolve_depth_dynamic_n(
+    signal_density: float,
+    config: Optional[dict] = None,
+) -> tuple[int, str]:
+    """Story 10.4: resolve effective N based on signal density.
+
+    Returns (passes, depth_tier). If depth_dynamic is disabled or not
+    configured, returns (0, "manual") — caller uses configured N.
+    """
+    cfg = (config or {}).get("dream", {})
+    if not cfg.get("depth_dynamic", False):
+        return 0, "manual"
+
+    thresholds = cfg.get("depth_thresholds", _DEFAULT_DEPTH_THRESHOLDS)
+    # Sort by signal_max ascending to find the matching tier
+    tiers = sorted(thresholds.items(), key=lambda x: x[1].get("signal_max", 1.0))
+    for tier_name, tier_cfg in tiers:
+        if signal_density <= tier_cfg.get("signal_max", 1.0):
+            return tier_cfg.get("passes", 1), tier_name
+    # Fallback: highest tier
+    if tiers:
+        last = tiers[-1]
+        return last[1].get("passes", 1), last[0]
+    return 1, "default"
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 10.2 + 10.5: Consolidation prompt builders + N-loop orchestrator
+# ─────────────────────────────────────────────────────────────────────────────
+
+def _build_consolidation_prompt(
+    entries: list[dict],
+    raw_context: str = "",
+    category_weights: Optional[dict] = None,
+) -> str:
+    """Build the initial consolidation prompt (pass 1).
+
+    Follows the 4-phase structure from the auto-dream research doc.
+    """
+    parts = [
+        "You are a memory consolidation agent. Your task is to analyze the following",
+        "memory entries and raw session data, then propose improvements.",
+        "",
+        "## Current Memory Entries",
+        "",
+    ]
+    for e in entries:
+        entry_type = e.get("type", "unknown")
+        access_count = e.get("access_count", 0)
+        body_preview = (e.get("body", "") or "")[:200]
+        parts.append(f"[{e.get('id', '?')}] type={entry_type} access={access_count}")
+        parts.append(f"  {body_preview}")
+        parts.append("")
+
+    if raw_context:
+        parts.extend(["## Raw Session Data (recent)", "", raw_context[:4000], ""])
+
+    if category_weights:
+        parts.extend([
+            "## Category Performance (from preflight hit-rate telemetry)",
+            "",
+            "Categories with low hit-rates should be deprioritized. High hit-rates",
+            "indicate useful patterns worth reinforcing.",
+            "",
+        ])
+        for cat, info in category_weights.items():
+            direction = info.get("direction", "neutral")
+            hr = info.get("hit_rate", 0)
+            parts.append(f"- {cat}: {direction} (hit_rate={hr:.1%})")
+        parts.append("")
+
+    parts.extend([
+        "## Instructions",
+        "",
+        "1. Identify entries that are outdated, contradictory, or could be merged.",
+        "2. Propose new entries for patterns found in raw data not yet captured.",
+        "3. For each proposal, specify: op (add/update/supersede/expire),",
+        "   target_entry_id, type, body, rationale, confidence, risk_class.",
+        "4. Return proposals as a YAML list.",
+        "",
+        "Return ONLY the YAML list of proposals, no other text.",
+    ])
+    return "\n".join(parts)
+
+
+def _build_refine_prompt(
+    previous_patch: str,
+    entries: list[dict],
+    raw_context: str = "",
+    contradictions: Optional[list[tuple[str, str]]] = None,
+) -> str:
+    """Story 10.2: build refinement prompt for passes 2+.
+
+    Includes the previous pass's memory.patch as context, plus optional
+    contradiction sweep (Story 10.5).
+    """
+    parts = [
+        "You are a memory consolidation agent performing a REFINEMENT pass.",
+        "A previous pass already produced proposals. Your task is to:",
+        "1. Review the previous proposals for quality, duplicates, and missed patterns.",
+        "2. Improve confidence calibration based on the evidence.",
+        "3. Merge near-duplicate proposals.",
+        "4. Return the REFINED set of proposals.",
+        "",
+        "## Previous Pass Output (memory.patch.v{N})",
+        "",
+        "```yaml",
+        previous_patch[:6000],
+        "```",
+        "",
+    ]
+
+    if contradictions:
+        parts.extend([
+            "## CONTRADICTIONS — Intra-Dream Contradiction Sweep (Story 10.5)",
+            "",
+            "The previous pass flagged potential contradictions. For each pair, decide:",
+            "  (a) supersede the existing entry (set op: supersede)",
+            "  (b) merge the bodies (set op: update, append the new body)",
+            "  (c) discard the new entry as already-covered (drop it from the patch)",
+            "Verify against the raw layer when uncertain.",
+            "",
+        ])
+        for new_id, existing_id in contradictions:
+            parts.append(f"- new_entry [{new_id}] contradicts existing [{existing_id}]")
+        parts.append("")
+
+    parts.extend([
+        "## Current Memory Entries (for reference)",
+        "",
+    ])
+    for e in entries[:30]:  # Cap to avoid prompt bloat
+        parts.append(f"[{e.get('id', '?')}] type={e.get('type', '?')} "
+                     f"access={e.get('access_count', 0)}: "
+                     f"{(e.get('body', '') or '')[:100]}")
+    parts.append("")
+
+    if raw_context:
+        parts.extend(["## Raw Session Data", "", raw_context[:3000], ""])
+
+    parts.extend([
+        "## Instructions",
+        "",
+        "Return the REFINED YAML list of proposals. If no changes are needed,",
+        "return the same proposals. Always return a valid YAML list.",
+    ])
+    return "\n".join(parts)
+
+
+def _parse_proposals_from_llm(content: str) -> list[PatchProposal]:
+    """Parse PatchProposal list from LLM response (YAML or JSON)."""
+    import yaml as _yaml
+
+    # Try to extract from markdown fences
+    text = content.strip()
+    if "```yaml" in text:
+        start = text.index("```yaml") + 7
+        end = text.index("```", start) if "```" in text[start:] else len(text)
+        text = text[start:end].strip()
+    elif "```" in text:
+        start = text.index("```") + 3
+        end = text.index("```", start) if "```" in text[start:] else len(text)
+        text = text[start:end].strip()
+
+    # Try YAML parse
+    try:
+        raw = _yaml.safe_load(text)
+        if isinstance(raw, list):
+            proposals = []
+            for item in raw:
+                try:
+                    proposals.append(PatchProposal.model_validate(item))
+                except Exception:
+                    continue
+            return proposals
+    except Exception:
+        pass
+
+    # Fallback: try JSON
+    try:
+        raw = json.loads(text)
+        if isinstance(raw, list):
+            return [PatchProposal.model_validate(item) for item in raw if isinstance(item, dict)]
+    except Exception:
+        pass
+
+    return []
+
+
+def _extract_contradictions(proposals: list[PatchProposal]) -> list[tuple[str, str]]:
+    """Story 10.5: extract (new_entry_id, contradicts_existing_id) pairs."""
+    pairs = []
+    for p in proposals:
+        if p.contradicts:
+            pairs.append((p.target_entry_id, p.contradicts))
+    return pairs
+
+
+def _run_consolidation_pass(
+    entries: list[dict],
+    raw_context: str,
+    category_weights: Optional[dict],
+    previous_patch: str = "",
+    contradictions: Optional[list[tuple[str, str]]] = None,
+    workload: str = "memory_dream_consolidate",
+) -> tuple[list[PatchProposal], CostInfo]:
+    """Story 10.2: run a single consolidation pass via hermes_llm.llm_call.
+
+    Returns (proposals, cost). If the LLM call fails, returns ([], zero_cost).
+    """
+    try:
+        from lib.hermes_llm import llm_call, LLMSpec
+    except ImportError:
+        logger.warning("_run_consolidation_pass: hermes_llm not available")
+        return [], CostInfo()
+
+    if previous_patch:
+        prompt = _build_refine_prompt(previous_patch, entries, raw_context, contradictions)
+    else:
+        prompt = _build_consolidation_prompt(entries, raw_context, category_weights)
+
+    try:
+        spec = LLMSpec(
+            workload=workload,
+            messages=[{"role": "user", "content": prompt}],
+        )
+        result = llm_call(spec)
+        content = result.get("content", "") if isinstance(result, dict) else str(result)
+
+        # Extract cost info from result
+        usage = result.get("usage", {}) if isinstance(result, dict) else {}
+        cost = CostInfo(
+            tokens_in=usage.get("prompt_tokens", 0),
+            tokens_out=usage.get("completion_tokens", 0),
+            cache_read_tokens=usage.get("cache_read_input_tokens", 0),
+        )
+
+        proposals = _parse_proposals_from_llm(content)
+        return proposals, cost
+
+    except Exception as e:
+        logger.warning("_run_consolidation_pass: LLM call failed: %s", e)
+        return [], CostInfo()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Story 10.6: baseline comparison harness
+# ─────────────────────────────────────────────────────────────────────────────
+
+@dataclass
+class BaselineComparison:
+    """Story 10.6: comparison between multi-pass and single-pass results."""
+    single_pass_top1: float = 0.0
+    multi_pass_top1: float = 0.0
+    delta: float = 0.0
+    single_pass_cost: CostInfo = field(default_factory=CostInfo)
+    multi_pass_cost: CostInfo = field(default_factory=CostInfo)
+    verdict: str = ""  # "keep" | "revert" | "inconclusive"
+
+
+def _run_baseline_comparison(
+    artifact_dir: Path,
+    memory_dir: Optional[str],
+    multi_pass_proposals: list[PatchProposal],
+    multi_pass_cost: CostInfo,
+    entries: list[dict],
+    raw_context: str,
+    category_weights: Optional[dict],
+) -> BaselineComparison:
+    """Story 10.6: run single-pass baseline and compare to multi-pass.
+
+    Materializes both versions and compares recall quality.
+    """
+    comparison = BaselineComparison(multi_pass_cost=multi_pass_cost)
+
+    try:
+        from lib.hermes_recall import (
+            materialize_proposed_memory, run_recall_at_create,
+        )
+
+        # Run single-pass baseline
+        baseline_proposals, baseline_cost = _run_consolidation_pass(
+            entries, raw_context, category_weights,
+        )
+        comparison.single_pass_cost = baseline_cost
+
+        # Write baseline memory.patch to a temp dir
+        import tempfile
+        baseline_dir = artifact_dir / ".hermes-private" / "baseline"
+        baseline_dir.mkdir(parents=True, exist_ok=True)
+        if baseline_proposals:
+            import yaml as _yaml
+            patches_yaml = _yaml.dump(
+                [p.model_dump() for p in baseline_proposals],
+                default_flow_style=False, allow_unicode=True, sort_keys=False,
+            )
+            (baseline_dir / "memory.patch").write_text(patches_yaml, encoding="utf-8")
+
+        # Run recall harness on both
+        multi_recall = run_recall_at_create(artifact_dir, memory_dir)
+        comparison.multi_pass_top1 = multi_recall.current_score
+
+        baseline_recall = run_recall_at_create(baseline_dir, memory_dir)
+        comparison.single_pass_top1 = baseline_recall.current_score
+
+        comparison.delta = comparison.multi_pass_top1 - comparison.single_pass_top1
+
+        # Verdict
+        if comparison.delta >= 0.02:
+            comparison.verdict = "keep"
+        elif comparison.delta < 0.00:
+            comparison.verdict = "revert"
+        else:
+            comparison.verdict = "inconclusive"
+
+        # Cleanup baseline dir
+        import shutil
+        shutil.rmtree(baseline_dir, ignore_errors=True)
+
+    except Exception as e:
+        logger.debug("_run_baseline_comparison: failed: %s", e)
+        comparison.verdict = "error"
+
+    return comparison
+
+
 class PatchProposal(BaseModel):
     """FR-16: every proposal carries op, target_entry_id (or marker `new`),
     rationale, confidence, risk_class, source_refs. P7: includes type so the
@@ -80,6 +496,8 @@ class PatchProposal(BaseModel):
     confidence: Confidence = "low"
     risk_class: RiskClass = "additive"
     source_refs: list[str] = Field(default_factory=list)
+    # Story 10.5: contradiction tracking for intra-dream resolution
+    contradicts: Optional[str] = None  # entry_id this proposal contradicts
 
 
 class DreamManifest(BaseModel):
@@ -94,6 +512,13 @@ class DreamManifest(BaseModel):
     signature_anchors: list[str] = Field(default_factory=list)
     # Epic 5 / FR-28: Δtokens(MEMORY.md) — char-count proxy.
     delta_tokens: dict = Field(default_factory=lambda: {"before": 0, "after": 0, "delta": 0})
+    # Story 10.1 + 10.3: multi-pass consolidation metadata
+    consolidation_passes_actual: int = 1
+    depth_tier: str = "manual"     # "manual" | "low" | "medium" | "high"
+    pass_audit: list[dict] = Field(default_factory=list)  # list of PassAuditEntry dicts
+    per_pass_cost: list[dict] = Field(default_factory=list)  # list of CostInfo dicts
+    # Story 10.6: baseline comparison
+    baseline_comparison: Optional[dict] = None  # BaselineComparison dict
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -381,11 +806,16 @@ def create_dream_artifact(
     model_used: str = "none",                            # P24
     cost: Optional[CostInfo] = None,                     # P24
     recall_regression_verdict: str = "skipped",          # P24
+    consolidation_passes: int = 1,                       # Story 10.1
+    config: Optional[dict] = None,                       # Story 10.4
 ) -> str:
     """Create a dream artifact directory (FR-13, FR-14, NFR-14).
 
     DN2 / P3: wraps body in `with dream_lock():` so crash mid-create
     auto-releases the lock.
+
+    Story 10.1: consolidation_passes (default 1) controls N-pass
+    consolidation. Validated at entry; [1, 3] range enforced.
     """
     import yaml as _yaml
 
@@ -414,8 +844,23 @@ def create_dream_artifact(
         # FR-14: read live memory in read-only mode (NEVER mutates).
         entries = read_entries(memory_dir, read_only=True) if memory_dir else []
 
+        # Story 10.1: validate consolidation_passes
+        validate_consolidation_passes(consolidation_passes)
+
+        # Story 10.4: depth-dynamic N override
+        signal_density = _compute_signal_density(entries)
+        effective_n = consolidation_passes
+        depth_tier = "manual"
+        if config and config.get("dream", {}).get("depth_dynamic", False):
+            dynamic_n, depth_tier = resolve_depth_dynamic_n(signal_density, config)
+            if dynamic_n > 0:
+                effective_n = dynamic_n
+
         proposals: list[PatchProposal] = []
         source_rows: list[dict] = []
+        pass_audit_entries: list[PassAuditEntry] = []
+        per_pass_costs: list[CostInfo] = []
+        raw_context = ""  # Populated by multi-pass if needed
 
         if dry_run:
             for i, entry in enumerate(entries[:3]):
@@ -434,6 +879,92 @@ def create_dream_artifact(
                     "source": entry.get("source", "unknown"),
                     "entry_id": entry["id"],
                 })
+
+        # Story 10.2: N-loop orchestrator — runs when effective_n > 1 and
+        # proposals weren't provided externally (dry_run already populated them).
+        if effective_n > 1 and not proposals and not dry_run:
+            logger.info("Multi-pass consolidation: N=%d, depth_tier=%s, signal_density=%.4f",
+                        effective_n, depth_tier, signal_density)
+
+            # Category weights from Epic 9 Story 9.3
+            category_weights = None
+            try:
+                from lib.hermes_memory import build_hit_rate_report, propose_category_weight_nudges
+                hit_rate_report = build_hit_rate_report()
+                if hit_rate_report:
+                    nudges = propose_category_weight_nudges(hit_rate_report)
+                    category_weights = {}
+                    for nudge in nudges.get("low_hit_rate", []):
+                        category_weights[nudge["category"]] = {"direction": "down", "hit_rate": nudge["hit_rate"]}
+                    for nudge in nudges.get("high_hit_rate", []):
+                        category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
+            except Exception:
+                pass
+
+            all_pass_patches: list[list[PatchProposal]] = []
+            previous_patch_text = ""
+
+            for pass_idx in range(effective_n):
+                # Story 10.5: extract contradictions from previous pass
+                contradictions = None
+                if pass_idx > 0 and all_pass_patches:
+                    contradictions = _extract_contradictions(all_pass_patches[-1])
+
+                pass_proposals, pass_cost = _run_consolidation_pass(
+                    entries=entries,
+                    raw_context=raw_context,
+                    category_weights=category_weights,
+                    previous_patch=previous_patch_text,
+                    contradictions=contradictions,
+                )
+                per_pass_costs.append(pass_cost)
+
+                # Story 10.3: compute audit diff
+                prev_proposals = all_pass_patches[-1] if all_pass_patches else []
+                added, modified, removed = _compute_proposal_diff(prev_proposals, pass_proposals)
+
+                if pass_proposals:
+                    outcome = "ok"
+                elif pass_cost.tokens_in > 0:
+                    outcome = "empty"
+                else:
+                    outcome = "validation-failed"
+
+                pass_audit_entries.append(PassAuditEntry(
+                    pass_index=pass_idx + 1,
+                    proposals_added=added,
+                    proposals_modified=modified,
+                    proposals_removed=removed,
+                    outcome=outcome,
+                    cost=pass_cost,
+                ))
+
+                all_pass_patches.append(pass_proposals)
+
+                # Update previous_patch_text for next pass
+                if pass_proposals:
+                    patches_yaml = _yaml.dump(
+                        [p.model_dump() for p in pass_proposals],
+                        default_flow_style=False, allow_unicode=True, sort_keys=False,
+                    )
+                    previous_patch_text += f"\n--- pass_{pass_idx + 1} ---\n{patches_yaml}"
+
+                # Persist intermediate patches for audit (not at top-level)
+                if pass_idx < effective_n - 1 and pass_proposals:
+                    passes_dir = artifact_dir / ".hermes-private" / "passes"
+                    passes_dir.mkdir(parents=True, exist_ok=True)
+                    _write_file_atomic(
+                        passes_dir / f"memory.patch.v{pass_idx + 1}",
+                        patches_yaml,
+                    )
+
+                logger.info("Pass %d/%d: %d proposals, outcome=%s, cost=%d/%d tokens",
+                            pass_idx + 1, effective_n, len(pass_proposals), outcome,
+                            pass_cost.tokens_in, pass_cost.tokens_out)
+
+            # Final proposals = last pass
+            if all_pass_patches:
+                proposals = all_pass_patches[-1]
 
         # memory.patch (FR-16) — written FIRST so the recall harness can replay it.
         if proposals:
@@ -491,9 +1022,24 @@ def create_dream_artifact(
             started_at=started,
             finished_at=finished,
             model_used=model_used,
+            signal_density_score=signal_density,
             cost=cost or CostInfo(),
             recall_regression_verdict=verdict,
             delta_tokens=delta,
+            consolidation_passes_actual=effective_n,
+            depth_tier=depth_tier,
+            pass_audit=[{
+                "pass_index": e.pass_index,
+                "proposals_added": e.proposals_added,
+                "proposals_modified": e.proposals_modified,
+                "proposals_removed": e.proposals_removed,
+                "outcome": e.outcome,
+            } for e in pass_audit_entries],
+            per_pass_cost=[{
+                "tokens_in": c.tokens_in,
+                "tokens_out": c.tokens_out,
+                "cache_read_tokens": c.cache_read_tokens,
+            } for c in per_pass_costs],
         )
         _write_file_atomic(
             artifact_dir / "manifest.json",
@@ -515,7 +1061,7 @@ def create_dream_artifact(
             f"**Δtokens:** {delta['delta']:+d} (before={delta['before']}, after={delta['after']})",
         ]
 
-        # Story 9.3: hit-rate report + category weight proposals
+        # Story 10.6: hit-rate report + category weight proposals
         try:
             from lib.hermes_memory import build_hit_rate_report, propose_category_weight_nudges
             hit_rate_report = build_hit_rate_report()
@@ -587,7 +1133,33 @@ def create_dream_artifact(
 
         except Exception as e:
             logger.debug("Story 9.3 hit-rate report failed: %s", e)
-            report_lines += ["", f"## Hit-Rate Report", "", f"*Unavailable: {e}*"]
+            report_lines += ["", "## Hit-Rate Report", "", f"*Unavailable: {e}*"]
+
+        # Story 10.2 + 10.3: Multi-Pass Verdict section
+        if effective_n > 1 and pass_audit_entries:
+            report_lines += ["", "## Multi-Pass Verdict", ""]
+            report_lines.append(f"**Consolidation passes:** {effective_n} "
+                                f"(depth_tier={depth_tier}, signal_density={signal_density:.4f})")
+            report_lines.append("")
+            report_lines.append("| Pass | Proposals | Outcome | Tokens In | Tokens Out | Cache Read |")
+            report_lines.append("|------|-----------|---------|-----------|------------|------------|")
+            for audit in pass_audit_entries:
+                n_props = len(audit.proposals_added) + len(audit.proposals_modified)
+                report_lines.append(
+                    f"| {audit.pass_index} | {n_props} | {audit.outcome} | "
+                    f"{audit.cost.tokens_in} | {audit.cost.tokens_out} | "
+                    f"{audit.cost.cache_read_tokens} |"
+                )
+            report_lines.append("")
+
+            # Story 10.6: baseline comparison if available
+            total_cost = sum(c.tokens_in + c.tokens_out for c in per_pass_costs)
+            report_lines.append(f"**Total tokens across all passes:** {total_cost}")
+            if len(per_pass_costs) > 1:
+                pass1_cost = per_pass_costs[0].tokens_in + per_pass_costs[0].tokens_out
+                if pass1_cost > 0:
+                    cache_ratio = per_pass_costs[1].cache_read_tokens / per_pass_costs[1].tokens_in if per_pass_costs[1].tokens_in > 0 else 0
+                    report_lines.append(f"**Pass-2 prompt-cache hit rate:** {cache_ratio:.0%}")
 
         if dry_run:
             report_lines += ["", "*This is a dry-run artifact for pipeline validation.*"]
