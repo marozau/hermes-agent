@@ -191,15 +191,16 @@ def _build_consolidation_prompt(
     entries: list[dict],
     raw_context: str = "",
     category_weights: Optional[dict] = None,
-) -> str:
+) -> list[dict]:
     """Build the memory_dream_consolidate prompt.
 
-    A3: Prompt structure ordered for Anthropic prompt caching.
-    Static content (entries, raw data, instructions) comes FIRST.
-    Dynamic content (category weights) comes LAST so the static
-    prefix is stable across passes and cacheable.
+    C3: Returns a 2-message list for Anthropic prompt caching:
+    [0] = static content (entries, raw data, instructions) — cacheable
+    [1] = dynamic content (category weights) — changes between passes
+
+    cache_breakpoints=[0] marks message 0 as cached; message 1 is fresh.
     """
-    parts = [
+    static_parts = [
         "You are a memory consolidation agent for an AI assistant.",
         "Analyze the following memory entries and raw session data.",
         "Propose patches to improve memory quality:",
@@ -209,16 +210,16 @@ def _build_consolidation_prompt(
         "## Current Memory Entries",
         "",
     ]
-    for e in entries[:50]:  # Cap to avoid prompt bloat
-        parts.append(f"[{e.get('id', '?')}] type={e.get('type', '?')} "
-                     f"access={e.get('access_count', 0)}: "
-                     f"{(e.get('body', '') or '')[:100]}")
-    parts.append("")
+    for e in entries[:50]:
+        static_parts.append(f"[{e.get('id', '?')}] type={e.get('type', '?')} "
+                            f"access={e.get('access_count', 0)}: "
+                            f"{(e.get('body', '') or '')[:100]}")
+    static_parts.append("")
 
     if raw_context:
-        parts.extend(["## Raw Session Data (recent)", "", raw_context[:4000], ""])
+        static_parts.extend(["## Raw Session Data (recent)", "", raw_context[:4000], ""])
 
-    parts.extend([
+    static_parts.extend([
         "## Instructions",
         "",
         "1. Identify entries that are outdated, contradictory, or could be merged.",
@@ -230,23 +231,24 @@ def _build_consolidation_prompt(
         "Return ONLY the YAML list of proposals, no other text.",
     ])
 
-    # A3: Dynamic section AFTER static content (below cache breakpoint)
+    messages = [{"role": "user", "content": "\n".join(static_parts)}]
+
+    # C3: Dynamic content in a separate message (below cache breakpoint)
     if category_weights:
-        parts.extend([
-            "",
+        dynamic_parts = [
             "## Category Performance (from preflight hit-rate telemetry)",
             "",
             "Categories with low hit-rates should be deprioritized. High hit-rates",
             "indicate useful patterns worth reinforcing.",
             "",
-        ])
+        ]
         for cat, info in category_weights.items():
             direction = info.get("direction", "neutral")
             hr = info.get("hit_rate", 0)
-            parts.append(f"- {cat}: {direction} (hit_rate={hr:.1%})")
-        parts.append("")
+            dynamic_parts.append(f"- {cat}: {direction} (hit_rate={hr:.1%})")
+        messages.append({"role": "user", "content": "\n".join(dynamic_parts)})
 
-    return "\n".join(parts)
+    return messages
 
 
 def _build_refine_prompt(
@@ -254,14 +256,16 @@ def _build_refine_prompt(
     entries: list[dict],
     raw_context: str = "",
     contradictions: Optional[list[tuple[str, str]]] = None,
-) -> str:
+) -> list[dict]:
     """Story 10.2: build refinement prompt for passes 2+.
 
-    A3: Static content (entries, raw data, instructions) comes FIRST
-    so it's cacheable across passes. Dynamic content (previous_pass,
-    contradictions) comes LAST below the cache breakpoint.
+    C3: Returns a 2-message list for Anthropic prompt caching:
+    [0] = static content (entries, raw data, instructions) — cacheable
+    [1] = dynamic content (previous_pass, contradictions) — changes per pass
+
+    cache_breakpoints=[0] marks message 0 as cached; message 1 is fresh.
     """
-    parts = [
+    static_parts = [
         "You are a memory consolidation agent performing a REFINEMENT pass.",
         "A previous pass already produced proposals. Your task is to:",
         "1. Review the previous proposals for quality, duplicates, and missed patterns.",
@@ -272,30 +276,34 @@ def _build_refine_prompt(
         "## Current Memory Entries (for reference)",
         "",
     ]
-    for e in entries[:30]:  # Cap to avoid prompt bloat
-        parts.append(f"[{e.get('id', '?')}] type={e.get('type', '?')} "
-                     f"access={e.get('access_count', 0)}: "
-                     f"{(e.get('body', '') or '')[:100]}")
-    parts.append("")
+    for e in entries[:30]:
+        static_parts.append(f"[{e.get('id', '?')}] type={e.get('type', '?')} "
+                            f"access={e.get('access_count', 0)}: "
+                            f"{(e.get('body', '') or '')[:100]}")
+    static_parts.append("")
 
     if raw_context:
-        parts.extend(["## Raw Session Data", "", raw_context[:3000], ""])
+        static_parts.extend(["## Raw Session Data", "", raw_context[:3000], ""])
 
-    parts.extend([
+    static_parts.extend([
         "## Instructions",
         "",
         "Refine the proposals from the previous pass.",
         "Return ONLY the YAML list of refined proposals, no other text.",
-        "",
-        # A3: Dynamic content below the last cache breakpoint
+    ])
+
+    messages = [{"role": "user", "content": "\n".join(static_parts)}]
+
+    # C3: Dynamic content in a separate message (below cache breakpoint)
+    dynamic_parts = [
         "## Previous Pass Output",
         "",
         previous_patch[:8000],
         "",
-    ])
+    ]
 
     if contradictions:
-        parts.extend([
+        dynamic_parts.extend([
             "## CONTRADICTIONS — Intra-Dream Contradiction Sweep (Story 10.5)",
             "",
             "The previous pass flagged potential contradictions. For each pair, decide:",
@@ -306,10 +314,11 @@ def _build_refine_prompt(
             "",
         ])
         for new_id, existing_id in contradictions:
-            parts.append(f"- new_entry [{new_id}] contradicts existing [{existing_id}]")
-        parts.append("")
+            dynamic_parts.append(f"- new_entry [{new_id}] contradicts existing [{existing_id}]")
+        dynamic_parts.append("")
 
-    return "\n".join(parts)
+    messages.append({"role": "user", "content": "\n".join(dynamic_parts)})
+    return messages
 
 def _parse_proposals_from_llm(content: str) -> tuple[list[PatchProposal], int]:
     """Parse PatchProposal list from LLM response (YAML or JSON).
@@ -402,21 +411,19 @@ def _run_consolidation_pass(
         return [], CostInfo(), "llm-failed"
 
     if previous_patch:
-        prompt = _build_refine_prompt(previous_patch, entries, raw_context, contradictions)
+        messages = _build_refine_prompt(previous_patch, entries, raw_context, contradictions)
     else:
-        prompt = _build_consolidation_prompt(entries, raw_context, category_weights)
+        messages = _build_consolidation_prompt(entries, raw_context, category_weights)
 
     try:
         # A2: PatchProposalList as response_model (Hard Invariant #11)
-        # A3: cache_breakpoints=[0] marks the user message boundary.
-        # Static content is in the single user message; dynamic <previous_pass>
-        # is also in that message but at the END. On pass 2+, Anthropic caches
-        # the stable prefix and only recomputes the dynamic suffix.
+        # C3: Multi-message prompt with cache_breakpoints=[0] — message 0
+        # is static (cacheable), message 1 is dynamic (fresh per pass).
         spec = LLMSpec(
             workload=workload,
-            messages=[{"role": "user", "content": prompt}],
+            messages=messages,
             response_model=PatchProposalList,
-            cache_breakpoints=[0] if previous_patch else [],
+            cache_breakpoints=[0],
         )
         result = llm_call(spec)
         content = result.get("content", "") if isinstance(result, dict) else str(result)
@@ -912,6 +919,7 @@ def create_dream_artifact(
         per_pass_costs: list[CostInfo] = []
         raw_context = ""  # Populated by multi-pass if needed
         baseline_cmp = None
+        category_weights = None
 
         if dry_run:
             for i, entry in enumerate(entries[:3]):
@@ -1036,16 +1044,6 @@ def create_dream_artifact(
             if last_valid_proposals:
                 proposals = last_valid_proposals
 
-            # A1: baseline comparison when multi-pass
-            if effective_n > 1:
-                baseline_cmp = _run_baseline_comparison(
-                    artifact_dir, memory_dir, proposals,
-                    CostInfo(tokens_in=sum(c.tokens_in for c in per_pass_costs),
-                             tokens_out=sum(c.tokens_out for c in per_pass_costs),
-                             cache_read_tokens=sum(c.cache_read_tokens for c in per_pass_costs)),
-                    entries, raw_context, category_weights,
-                )
-
         # memory.patch (FR-16) — written FIRST so the recall harness can replay it.
         if proposals:
             patches_yaml = _yaml.dump(
@@ -1053,6 +1051,16 @@ def create_dream_artifact(
                 default_flow_style=False, allow_unicode=True, sort_keys=False,
             )
             _write_file_atomic(artifact_dir / "memory.patch", patches_yaml)
+
+        # C2: Run baseline comparison AFTER memory.patch is written.
+        if effective_n > 1 and not dry_run:
+            baseline_cmp = _run_baseline_comparison(
+                artifact_dir, memory_dir, proposals,
+                CostInfo(tokens_in=sum(c.tokens_in for c in per_pass_costs),
+                         tokens_out=sum(c.tokens_out for c in per_pass_costs),
+                         cache_read_tokens=sum(c.cache_read_tokens for c in per_pass_costs)),
+                entries, raw_context, category_weights,
+            )
 
         # sources.jsonl
         if source_rows:
@@ -1197,11 +1205,16 @@ def create_dream_artifact(
                 for nudge in nudges["high_hit_rate"]:
                     category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
                 if category_weights:
+                    # C1: Write category_weights as YAML, not JSON.
+                    # yaml.safe_load only reads the first document; appending
+                    # JSON after a YAML list silently drops the weights.
                     patch_path = artifact_dir / "memory.patch"
-                    # Append to existing patch if present
                     existing = patch_path.read_text(encoding="utf-8") if patch_path.exists() else ""
-                    weight_block = json.dumps({"category_weights": category_weights}, indent=2)
-                    _write_file_atomic(patch_path, existing + "\n" + weight_block + "\n")
+                    weight_yaml = _yaml.dump(
+                        {"category_weights": category_weights},
+                        default_flow_style=False, allow_unicode=True, sort_keys=False,
+                    )
+                    _write_file_atomic(patch_path, existing + "\n" + weight_yaml)
                     report_lines += ["", f"**Category weights written to memory.patch:** "
                                         f"{len(category_weights)} category(es)."]
 

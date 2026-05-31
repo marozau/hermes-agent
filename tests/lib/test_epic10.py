@@ -182,8 +182,9 @@ class TestPromptBuilders:
     def test_consolidation_prompt_contains_entries(self):
         from lib.hermes_dream import _build_consolidation_prompt
         entries = [{"id": "e1", "type": "fact", "access_count": 5, "body": "test body"}]
-        prompt = _build_consolidation_prompt(entries)
-        assert "e1" in prompt
+        msgs = _build_consolidation_prompt(entries)
+        prompt = "\n".join(m["content"] for m in msgs)
+        assert "Current Memory Entries" in prompt
         assert "fact" in prompt
         assert "test body" in prompt
 
@@ -191,14 +192,16 @@ class TestPromptBuilders:
         from lib.hermes_dream import _build_consolidation_prompt
         entries = [{"id": "e1", "type": "fact", "access_count": 0, "body": "x"}]
         weights = {"docker": {"direction": "up", "hit_rate": 0.7}}
-        prompt = _build_consolidation_prompt(entries, category_weights=weights)
+        msgs = _build_consolidation_prompt(entries, category_weights=weights)
+        prompt = "\n".join(m["content"] for m in msgs)
         assert "docker" in prompt
         assert "70.0%" in prompt
 
     def test_refine_prompt_contains_previous_patch(self):
         from lib.hermes_dream import _build_refine_prompt
         entries = [{"id": "e1", "type": "fact", "access_count": 0, "body": "x"}]
-        prompt = _build_refine_prompt("- op: add\n  target_entry_id: e1", entries)
+        msgs = _build_refine_prompt("- op: add\n  target_entry_id: e1", entries)
+        prompt = "\n".join(m["content"] for m in msgs)
         assert "REFINEMENT" in prompt
         assert "op: add" in prompt
 
@@ -206,7 +209,8 @@ class TestPromptBuilders:
         from lib.hermes_dream import _build_refine_prompt
         entries = []
         contradictions = [("new1", "existing1")]
-        prompt = _build_refine_prompt("prev", entries, contradictions=contradictions)
+        msgs = _build_refine_prompt("patch", entries, contradictions=contradictions)
+        prompt = "\n".join(m["content"] for m in msgs)
         assert "CONTRADICTIONS" in prompt
         assert "new1" in prompt
         assert "existing1" in prompt
