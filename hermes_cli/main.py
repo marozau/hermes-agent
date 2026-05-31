@@ -12909,13 +12909,54 @@ Examples:
         help="Interactive skill configuration — enable/disable individual skills",
     )
 
+    # share sub-action: move a skill to the shared directory
+    skills_share = skills_subparsers.add_parser(
+        "share",
+        help="Share a profile skill to the shared directory",
+        description=(
+            "Move (or copy) a skill from the active profile's skills directory "
+            "to ~/.hermes/skills/, making it available to other profiles with "
+            "skills.shared: true."
+        ),
+    )
+    skills_share.add_argument("name", help="Skill name to share")
+    skills_share.add_argument(
+        "--copy", "-c",
+        action="store_true",
+        help="Copy instead of move (keep the local copy)",
+    )
+
+    # unshare sub-action: remove a skill from the shared directory
+    skills_unshare = skills_subparsers.add_parser(
+        "unshare",
+        help="Remove a shared skill",
+        description=(
+            "Remove a skill from the shared directory. By default the skill "
+            "is moved back to the active profile's skills directory."
+        ),
+    )
+    skills_unshare.add_argument("name", help="Skill name to unshare")
+    skills_unshare.add_argument(
+        "--no-reinstate",
+        action="store_true",
+        help="Delete from shared without reinstating locally",
+    )
+
     def cmd_skills(args):
         # Route 'config' action to skills_config module
-        if getattr(args, "skills_action", None) == "config":
+        action = getattr(args, "skills_action", None)
+        if action == "config":
             _require_tty("skills config")
             from hermes_cli.skills_config import skills_command as skills_config_command
 
             skills_config_command(args)
+        elif action in ("share", "unshare"):
+            from hermes_cli.skills_share import cmd_skills_share, cmd_skills_unshare
+
+            if action == "share":
+                sys.exit(cmd_skills_share(args))
+            else:
+                sys.exit(cmd_skills_unshare(args))
         else:
             from hermes_cli.skills_hub import skills_command
 

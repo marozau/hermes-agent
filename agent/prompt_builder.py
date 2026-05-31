@@ -1352,6 +1352,127 @@ def _truncate_content(content: str, filename: str, max_chars: int = CONTEXT_FILE
     return head + marker + tail
 
 
+# =========================================================================
+# @file reference resolver — inline file content via @path/to/file.md
+# =========================================================================
+
+_REF_SUPPORTED_EXTENSIONS = frozenset({".md", ".txt", ".MD", ".TXT"})
+_REF_MAX_DEPTH = 5
+
+
+def _resolve_refs(
+    content: str,
+    base_dir: Path,
+    git_root: Path,
+    _depth: int = 0,
+    _visited: "set[Path] | None" = None,
+) -> str:
+    """Resolve ``@path/to/file.md`` references in *content* to file contents.
+
+    Each reference is replaced with the file content wrapped in an HTML
+    comment marker (``<!-- from @path/to/file.md -->``).  Nested references
+    in inlined files are resolved recursively up to ``_REF_MAX_DEPTH``,
+    with cycle detection across the current resolution stack.
+
+    Args:
+        content: The text to scan for @file references.
+        base_dir: Directory against which relative @ref paths are resolved.
+        git_root: Root of the git repository; files outside this tree are
+                  rejected (path-traversal guard).
+        _depth: Internal recursion counter (do not set).
+        _visited: Internal stack of absolute paths currently being resolved
+                  (do not set).
+
+    Returns:
+        *content* with all resolvable @refs replaced by their file contents,
+        wrapped in HTML-comment provenance markers.
+    """
+    import re
+
+    if _visited is None:
+        _visited = set()
+
+    ref_pattern = re.compile(r"(?<!\S)@(\S+)")
+
+    result_parts: list[str] = []
+    last_end = 0
+
+    for match in ref_pattern.finditer(content):
+        ref_path_str = match.group(1)
+        full_match = match.group(0)
+        start, end = match.span()
+
+        # Append text before this match
+        result_parts.append(content[last_end:start])
+        last_end = end
+
+        # ── Depth guard ──────────────────────────────────────────────
+        if _depth >= _REF_MAX_DEPTH:
+            logger.debug(
+                "Skipping @%s: max depth %d reached", ref_path_str, _REF_MAX_DEPTH
+            )
+            result_parts.append(full_match)
+            continue
+
+        # ── Resolve and validate the path ────────────────────────────
+        ref_path = (base_dir / ref_path_str).resolve()
+
+        # Security: reject paths that escape git_root (incl. .. traversal)
+        try:
+            ref_path.relative_to(git_root)
+        except ValueError:
+            logger.debug("Skipping @%s: outside git root", ref_path_str)
+            result_parts.append(full_match)
+            continue
+
+        # File must exist
+        if not ref_path.is_file():
+            logger.debug("Skipping @%s: file not found", ref_path_str)
+            result_parts.append(full_match)
+            continue
+
+        # Extension whitelist
+        if ref_path.suffix not in _REF_SUPPORTED_EXTENSIONS:
+            logger.debug(
+                "Skipping @%s: unsupported extension %r", ref_path_str, ref_path.suffix
+            )
+            result_parts.append(full_match)
+            continue
+
+        # ── Cycle detection ──────────────────────────────────────────
+        if ref_path in _visited:
+            logger.debug("Circular reference detected: @%s", ref_path_str)
+            result_parts.append(
+                f"<!-- [CIRCULAR: @{ref_path_str} already visited] -->"
+            )
+            continue
+
+        # ── Read the file ────────────────────────────────────────────
+        try:
+            file_content = ref_path.read_text(encoding="utf-8").rstrip()
+        except Exception as exc:
+            logger.debug("Could not read @%s: %s", ref_path_str, exc)
+            result_parts.append(full_match)
+            continue
+
+        # ── Recurse into file content ────────────────────────────────
+        _visited.add(ref_path)
+        try:
+            resolved_content = _resolve_refs(
+                file_content, ref_path.parent, git_root, _depth + 1, _visited
+            )
+        finally:
+            _visited.discard(ref_path)
+
+        # ── Wrap with provenance marker ──────────────────────────────
+        result_parts.append(f"<!-- from @{ref_path_str} -->\n{resolved_content}")
+
+    # Append trailing text
+    result_parts.append(content[last_end:])
+
+    return "".join(result_parts)
+
+
 def load_soul_md() -> Optional[str]:
     """Load SOUL.md from HERMES_HOME and return its content, or None.
 
