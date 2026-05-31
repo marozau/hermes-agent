@@ -524,4 +524,14 @@ def register(ctx) -> None:
         args_hint="--epic N [--dry-run]",
     )
 
+    # Story 7.10: standalone Prefect export CLI
+    from plugins.bmad.commands.orchestrate_export import handler as _export_handler
+    ctx.register_cli_command(
+        name="bmad-orchestrate-export",
+        help="Export an orchestrate run as a Prefect flow file",
+        setup_fn=lambda subparser: subparser.add_argument("epic", nargs="?", default=""),
+        handler_fn=_export_handler,
+        description="Generate a standalone Prefect flow .py for an epic.",
+    )
+
     logger.info("[bmad] plugin registered: hooks=8, cli=2, slash=42")

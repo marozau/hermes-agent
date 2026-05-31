@@ -27,6 +27,7 @@ class StorySpec:
     sprint: str = ""
     worktree: Optional[str] = None
     touches: list[str] = field(default_factory=list)
+    verification_gate: str = ""  # "adversarial" for opt-in Opus review (Story 7.8)
 
 
 @dataclass

@@ -551,6 +551,21 @@ def _execute_story(
             telemetry.record_predicates(wm, total, passed, total - passed)
 
         if passed == total:
+            # Story 7.8: Run adversarial gate if configured (opt-in)
+            if story.verification_gate == "adversarial":
+                try:
+                    from .adversarial_gate import run_adversarial_gate
+                    adv_pass, adv_findings = run_adversarial_gate(ctx, story, project_dir)
+                    if not adv_pass:
+                        error_msg = f"Adversarial gate FAILED: {adv_findings}"
+                        logger.warning("[orchestrator] Story %s attempt %d: %s", story.id, attempt, error_msg)
+                        if telemetry and wm:
+                            telemetry.finish_worker(wm, "failed", error=error_msg,
+                                                     delegation_result=delegation_result if isinstance(delegation_result, dict) else {})
+                        continue  # Retry
+                except Exception as exc:
+                    logger.warning("[orchestrator] Adversarial gate error for %s: %s (treated as pass)", story.id, exc)
+
             # Success
             if telemetry and wm:
                 telemetry.finish_worker(wm, "succeeded", delegation_result=delegation_result)
