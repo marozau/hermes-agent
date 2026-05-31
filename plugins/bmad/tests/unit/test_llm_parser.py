@@ -134,3 +134,64 @@ class TestParseLLMSummary:
         assert "**" not in findings[0]["message"]
         assert "`" not in findings[0]["message"]
         assert "[" not in findings[0]["message"]
+
+
+# ── _extract_llm_findings (R4-1) ────────────────────────────────────────────
+
+
+class TestExtractLLMFindings:
+    def test_role_mapping_blind(self):
+        """Blind Hunter role maps to 'blind' source key."""
+        reviewers = [{"role": "Blind Hunter"}]
+        results = [{"summary": "- `foo.py:42` critical issue"}]
+        out = _extract_llm_findings(results, reviewers)
+        assert "blind" in out
+        assert out["blind"][0]["source"] == "blind"
+
+    def test_role_mapping_edge(self):
+        """Edge Case Hunter role maps to 'edge' source key."""
+        reviewers = [{"role": "Edge Case Hunter"}]
+        results = [{"summary": "- `foo.py:10` edge case"}]
+        out = _extract_llm_findings(results, reviewers)
+        assert "edge" in out
+
+    def test_role_mapping_auditor(self):
+        """Acceptance Auditor role maps to 'auditor' source key."""
+        reviewers = [{"role": "Acceptance Auditor"}]
+        results = [{"summary": "- `foo.py:5` missing AC"}]
+        out = _extract_llm_findings(results, reviewers)
+        assert "auditor" in out
+
+    def test_unrecognized_role_fallback(self):
+        """Unrecognized role falls back to 'llm_N' key."""
+        reviewers = [{"role": "Custom Reviewer"}]
+        results = [{"summary": "- `foo.py:1` issue"}]
+        out = _extract_llm_findings(results, reviewers)
+        assert "llm_0" in out
+
+    def test_errored_reviewer_skipped(self):
+        """Reviewer with error=True is skipped, not included in output."""
+        reviewers = [{"role": "Blind Hunter"}, {"role": "Edge Case Hunter"}]
+        results = [
+            {"summary": "- `foo.py:1` issue"},
+            {"error": True, "summary": "timeout"},
+        ]
+        out = _extract_llm_findings(results, reviewers)
+        assert "blind" in out
+        assert "edge" not in out
+
+    def test_empty_inputs(self):
+        """Empty reviewers and results return empty dict."""
+        assert _extract_llm_findings([], []) == {}
+        assert _extract_llm_findings([{"summary": "..."}], []) == {}
+
+    def test_more_results_than_reviewers(self):
+        """Extra results beyond reviewer count are safely ignored."""
+        reviewers = [{"role": "Blind Hunter"}]
+        results = [
+            {"summary": "- `foo.py:1` issue"},
+            {"summary": "- `bar.py:2` extra"},
+        ]
+        out = _extract_llm_findings(results, reviewers)
+        assert len(out) == 1
+        assert "blind" in out
