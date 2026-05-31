@@ -790,6 +790,16 @@ _RERANK_TOP_N = 8  # candidates to feed to reranker
 _RERANK_TOP_K = 3  # final selection from reranker
 
 
+# A2: Pydantic gate for reranker output (Hard Invariant #11)
+try:
+    from pydantic import BaseModel as _RerankBM, Field as _RerankField, conint as _RerankConint
+    _IDX_MAX = _RERANK_TOP_N - 1
+    class RerankIndices(_RerankBM):
+        indices: list[_RerankConint(ge=0, le=_IDX_MAX)] = _RerankField(..., max_length=3)
+except ImportError:
+    RerankIndices = None  # type: ignore[assignment,misc]
+
+
 def _build_rerank_candidates(hits: list[TrajectoryHit], max_body: int = 200) -> str:
     """Build the numbered candidate list for the rerank prompt."""
     lines = []
@@ -884,7 +894,7 @@ def rerank_with_llm(
         spec = LLMSpec(
             workload="preflight_rerank",
             messages=[{"role": "user", "content": prompt}],
-            response_model=None,  # Free-text — we parse JSON from it
+            response_model=RerankIndices,  # HI #11: Pydantic gate
             idempotency_key=f"rerank-{hashlib.sha256(query_text.encode()).hexdigest()[:16]}",
         )
         result = llm_call(spec)
