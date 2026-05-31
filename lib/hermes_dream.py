@@ -514,6 +514,81 @@ def create_dream_artifact(
             f"regression={recall_report.regression})",
             f"**Δtokens:** {delta['delta']:+d} (before={delta['before']}, after={delta['after']})",
         ]
+
+        # Story 9.3: hit-rate report + category weight proposals
+        try:
+            from lib.hermes_memory import build_hit_rate_report, propose_category_weight_nudges
+            hit_rate_report = build_hit_rate_report()
+            if hit_rate_report:
+                nudges = propose_category_weight_nudges(hit_rate_report)
+                report_lines += ["", "## Preflight Hit-Rate Report", ""]
+                report_lines.append(f"Analyzed {len(hit_rate_report)} categories "
+                                    f"(min 20 fires each).")
+                report_lines.append("")
+                report_lines.append("| Category | n_fired | n_hit | n_miss | hit_rate |")
+                report_lines.append("|----------|---------|-------|--------|----------|")
+                for row in hit_rate_report:
+                    report_lines.append(
+                        f"| {row['category']} | {row['n_fired']} | "
+                        f"{row['n_matched_hit']} | {row['n_matched_miss']} | "
+                        f"{row['hit_rate']:.2%} |"
+                    )
+
+                if nudges["low_hit_rate"]:
+                    report_lines += ["", "### Categories to demote (low hit-rate)", ""]
+                    for nudge in nudges["low_hit_rate"]:
+                        report_lines.append(
+                            f"- **{nudge['category']}**: hit_rate={nudge['hit_rate']:.2%} "
+                            f"over {nudge['n_fired']} fires → propose nudge_down"
+                        )
+
+                if nudges["high_hit_rate"]:
+                    report_lines += ["", "### Categories to promote (high hit-rate)", ""]
+                    for nudge in nudges["high_hit_rate"]:
+                        report_lines.append(
+                            f"- **{nudge['category']}**: hit_rate={nudge['hit_rate']:.2%} "
+                            f"over {nudge['n_fired']} fires → propose nudge_up"
+                        )
+
+                if nudges["blind_spots"]:
+                    report_lines += ["", "### Domain blind spots", ""]
+                    for spot in nudges["blind_spots"]:
+                        report_lines.append(
+                            f"- **{spot['category']}**: hit_rate={spot['hit_rate']:.2%}, "
+                            f"unrelated_rate={spot['unrelated_rate']:.2%} "
+                            f"→ candidate for domain-vocab.txt extension"
+                        )
+
+                # Write category_weights to memory.patch (proposal only — Hard Invariant #4)
+                category_weights = {}
+                for nudge in nudges["low_hit_rate"]:
+                    category_weights[nudge["category"]] = {"direction": "down", "hit_rate": nudge["hit_rate"]}
+                for nudge in nudges["high_hit_rate"]:
+                    category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
+                if category_weights:
+                    patch_path = artifact_dir / "memory.patch"
+                    # Append to existing patch if present
+                    existing = patch_path.read_text(encoding="utf-8") if patch_path.exists() else ""
+                    weight_block = json.dumps({"category_weights": category_weights}, indent=2)
+                    _write_file_atomic(patch_path, existing + "\n" + weight_block + "\n")
+                    report_lines += ["", f"**Category weights written to memory.patch:** "
+                                        f"{len(category_weights)} category(es)."]
+
+                # Write blind-spot vocab suggestions to preflight.patch
+                if nudges["blind_spots"]:
+                    vocab_suggestions = [s["category"] for s in nudges["blind_spots"]]
+                    preflight_patch = artifact_dir / "preflight.patch"
+                    _write_file_atomic(
+                        preflight_patch,
+                        json.dumps({"domain_vocab_candidates": vocab_suggestions}, indent=2) + "\n",
+                    )
+                    report_lines += ["", f"**Domain vocab candidates written to preflight.patch:** "
+                                        f"{len(vocab_suggestions)} term(s)."]
+
+        except Exception as e:
+            logger.debug("Story 9.3 hit-rate report failed: %s", e)
+            report_lines += ["", f"## Hit-Rate Report", "", f"*Unavailable: {e}*"]
+
         if dry_run:
             report_lines += ["", "*This is a dry-run artifact for pipeline validation.*"]
         _write_file_atomic(

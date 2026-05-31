@@ -114,3 +114,14 @@ workloads:
       timeout: 5
     fallback: []
     cache: "5m"
+
+  # Story 9.2: trajectory dedup — DeepSeek Flash for manifest classification.
+  # No fallback: fail-open to new-entry path at the caller.
+  trajectory_dedup:
+    primary:
+      provider: deepseek
+      model: deepseek-v4-flash
+      max_tokens: 200
+      timeout: 10
+    fallback: []
+    cache: "none"

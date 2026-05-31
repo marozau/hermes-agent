@@ -123,24 +123,31 @@ def emit(session_id: str, verify_cited: list[str] | None = None, match: str | No
         _record_verify_citation(session_id, intent_hash, verify_cited)
 
     # Story 9.1: when verify reports match:hit for cited IDs, reinforce them.
-    # Each (session_id, cited_id) pair is reinforced at most once (idempotency
-    # keyed on the raw-layer reinforce event with source="verify-cited-hit").
+    # A3: session_id passed for (session, entry) idempotency key.
+    # P6: each ID wrapped individually — one failure doesn't abort the batch.
     if match == "hit" and verify_cited:
         try:
             import sys as _sys
             import os as _os
             _hermes_home = _os.environ.get("HERMES_HOME") or str(_os.path.expanduser("~/.hermes"))
-            _lib_dir = _os.path.join(_hermes_home, "lib")
-            if _lib_dir not in _sys.path:
-                _sys.path.insert(0, _lib_dir)
+            _lib_parent = _os.path.dirname(_os.path.join(_hermes_home, "lib"))
+            if _lib_parent not in _sys.path:
+                _sys.path.insert(0, _lib_parent)
             from lib.hermes_memory import reinforce_entry
             for cited_id in verify_cited:
                 if cited_id and cited_id.strip():
-                    reinforce_entry(cited_id.strip(), source="verify-cited-hit")
+                    try:
+                        reinforce_entry(
+                            cited_id.strip(),
+                            source="verify-cited-hit",
+                            session_id=session_id,
+                        )
+                    except Exception as e:
+                        print(f"[verify] reinforce {cited_id} failed: {e}", file=_sys.stderr)
         except Exception as e:
             # Fail-open: reinforcement is an improvement, not a blocker
             import sys as _sys
-            print(f"[verify] reinforce failed: {e}", file=_sys.stderr)
+            print(f"[verify] reinforce setup failed: {e}", file=_sys.stderr)
 
     # The "preflight-cited" line is what preflight SUGGESTED (top-K). When
     # verify provides its own cited set, prefer that — it's the better

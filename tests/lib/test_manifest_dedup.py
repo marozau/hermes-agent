@@ -103,11 +103,10 @@ class TestClassifyTrajectory:
     def test_reinforce_action(self, memory_dirs):
         from lib.hermes_memory import classify_trajectory_with_manifest
         mock_result = {"content": '{"action": "reinforce", "id": "01ABC123"}'}
-        with mock.patch("lib.hermes_preflight._get_embedding"):
-            with mock.patch("lib.hermes_llm.llm_call", return_value=mock_result):
-                result = classify_trajectory_with_manifest(
-                    "docker build fails", "MANIFEST:\n[01ABC123] docker build\n"
-                )
+        with mock.patch("lib.hermes_llm.llm_call", return_value=mock_result):
+            result = classify_trajectory_with_manifest(
+                "docker build fails", "MANIFEST:\n[01ABC123] docker build\n"
+            )
         assert result["action"] == "reinforce"
         assert result["id"] == "01ABC123"
 
@@ -153,7 +152,7 @@ class TestClassifyTrajectory:
         mock_result = {"content": '```json\n{"action": "reinforce", "id": "01XYZ"}\n```'}
         with mock.patch("lib.hermes_llm.llm_call", return_value=mock_result):
             result = classify_trajectory_with_manifest(
-                "test", "MANIFEST:\n"
+                "test", "MANIFEST:\n[01XYZ] some docker entry\n"
             )
         assert result["action"] == "reinforce"
         assert result["id"] == "01XYZ"

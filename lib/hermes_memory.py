@@ -554,10 +554,12 @@ def expire_entry(
 # Story 9.1: reinforce_entry — bump access_count + last_hit_at on verified hits
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _has_prior_reinforce(entry_id: str, source: str, raw_dir: Optional[str] = None) -> bool:
-    """Check if a reinforce event with matching (entry_id, source) already exists in raw layer.
+def _has_prior_reinforce(entry_id: str, source: str, session_id: str = "", raw_dir: Optional[str] = None) -> bool:
+    """Check if a reinforce event with matching (entry_id, compound_key) already exists.
 
-    Scans today's and yesterday's JSONL files. Returns True if found (skip duplicate).
+    A3: Compound key = f"{source}:{session_id}" encoded in raw content field.
+    P1: Uses equality, not startswith, to avoid prefix-collision.
+    Scans today's and yesterday's JSONL files.
     """
     from datetime import timedelta
     raw_root = _resolve_raw_dir(raw_dir)
@@ -565,6 +567,7 @@ def _has_prior_reinforce(entry_id: str, source: str, raw_dir: Optional[str] = No
     role = os.environ.get("HERMES_ROLE", "engineer")
     now = datetime.now(timezone.utc)
     dates = [now.strftime("%Y-%m-%d"), (now - timedelta(days=1)).strftime("%Y-%m-%d")]
+    compound_key = f"{source}:{session_id}" if session_id else source
 
     for date_str in dates:
         raw_file = raw_root / project / role / f"{date_str}.jsonl"
@@ -581,10 +584,13 @@ def _has_prior_reinforce(entry_id: str, source: str, raw_dir: Optional[str] = No
                     continue
                 if (row.get("kind") == "reinforce"
                         and row.get("entry_id") == entry_id
-                        and row.get("content", "").startswith(source)):
+                        and row.get("content", "") == compound_key):
                     return True
-        except OSError:
+        except FileNotFoundError:
             continue
+        except OSError as e:
+            logger.warning("_has_prior_reinforce: OSError reading %s: %s", raw_file, e)
+            raise  # P4: fail-closed on permission/corruption errors
     return False
 
 
@@ -592,49 +598,71 @@ def reinforce_entry(
     entry_id: str,
     source: str = "verify-cited-hit",
     *,
+    session_id: str = "",
     memory_dir: Optional[str] = None,
     raw_dir: Optional[str] = None,
 ) -> None:
     """Story 9.1: Bump access_count + set last_hit_at on a verified-cited entry.
 
+    A3: session_id parameter — idempotency keyed on (session_id, entry_id) via
+    compound content field "{source}:{session_id}" in the raw layer. This matches
+    AC3: "exactly once per (session, cited_id)."
+
     Atomic frontmatter rewrite — body bytes unchanged (content-hash stable,
     dream re-runs don't churn). Pairs with a raw-layer reinforce event
     (Epic 2 invariant / FR-12).
 
-    Idempotency: if a reinforce event with the same (entry_id, source) already
-    exists in the raw layer for today/yesterday, the call is a no-op. This
-    prevents double-counting when verify reports the same (session, cited_id)
-    pair twice.
+    P2: Frontmatter write happens BEFORE raw-layer append. If frontmatter
+    fails, no raw event is written; retry is safe.
+    P3: File-level lock prevents lost-update on concurrent verify hooks.
     """
+    import fcntl
+
+    compound_key = f"{source}:{session_id}" if session_id else source
+
     # Idempotency guard — check raw layer before doing any I/O
-    if _has_prior_reinforce(entry_id, source, raw_dir):
-        logger.debug("reinforce_entry: skip %s (already reinforced with source=%s)", entry_id, source)
+    if _has_prior_reinforce(entry_id, source, session_id, raw_dir):
+        logger.debug("reinforce_entry: skip %s (already reinforced with key=%s)", entry_id, compound_key)
         return
 
     mem_path = _resolve_memory_dir(memory_dir)
-    fm, body = _read_entry_file(entry_id, mem_path)
-    now = datetime.now(timezone.utc)
+    filepath = mem_path / f"{entry_id}.md"
+    if not filepath.exists():
+        raise FileNotFoundError(f"Entry {entry_id} not found at {filepath}")
 
-    # Bump access_count (default 0 for pre-existing entries without the field)
-    current_count = fm.get("access_count", 0)
-    if not isinstance(current_count, int) or current_count < 0:
-        current_count = 0
-    fm["access_count"] = current_count + 1
-    fm["last_hit_at"] = now.isoformat()
+    # P3: Per-entry file lock for read-modify-write atomicity
+    lock_path = mem_path / f".{entry_id}.lock"
+    lock_path.touch(exist_ok=True)
+    lock_fd = open(lock_path, "r+")
+    try:
+        fcntl.flock(lock_fd, fcntl.LOCK_EX)
+        fm, body = _read_entry_file(entry_id, mem_path)
+        now = datetime.now(timezone.utc)
 
-    # Raw-layer pair FIRST (audit precedes effect)
-    _append_raw_line(
-        entry_id=entry_id,
-        ts=now,
-        kind="reinforce",
-        content=source,
-        evidence=None,
-        raw_dir_override=raw_dir,
-    )
+        # Bump access_count (default 0 for pre-existing entries without the field)
+        current_count = fm.get("access_count", 0)
+        if not isinstance(current_count, int) or current_count < 0:
+            current_count = 0
+        fm["access_count"] = current_count + 1
+        fm["last_hit_at"] = now.isoformat()
 
-    # Atomic frontmatter rewrite — body bytes unchanged
-    _write_entry_file(entry_id, fm, body, mem_path)
-    logger.debug("reinforce_entry: %s access_count=%d", entry_id, fm["access_count"])
+        # P2: Frontmatter write FIRST (atomic tmp+rename)
+        _write_entry_file(entry_id, fm, body, mem_path)
+
+        # Raw-layer pair AFTER frontmatter success
+        _append_raw_line(
+            entry_id=entry_id,
+            ts=now,
+            kind="reinforce",
+            content=compound_key,  # A3: compound key for (session, entry) dedup
+            evidence=None,
+            raw_dir_override=raw_dir,
+        )
+    finally:
+        fcntl.flock(lock_fd, fcntl.LOCK_UN)
+        lock_fd.close()
+
+    logger.debug("reinforce_entry: %s access_count=%d key=%s", entry_id, fm["access_count"], compound_key)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -674,8 +702,11 @@ def build_manifest(
 
     lines = ["MANIFEST (existing trajectories for this project+role):"]
     for e in trajectories:
+        eid = e.get("id")  # P13: guard legacy entries without id
+        if not eid:
+            continue
         body_summary = (e.get("body") or "")[:_MANIFEST_SUMMARY_LEN].replace("\n", " ").strip()
-        lines.append(f"[{e['id']}] {body_summary}")
+        lines.append(f"[{eid}] {body_summary}")
     return "\n".join(lines) + "\n"
 
 
@@ -708,19 +739,31 @@ def classify_trajectory_with_manifest(
     Uses Pydantic to gate the LLM output (Hard Invariant #11).
     """
     try:
-        from pydantic import BaseModel, validator
-        from typing import Literal
+        from pydantic import BaseModel, ConfigDict
+        from typing import Literal, Union
     except ImportError:
         return {"action": "error", "reason": "pydantic not available"}
 
+    EntryType = Literal["preference", "fact", "procedure", "episode", "trajectory", "unknown"]
+
     class ReinforceAction(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # P8
         action: Literal["reinforce"]
         id: str
 
     class NewEntryAction(BaseModel):
+        model_config = ConfigDict(extra="forbid")  # P8
         action: Literal["new"]
-        type: str
+        type: EntryType  # P7: constrained to valid entry types
         body: str
+
+    class ClassifierResult(BaseModel):
+        """P10: Discriminated union for LLMSpec response_model gate."""
+        model_config = ConfigDict(extra="forbid")
+        action: Literal["reinforce", "new"]
+        id: str = ""
+        type: EntryType = "trajectory"
+        body: str = ""
 
     prompt = (
         f"{manifest}\n"
@@ -733,25 +776,32 @@ def classify_trajectory_with_manifest(
         spec = LLMSpec(
             workload=workload,
             messages=[{"role": "user", "content": prompt}],
-            response_model=None,
+            response_model=ClassifierResult,  # P10: Pydantic gate at LLM layer
         )
         result = llm_call(spec)
         content = result.get("content", "") if isinstance(result, dict) else str(result)
         if not content or not content.strip():
             return {"action": "error", "reason": "empty response"}
 
-        # Try to parse as JSON, extracting from markdown fences if needed
+        # P9: Use json.JSONDecoder().raw_decode for robust extraction
         import json as _json
-        import re as _re
-        json_match = _re.search(r'\{[^{}]+\}', content)
-        if not json_match:
+        decoder = _json.JSONDecoder()
+        # Find first '{' and try raw_decode
+        brace_start = content.find('{')
+        if brace_start < 0:
             return {"action": "error", "reason": "no JSON found"}
-        parsed = _json.loads(json_match.group())
+        try:
+            parsed, _ = decoder.raw_decode(content, brace_start)
+        except _json.JSONDecodeError:
+            return {"action": "error", "reason": "malformed JSON"}
 
         # Pydantic gate (Hard Invariant #11)
         action = parsed.get("action")
         if action == "reinforce":
             validated = ReinforceAction(**parsed)
+            # P11: verify id appears in manifest before returning
+            if f"[{validated.id}]" not in manifest and f"[{validated.id} " not in manifest:
+                return {"action": "error", "reason": f"id_not_in_manifest: {validated.id}"}
             return {"action": "reinforce", "id": validated.id}
         elif action == "new":
             validated = NewEntryAction(**parsed)
@@ -817,7 +867,10 @@ def build_hit_rate_report(
                     citation_rows.append((sid, ih, row.get("cited_ids", [])))
                 elif not event:
                     # Regular preflight telemetry row
-                    cat = row.get("category", row.get("primary_domain", "unknown"))
+                    # A4: prefer explicit category field, fall back to primary_domain, then domains[0]
+                    cat = row.get("category") or row.get("primary_domain") or (
+                        row.get("domains", ["unknown"])[0] if row.get("domains") else "unknown"
+                    )
                     preflight_rows.append((sid, ih, cat))
         except OSError:
             continue
@@ -890,9 +943,14 @@ def propose_category_weight_nudges(
         cat = row["category"]
         hr = row["hit_rate"]
         n = row["n_fired"]
+        # P14: derive unrelated_rate from match:miss (cited but didn't help),
+        # distinct from match:unrelated (no citation at all). Currently the
+        # telemetry schema doesn't distinguish these, so we use n_matched_miss
+        # as a proxy. When telemetry is extended, update this calculation.
         unrelated_rate = row["n_matched_miss"] / n if n > 0 else 0.0
 
-        if hr < blind_spot_threshold and unrelated_rate > unrelated_rate_threshold:
+        # P12: use <= / >= for boundary inclusion (flicker prevention)
+        if hr <= blind_spot_threshold and unrelated_rate > unrelated_rate_threshold:
             blind_spots.append({
                 "category": cat,
                 "hit_rate": hr,
@@ -900,14 +958,14 @@ def propose_category_weight_nudges(
                 "n_fired": n,
                 "action": "add_vocab_candidate",
             })
-        elif hr < low_threshold:
+        elif hr <= low_threshold:
             low.append({
                 "category": cat,
                 "hit_rate": hr,
                 "n_fired": n,
                 "action": "nudge_down",
             })
-        elif hr > high_threshold:
+        elif hr >= high_threshold:
             high.append({
                 "category": cat,
                 "hit_rate": hr,

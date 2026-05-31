@@ -159,6 +159,33 @@ class TestReinforceEntry:
         fm, _ = _read_entry_file(eid, mem_path)
         assert fm["access_count"] == 1  # reset to 0 then bumped to 1
 
+    def test_different_sessions_both_count(self, memory_dirs):
+        """A3: Two different sessions citing same entry both increment (not deduped)."""
+        from lib.hermes_memory import reinforce_entry, _read_entry_file, _resolve_memory_dir
+        eid = _add_test_entry(memory_dirs)
+        mem_path = _resolve_memory_dir()
+
+        reinforce_entry(eid, source="verify-cited-hit", session_id="session-A")
+        reinforce_entry(eid, source="verify-cited-hit", session_id="session-B")
+
+        fm, _ = _read_entry_file(eid, mem_path)
+        assert fm["access_count"] == 2  # both counted
+
+    def test_same_session_different_entry_ids(self, memory_dirs):
+        """A3: Same session citing different entries — both count."""
+        from lib.hermes_memory import reinforce_entry, _read_entry_file, _resolve_memory_dir
+        eid1 = _add_test_entry(memory_dirs, body="entry 1")
+        eid2 = _add_test_entry(memory_dirs, body="entry 2")
+        mem_path = _resolve_memory_dir()
+
+        reinforce_entry(eid1, source="verify-cited-hit", session_id="session-X")
+        reinforce_entry(eid2, source="verify-cited-hit", session_id="session-X")
+
+        fm1, _ = _read_entry_file(eid1, mem_path)
+        fm2, _ = _read_entry_file(eid2, mem_path)
+        assert fm1["access_count"] == 1
+        assert fm2["access_count"] == 1
+
     def test_file_not_found_raises(self, memory_dirs):
         """Reinforcing a non-existent entry raises FileNotFoundError."""
         from lib.hermes_memory import reinforce_entry

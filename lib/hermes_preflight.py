@@ -117,6 +117,8 @@ class PreflightTelemetry:
     embedding_source: str = ""     # "deepseek" | "openai" | "cache" | "failed" | ""
     # Story 8.6: reranker telemetry
     rerank_outcome: str = ""       # "disabled" | "ok" | "parse-failed" | "failed" | ""
+    # Story 9.3: category for hit-rate report (A4: derived from domains[0])
+    category: str = ""
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1058,6 +1060,7 @@ def write_preflight_telemetry(
         "truncated_count": telemetry.truncated_count,
         "embedding_source": telemetry.embedding_source,
         "rerank_outcome": telemetry.rerank_outcome,
+        "category": telemetry.category,  # A4: for Story 9.3 hit-rate report
     }, ensure_ascii=False, sort_keys=True) + "\n"
     _atomic_append(log_path / f"{today}.jsonl", row)
 
@@ -1375,6 +1378,7 @@ def should_run_preflight(
         truncated_count=truncated_count,
         embedding_source=embedding_source,
         rerank_outcome=rerank_outcome,
+        category=primary_domain or (intent.domains[0] if intent.domains else ""),  # A4
     ), log_dir=log_dir)
 
     if cited_ids:
