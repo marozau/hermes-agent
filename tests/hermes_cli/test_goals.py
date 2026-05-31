@@ -736,3 +736,268 @@ class TestStatusLineSubgoalCount:
         line = mgr.status_line()
         # Checklist renders as "0/2 done" in the status line
         assert "0/2 done" in line or "done" in line
+
+
+# ──────────────────────────────────────────────────────────────────────
+# judge_reasoning field — capture + persistence
+# ──────────────────────────────────────────────────────────────────────
+
+
+class _FakeMsgWithReasoning:
+    """Builder for fake SDK messages with various reasoning shapes."""
+
+    def __init__(self, *, reasoning_content=None, reasoning=None,
+                 model_extra=None, thinking_blocks=None,
+                 reasoning_details=None, tool_calls=None, content=""):
+        self.content = content
+        if reasoning_content is not None:
+            self.reasoning_content = reasoning_content
+        if reasoning is not None:
+            self.reasoning = reasoning
+        if model_extra is not None:
+            self.model_extra = model_extra
+        if thinking_blocks is not None:
+            self.thinking_blocks = thinking_blocks
+        if reasoning_details is not None:
+            self.reasoning_details = reasoning_details
+        self.tool_calls = tool_calls or []
+
+
+class TestExtractMessageReasoning:
+    def test_reasoning_content_direct(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(reasoning_content="Let me analyze this carefully.")
+        result = _extract_message_reasoning(msg)
+        assert result == "Let me analyze this carefully."
+
+    def test_reasoning_direct(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(reasoning="The agent completed the task.")
+        result = _extract_message_reasoning(msg)
+        assert result == "The agent completed the task."
+
+    def test_model_extra_reasoning_content(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            model_extra={"reasoning_content": "Chain of thought here."}
+        )
+        result = _extract_message_reasoning(msg)
+        assert result == "Chain of thought here."
+
+    def test_model_extra_reasoning(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            model_extra={"reasoning": "OpenRouter reasoning."}
+        )
+        result = _extract_message_reasoning(msg)
+        assert result == "OpenRouter reasoning."
+
+    def test_thinking_blocks(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            thinking_blocks=[
+                {"thinking": "Step 1: check the agent output."},
+                {"thinking": "Step 2: verify completions."},
+            ]
+        )
+        result = _extract_message_reasoning(msg)
+        assert "Step 1: check the agent output." in result
+        assert "Step 2: verify completions." in result
+
+    def test_thinking_blocks_in_model_extra(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            model_extra={
+                "thinking_blocks": [
+                    {"thinking": "Evaluating checklist item 1."},
+                ]
+            }
+        )
+        result = _extract_message_reasoning(msg)
+        assert "Evaluating checklist item 1." in result
+
+    def test_reasoning_details_openrouter(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            reasoning_details=[
+                {"type": "reasoning.text", "text": "First thought."},
+                {"type": "reasoning.text", "text": "Second thought."},
+            ]
+        )
+        result = _extract_message_reasoning(msg)
+        assert "First thought." in result
+        assert "Second thought." in result
+
+    def test_multiple_sources_concatenated(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(
+            reasoning_content="Main reasoning.",
+            model_extra={"reasoning": "Extra reasoning."},
+        )
+        result = _extract_message_reasoning(msg)
+        assert "Main reasoning." in result
+        assert "Extra reasoning." in result
+
+    def test_no_reasoning_returns_none(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning()
+        result = _extract_message_reasoning(msg)
+        assert result is None
+
+    def test_empty_reasoning_returns_none(self):
+        from hermes_cli.goals import _extract_message_reasoning
+        msg = _FakeMsgWithReasoning(reasoning_content="   ")
+        result = _extract_message_reasoning(msg)
+        assert result is None
+
+
+class TestGoalStateJudgeReasoning:
+    def test_default_is_none(self):
+        from hermes_cli.goals import GoalState
+        state = GoalState(goal="test")
+        assert state.judge_reasoning is None
+
+    def test_survives_json_roundtrip(self):
+        from hermes_cli.goals import GoalState
+        state = GoalState(goal="test", judge_reasoning="Let me verify each item...")
+        json_str = state.to_json()
+        reloaded = GoalState.from_json(json_str)
+        assert reloaded.judge_reasoning == "Let me verify each item..."
+
+    def test_survives_save_load_cycle(self, hermes_home):
+        from hermes_cli.goals import GoalState, save_goal, load_goal
+        state = GoalState(goal="test", judge_reasoning="Reasoning blob here.")
+        save_goal("reasoning-sid-1", state)
+        reloaded = load_goal("reasoning-sid-1")
+        assert reloaded is not None
+        assert reloaded.judge_reasoning == "Reasoning blob here."
+
+    def test_none_survives_roundtrip(self):
+        from hermes_cli.goals import GoalState
+        state = GoalState(goal="test", judge_reasoning=None)
+        reloaded = GoalState.from_json(state.to_json())
+        assert reloaded.judge_reasoning is None
+
+    def test_old_state_row_loads_with_none(self):
+        """Backwards compat: a state serialized before judge_reasoning existed."""
+        from hermes_cli.goals import GoalState
+        import json as _json
+        legacy = _json.dumps({
+            "goal": "do a thing",
+            "status": "active",
+            "turns_used": 2,
+            "max_turns": 20,
+            "created_at": 1.0,
+            "last_turn_at": 2.0,
+            "consecutive_parse_failures": 0,
+            "checklist": [],
+            "decomposed": True,
+        })
+        state = GoalState.from_json(legacy)
+        assert state.judge_reasoning is None
+
+
+class TestEvaluateChecklistCapturesReasoning:
+    def test_sets_judge_reasoning_on_state(self, hermes_home):
+        """evaluate_checklist() must set state.judge_reasoning from the
+        verdict-bearing assistant message."""
+        from hermes_cli import goals
+        from hermes_cli.goals import GoalState, evaluate_checklist
+
+        state = GoalState(goal="ship it", decomposed=True)
+        state.checklist = [type("_Item", (), {
+            "text": "done",
+            "status": "pending",
+            "to_dict": lambda: {},
+        })()]  # dummy pending item
+
+        # Build a fake client whose response has reasoning_content and
+        # emits an update_checklist tool call.
+        update_args = json.dumps({
+            "updates": [{"index": 1, "status": "completed",
+                         "evidence": "the agent shipped it"}],
+            "new_items": [],
+            "reason": "all items complete",
+        })
+
+        class _FakeTC:
+            id = "tc-1"
+            function = type("_Fn", (), {"name": "update_checklist",
+                                         "arguments": update_args})()
+
+        class _FakeMsg:
+            content = ""
+            reasoning_content = "The judge thinks deeply about the verdict."
+            tool_calls = [_FakeTC()]
+
+        class _FakeChoice:
+            message = _FakeMsg()
+
+        class _FakeResp:
+            choices = [_FakeChoice()]
+
+        class _FakeClient:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        return _FakeResp()
+
+        with patch.object(goals, "_get_judge_client",
+                          return_value=(_FakeClient(), "fake-judge")):
+            parsed, parse_failed = evaluate_checklist(
+                state, "I shipped the feature.", history_path=None
+            )
+
+        assert not parse_failed
+        assert state.judge_reasoning == "The judge thinks deeply about the verdict."
+
+    def test_judge_reasoning_none_when_no_reasoning_tokens(self, hermes_home):
+        from hermes_cli import goals
+        from hermes_cli.goals import GoalState, evaluate_checklist
+
+        state = GoalState(goal="ship it", decomposed=True)
+        state.checklist = [type("_Item", (), {
+            "text": "done",
+            "status": "pending",
+            "to_dict": lambda: {},
+        })()]
+
+        update_args = json.dumps({
+            "updates": [{"index": 1, "status": "completed",
+                         "evidence": "done"}],
+            "new_items": [],
+            "reason": "all done",
+        })
+
+        class _FakeTC:
+            id = "tc-1"
+            function = type("_Fn", (), {"name": "update_checklist",
+                                         "arguments": update_args})()
+
+        class _FakeMsg:
+            content = ""
+            # No reasoning attributes at all
+            tool_calls = [_FakeTC()]
+
+        class _FakeChoice:
+            message = _FakeMsg()
+
+        class _FakeResp:
+            choices = [_FakeChoice()]
+
+        class _FakeClient:
+            class chat:
+                class completions:
+                    @staticmethod
+                    def create(**kwargs):
+                        return _FakeResp()
+
+        with patch.object(goals, "_get_judge_client",
+                          return_value=(_FakeClient(), "fake-judge")):
+            parsed, parse_failed = evaluate_checklist(
+                state, "I shipped the feature.", history_path=None
+            )
+
+        assert not parse_failed
+        assert state.judge_reasoning is None

@@ -322,6 +322,7 @@ class GoalState:
     # state_meta rows load unchanged.
     checklist: List[ChecklistItem] = field(default_factory=list)
     decomposed: bool = False                  # has Phase-A run for this goal?
+    judge_reasoning: Optional[str] = None     # raw judge reasoning tokens from last eval
 
     def to_json(self) -> str:
         data = asdict(self)
@@ -353,6 +354,7 @@ class GoalState:
             consecutive_parse_failures=int(data.get("consecutive_parse_failures", 0) or 0),
             checklist=checklist,
             decomposed=bool(data.get("decomposed", False)),
+            judge_reasoning=data.get("judge_reasoning"),
         )
 
     # --- checklist helpers ------------------------------------------------
@@ -1223,6 +1225,60 @@ def judge_goal_freeform(
     return verdict, reason, parse_failed
 
 
+def _extract_message_reasoning(msg: Any) -> Optional[str]:
+    """Extract all reasoning tokens from a chat-completions assistant message.
+
+    Covers the main provider shim patterns observed in the wild (2026-05):
+      - msg.reasoning_content  — DeepSeek native / LiteLLM
+      - msg.reasoning          — OpenRouter
+      - msg.model_extra        — OpenRouter / some provider shims
+      - msg.thinking_blocks    — LiteLLM alternative format
+      - msg.reasoning_details  — OpenRouter structured reasoning
+
+    Returns a concatenated string of all non-empty reasoning segments,
+    or None when no reasoning tokens were present.
+    """
+    parts: list[str] = []
+
+    rc = getattr(msg, "reasoning_content", None)
+    if rc and isinstance(rc, str):
+        parts.append(rc.strip())
+
+    r = getattr(msg, "reasoning", None)
+    if r and isinstance(r, str):
+        parts.append(r.strip())
+
+    me = getattr(msg, "model_extra", None) or {}
+    if isinstance(me, dict):
+        me_rc = me.get("reasoning_content")
+        if me_rc and isinstance(me_rc, str):
+            parts.append(me_rc.strip())
+        me_r = me.get("reasoning")
+        if me_r and isinstance(me_r, str):
+            parts.append(me_r.strip())
+
+    tb = getattr(msg, "thinking_blocks", None) or []
+    if not tb and isinstance(me, dict):
+        tb = me.get("thinking_blocks") or []
+    if tb and isinstance(tb, list):
+        for b in tb:
+            if isinstance(b, dict):
+                t = b.get("thinking", "") or b.get("text", "")
+                if t and isinstance(t, str):
+                    parts.append(t.strip())
+
+    rd = getattr(msg, "reasoning_details", None) or []
+    if rd and isinstance(rd, list):
+        for d in rd:
+            if isinstance(d, dict) and d.get("type") == "reasoning.text":
+                t = d.get("text", "")
+                if t and isinstance(t, str):
+                    parts.append(t.strip())
+
+    combined = " ".join(parts).strip()
+    return combined if combined else None
+
+
 def evaluate_checklist(
     state: GoalState,
     last_response: str,
@@ -1315,6 +1371,12 @@ def evaluate_checklist(
         # Did the judge call update_checklist? If yes, we're done.
         update_tc = _extract_tool_call(msg, "update_checklist")
         if update_tc is not None:
+            # Capture the judge's full reasoning stream so callers can
+            # inspect WHY the verdict was reached.  Persisted via save_goal().
+            judge_reasoning = _extract_message_reasoning(msg)
+            if judge_reasoning:
+                state.judge_reasoning = judge_reasoning
+
             # V4 Pro and other reasoning models put their chain of thought
             # into reasoning tokens (msg.reasoning via OpenRouter) rather
             # than the structured tool-call arguments.  When the reason
@@ -1322,45 +1384,16 @@ def evaluate_checklist(
             # the user sees WHY the judge made its decisions.
             args = update_tc["arguments"]
             if isinstance(args, dict) and not str(args.get("reason", "")).strip():
-                # Extract reasoning from SDK response.  Priority order:
-                # 1. reasoning_content  — LiteLLM / DeepSeek native field
-                # 2. reasoning          — OpenRouter model_extra field
-                # 3. thinking_blocks    — LiteLLM alternative format
-                # 4. reasoning_details  — OpenRouter structured reasoning
-                reasoning = (
-                    getattr(msg, "reasoning_content", None)
-                    or getattr(msg, "reasoning", None)
-                )
-                if not reasoning:
-                    me = getattr(msg, "model_extra", None) or {}
-                    if isinstance(me, dict):
-                        reasoning = me.get("reasoning_content") or me.get("reasoning")
-                if not reasoning:
-                    tb = getattr(msg, "thinking_blocks", None) or []
-                    if not tb and isinstance(me, dict):
-                        tb = me.get("thinking_blocks") or []
-                    if tb and isinstance(tb, list) and len(tb) > 0:
-                        reasoning = " ".join(
-                            b.get("thinking", "") or b.get("text", "")
-                            for b in tb
-                            if isinstance(b, dict)
-                        )
-                if not reasoning:
-                    rd = getattr(msg, "reasoning_details", None) or []
-                    if rd and isinstance(rd, list) and len(rd) > 0:
-                        reasoning = " ".join(
-                            r.get("text", "") for r in rd
-                            if isinstance(r, dict) and r.get("type") == "reasoning.text"
-                        )
-                if reasoning and isinstance(reasoning, str) and reasoning.strip():
-                    truncated = reasoning.strip()[:500]
+                if judge_reasoning:
+                    truncated = judge_reasoning[:500]
                     args["reason"] = truncated
             parsed = _normalize_update_args(args)
             logger.info(
-                "goal judge (checklist): updates=%d new_items=%d reason=%s",
+                "goal judge (checklist): updates=%d new_items=%d reason=%s reasoning=%schars",
                 len(parsed.get("updates") or []),
                 len(parsed.get("new_items") or []),
                 _truncate(parsed.get("reason", ""), 120),
+                len(judge_reasoning) if judge_reasoning else 0,
             )
             return parsed, False
 
