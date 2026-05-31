@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 
 
 def pre_llm_call(
+    ctx,
     session_id: str = "",
     user_message: str = "",
     conversation_history: Optional[List[Dict[str, Any]]] = None,
@@ -29,7 +30,8 @@ def pre_llm_call(
     """Capture a pre-LLM lifecycle event.  Always returns None (observer only).
 
     Args match the ``invoke_hook("pre_llm_call", ...)`` call site in
-    ``agent/conversation_loop.py`` (line ~706).
+    ``agent/conversation_loop.py`` (line ~706). *ctx* is injected by
+    ``_bind_hook_ctx`` in ``__init__.py``.
 
     Returns None so the agent core does NOT inject extra context from
     this hook — we are a pure observer.
