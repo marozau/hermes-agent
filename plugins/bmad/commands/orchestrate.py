@@ -32,6 +32,12 @@ def _parse_args(args: str) -> dict:
         "no_halt": False,
         "no_telemetry": False,
         "prefect": False,
+        # V2 flags
+        "ralph_loop": False,
+        "auto_pr": False,
+        "next_epic": "",
+        "background": False,
+        "replan_on_failure": False,
     }
 
     tokens = args.strip().split()
@@ -66,6 +72,18 @@ def _parse_args(args: str) -> dict:
             result["no_telemetry"] = True
         elif tok == "--prefect":
             result["prefect"] = True
+        # V2 flags
+        elif tok == "--ralph-loop":
+            result["ralph_loop"] = True
+        elif tok == "--auto-pr":
+            result["auto_pr"] = True
+        elif tok == "--next-epic" and i + 1 < len(tokens):
+            i += 1
+            result["next_epic"] = tokens[i]
+        elif tok == "--background":
+            result["background"] = True
+        elif tok == "--replan-on-failure":
+            result["replan_on_failure"] = True
         elif not tok.startswith("--") and not positional_done:
             result["epic"] = tok
             positional_done = True
@@ -153,6 +171,12 @@ def handler(ctx, args: str) -> str:
         max_retries=parsed["max_retries"],
         no_halt=parsed["no_halt"],
         no_telemetry=parsed["no_telemetry"],
+        # V2 flags
+        ralph_loop=parsed.get("ralph_loop", False),
+        auto_pr=parsed.get("auto_pr", False),
+        next_epic=parsed.get("next_epic", ""),
+        background=parsed.get("background", False),
+        replan_on_failure=parsed.get("replan_on_failure", False),
     )
 
     try:

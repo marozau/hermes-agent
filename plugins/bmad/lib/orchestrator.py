@@ -74,6 +74,12 @@ class OrchestrateFlags:
     max_retries: int = 2  # OI-7
     no_halt: bool = False  # debug mode
     no_telemetry: bool = False
+    # V2 features
+    ralph_loop: bool = False  # 7.11: retry-until-green (opt-in, overrides max_retries)
+    auto_pr: bool = False     # auto-create GitHub PR on success
+    next_epic: str = ""       # cross-epic chaining: run this epic after current
+    background: bool = False  # detached background mode
+    replan_on_failure: bool = False  # prune dependents on failure
 
 
 @dataclass
@@ -474,6 +480,14 @@ def orchestrate_epic(
 
             # Halt-on-failure (OI-7)
             if result.status == "failed" and not flags.no_halt:
+                # V2: Replan-on-failure — prune dependents of failed story
+                if flags.replan_on_failure:
+                    pruned = _prune_dependents(story_id, epic, waves, wave_idx, report)
+                    if pruned:
+                        logger.info("[orchestrator] Replan: pruned %d dependents of %s: %s",
+                                    len(pruned), story_id, ", ".join(pruned))
+                        continue  # Don't halt; continue with remaining stories
+
                 report.halted = True
                 report.halt_reason = (
                     f"Story {story_id} failed after {result.attempts} attempts: "
@@ -488,6 +502,14 @@ def orchestrate_epic(
     if telemetry:
         telemetry.flush()
 
+    # V2: Cross-epic chaining — run next epic if specified
+    if flags.next_epic and not report.halted:
+        report = _chain_next_epic(ctx, project_dir, flags, report)
+
+    # V2: Auto-PR creation on success
+    if flags.auto_pr and not report.halted:
+        _auto_create_pr(project_dir, epic, report)
+
     return report
 
 
@@ -500,8 +522,18 @@ def _execute_story(
     telemetry: Any,
     wave_idx: int,
 ) -> StoryResult:
-    """Execute a single story with retry logic (OI-7)."""
-    max_attempts = max(1, flags.max_retries)
+    """Execute a single story with retry logic (OI-7).
+
+    Ralph-loop mode (7.11): when flags.ralph_loop=True, retries indefinitely
+    up to RALPH_LOOP_CAP (safety valve). Opt-in only per OI-7.
+    """
+    RALPH_LOOP_CAP = 100  # Safety cap for infinite retry
+
+    if flags.ralph_loop:
+        max_attempts = RALPH_LOOP_CAP
+        logger.info("[orchestrator] Ralph-loop mode: retrying %s up to %d attempts", story.id, RALPH_LOOP_CAP)
+    else:
+        max_attempts = max(1, flags.max_retries)
     passed = 0
     total = 0
     error_msg = ""
@@ -624,3 +656,156 @@ def _checkpoint(project_dir: Path, report: OrchestrateReport) -> None:
         save_sprint_status(project_dir, data)
     except Exception:
         logger.exception("[orchestrator] Checkpoint failed (non-fatal)")
+
+
+def _prune_dependents(
+    failed_story_id: str,
+    epic: EpicSpec,
+    waves: list[list[str]],
+    current_wave_idx: int,
+    report: OrchestrateReport,
+) -> list[str]:
+    """Prune all stories that transitively depend on the failed story.
+
+    Returns list of pruned story IDs. Sets them to 'pruned' in report.
+    """
+    # Build reverse dependency map: story → set of stories that depend on it
+    dependents: dict[str, set[str]] = {}
+    for story in epic.stories:
+        for dep in story.dependencies:
+            dependents.setdefault(dep, set()).add(story.id)
+
+    # BFS to find all transitive dependents
+    pruned: list[str] = []
+    queue = [failed_story_id]
+    visited = {failed_story_id}
+    while queue:
+        current = queue.pop(0)
+        for dep_id in dependents.get(current, set()):
+            if dep_id not in visited:
+                visited.add(dep_id)
+                # Only prune if not already completed
+                existing = report.results.get(dep_id)
+                if existing is None or existing.status not in ("succeeded", "skipped"):
+                    pruned.append(dep_id)
+                    report.results[dep_id] = StoryResult(
+                        story_id=dep_id,
+                        status="pruned",
+                        error=f"Pruned: depends on failed story {failed_story_id}",
+                    )
+                    queue.append(dep_id)
+
+    return pruned
+
+
+# ── V2: Cross-epic chaining ─────────────────────────────────────────────────
+
+
+def _chain_next_epic(
+    ctx: Any,
+    project_dir: Path,
+    flags: OrchestrateFlags,
+    current_report: OrchestrateReport,
+) -> OrchestrateReport:
+    """Run the next epic after current completes successfully.
+
+    OI-8 still enforced: the next epic is a separate invocation internally.
+    """
+    next_epic_path = Path(flags.next_epic)
+    if not next_epic_path.is_absolute():
+        next_epic_path = project_dir / "planning-artifacts" / flags.next_epic
+
+    if not next_epic_path.exists():
+        # Try as epic number
+        import glob
+        candidates = sorted(glob.glob(str(
+            project_dir / "planning-artifacts" / f"epics-stories-{flags.next_epic}-*.md"
+        )))
+        if candidates:
+            next_epic_path = Path(candidates[-1])
+        else:
+            logger.warning("[orchestrator] Next epic not found: %s (chaining skipped)", flags.next_epic)
+            return current_report
+
+    logger.info("[orchestrator] Cross-epic chaining: starting %s", next_epic_path)
+    next_flags = OrchestrateFlags(
+        resume=flags.resume,
+        dry_run=flags.dry_run,
+        max_retries=flags.max_retries,
+        no_halt=flags.no_halt,
+        no_telemetry=flags.no_telemetry,
+        ralph_loop=flags.ralph_loop,
+        replan_on_failure=flags.replan_on_failure,
+        # Don't chain further (only one level of chaining)
+    )
+    next_report = orchestrate_epic(ctx, project_dir, next_epic_path, next_flags)
+
+    # Merge reports
+    current_report.results.update(next_report.results)
+    if next_report.halted:
+        current_report.halted = True
+        current_report.halt_reason = f"Chained epic {flags.next_epic}: {next_report.halt_reason}"
+
+    return current_report
+
+
+# ── V2: Auto-PR creation ────────────────────────────────────────────────────
+
+
+def _auto_create_pr(
+    project_dir: Path,
+    epic: EpicSpec,
+    report: OrchestrateReport,
+) -> None:
+    """Create a GitHub PR with the orchestration results.
+
+    Uses gh CLI. Non-fatal: logs warning on failure.
+    """
+    import subprocess
+
+    succeeded = sum(1 for r in report.results.values() if r.status == "succeeded")
+    total = len(report.results)
+    title = f"Epic {epic.id}: {epic.name} ({succeeded}/{total} stories)"
+    body = f"## Epic {epic.id} — Orchestrate Results\n\n"
+    body += f"- Stories: {succeeded}/{total} succeeded\n"
+    body += f"- Waves: {len(report.waves)}\n\n"
+    body += "### Story Results\n\n"
+    for sid, result in sorted(report.results.items()):
+        emoji = "✅" if result.status == "succeeded" else "❌" if result.status == "failed" else "⏭️"
+        body += f"- {emoji} {sid}: {result.status}"
+        if result.error:
+            body += f" — {result.error}"
+        body += "\n"
+
+    try:
+        # Check if there are uncommitted changes
+        status_result = subprocess.run(
+            ["git", "status", "--porcelain"],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=10,
+        )
+        if not status_result.stdout.strip():
+            logger.info("[orchestrator] Auto-PR: no changes to PR")
+            return
+
+        # Create branch and commit
+        branch = f"orchestrate/epic-{epic.id}"
+        subprocess.run(["git", "checkout", "-b", branch], cwd=str(project_dir),
+                        capture_output=True, timeout=10)
+        subprocess.run(["git", "add", "-A"], cwd=str(project_dir),
+                        capture_output=True, timeout=10)
+        subprocess.run(["git", "commit", "-m", title], cwd=str(project_dir),
+                        capture_output=True, timeout=10)
+
+        # Push and create PR
+        subprocess.run(["git", "push", "-u", "origin", branch], cwd=str(project_dir),
+                        capture_output=True, timeout=30)
+        result = subprocess.run(
+            ["gh", "pr", "create", "--title", title, "--body", body],
+            cwd=str(project_dir), capture_output=True, text=True, timeout=30,
+        )
+        if result.returncode == 0:
+            logger.info("[orchestrator] Auto-PR created: %s", result.stdout.strip())
+        else:
+            logger.warning("[orchestrator] Auto-PR failed: %s", result.stderr)
+    except Exception as exc:
+        logger.warning("[orchestrator] Auto-PR error: %s", exc)
