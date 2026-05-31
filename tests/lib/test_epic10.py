@@ -40,6 +40,11 @@ class TestValidateConsolidationPasses:
         with pytest.raises(ValueError, match="consolidation_passes"):
             validate_consolidation_passes(2.5)
 
+    def test_bool_raises(self):
+        from lib.hermes_dream import validate_consolidation_passes
+        with pytest.raises(ValueError, match="bool"):
+            validate_consolidation_passes(True)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Story 10.3: per-pass audit trail
@@ -220,7 +225,7 @@ class TestParseProposalsFromLlm:
   confidence: medium
   risk_class: additive
 """
-        proposals = _parse_proposals_from_llm(content)
+        proposals, failures = _parse_proposals_from_llm(content)
         assert len(proposals) == 1
         assert proposals[0].op == "add"
         assert proposals[0].body == "test body"
@@ -228,14 +233,14 @@ class TestParseProposalsFromLlm:
     def test_parse_markdown_fenced(self):
         from lib.hermes_dream import _parse_proposals_from_llm
         content = '```yaml\n- op: update\n  target_entry_id: e2\n  body: refined\n```'
-        proposals = _parse_proposals_from_llm(content)
+        proposals, failures = _parse_proposals_from_llm(content)
         assert len(proposals) == 1
         assert proposals[0].op == "update"
 
     def test_parse_empty_returns_empty(self):
         from lib.hermes_dream import _parse_proposals_from_llm
-        assert _parse_proposals_from_llm("") == []
-        assert _parse_proposals_from_llm("no yaml here") == []
+        assert _parse_proposals_from_llm("") == ([], 0)
+        assert _parse_proposals_from_llm("no yaml here") == ([], 0)
 
 
 class TestExtractContradictions:

@@ -86,6 +86,8 @@ def validate_consolidation_passes(n: int) -> None:
 
     Raises ValueError on out-of-bounds — same pattern as Epic 8's validate_top_k.
     """
+    if isinstance(n, bool):
+        raise ValueError(f"consolidation_passes must be an int, got bool {n}")
     if not isinstance(n, int) or n < _CONSOLIDATION_PASSES_MIN or n > _CONSOLIDATION_PASSES_MAX:
         raise ValueError(
             f"consolidation_passes must be an integer in "
@@ -142,7 +144,7 @@ def _compute_signal_density(entries: list[dict]) -> float:
 
     # Factor 1: average access_count (log-scaled)
     import math
-    avg_access = sum(e.get("access_count", 0) for e in entries) / len(entries)
+    avg_access = sum(max(0, e.get("access_count") or 0) for e in entries) / len(entries)
     access_score = min(1.0, math.log(1 + avg_access) / math.log(1 + 50))
 
     # Factor 2: type diversity (more types = richer signal)
@@ -260,11 +262,9 @@ def _build_refine_prompt(
         "3. Merge near-duplicate proposals.",
         "4. Return the REFINED set of proposals.",
         "",
-        "## Previous Pass Output (memory.patch.v{N})",
+        "## Previous Pass Output",
         "",
-        "```yaml",
-        previous_patch[:6000],
-        "```",
+        previous_patch[:8000],
         "",
     ]
 
@@ -305,18 +305,28 @@ def _build_refine_prompt(
     return "\n".join(parts)
 
 
-def _parse_proposals_from_llm(content: str) -> list[PatchProposal]:
-    """Parse PatchProposal list from LLM response (YAML or JSON)."""
+def _parse_proposals_from_llm(content: str) -> tuple[list[PatchProposal], int]:
+    """Parse PatchProposal list from LLM response (YAML or JSON).
+
+    Returns (proposals, parse_failures). P10: parse_failures counts items
+    that were present but dropped due to Pydantic validation errors.
+    P14: robust YAML fence extractor.
+    """
+    import re as _re
     import yaml as _yaml
 
-    # Try to extract from markdown fences
+    parse_failures = 0
     text = content.strip()
-    if "```yaml" in text:
-        start = text.index("```yaml") + 7
-        end = text.index("```", start) if "```" in text[start:] else len(text)
-        text = text[start:end].strip()
+
+    # P14: case-insensitive YAML fence extraction
+    yaml_match = _re.search(r'```\s*ya?ml\s*\n(.*?)```', text, _re.IGNORECASE | _re.DOTALL)
+    if yaml_match:
+        text = yaml_match.group(1).strip()
     elif "```" in text:
         start = text.index("```") + 3
+        newline = text.find("\n", start)
+        if 0 < newline < start + 10:
+            start = newline + 1
         end = text.index("```", start) if "```" in text[start:] else len(text)
         text = text[start:end].strip()
 
@@ -329,8 +339,8 @@ def _parse_proposals_from_llm(content: str) -> list[PatchProposal]:
                 try:
                     proposals.append(PatchProposal.model_validate(item))
                 except Exception:
-                    continue
-            return proposals
+                    parse_failures += 1
+            return proposals, parse_failures
     except Exception:
         pass
 
@@ -338,19 +348,31 @@ def _parse_proposals_from_llm(content: str) -> list[PatchProposal]:
     try:
         raw = json.loads(text)
         if isinstance(raw, list):
-            return [PatchProposal.model_validate(item) for item in raw if isinstance(item, dict)]
+            proposals = []
+            for item in raw:
+                if isinstance(item, dict):
+                    try:
+                        proposals.append(PatchProposal.model_validate(item))
+                    except Exception:
+                        parse_failures += 1
+            return proposals, parse_failures
     except Exception:
         pass
 
-    return []
+    return [], parse_failures
 
 
 def _extract_contradictions(proposals: list[PatchProposal]) -> list[tuple[str, str]]:
-    """Story 10.5: extract (new_entry_id, contradicts_existing_id) pairs."""
+    """Story 10.5: extract (new_key, contradicts_existing_id) pairs.
+
+    P11: Uses stable index for new entries to disambiguate multiple
+    additive proposals flagging contradictions.
+    """
     pairs = []
-    for p in proposals:
+    for i, p in enumerate(proposals):
         if p.contradicts:
-            pairs.append((p.target_entry_id, p.contradicts))
+            new_key = p.target_entry_id if p.target_entry_id and p.target_entry_id != "new" else f"proposal_{i}"
+            pairs.append((new_key, p.contradicts))
     return pairs
 
 
@@ -361,16 +383,17 @@ def _run_consolidation_pass(
     previous_patch: str = "",
     contradictions: Optional[list[tuple[str, str]]] = None,
     workload: str = "memory_dream_consolidate",
-) -> tuple[list[PatchProposal], CostInfo]:
+) -> tuple[list[PatchProposal], CostInfo, str]:
     """Story 10.2: run a single consolidation pass via hermes_llm.llm_call.
 
-    Returns (proposals, cost). If the LLM call fails, returns ([], zero_cost).
+    Returns (proposals, cost, outcome). P5: outcome is one of:
+    "ok" | "empty" | "parse-failed" | "llm-failed".
     """
     try:
         from lib.hermes_llm import llm_call, LLMSpec
     except ImportError:
         logger.warning("_run_consolidation_pass: hermes_llm not available")
-        return [], CostInfo()
+        return [], CostInfo(), "llm-failed"
 
     if previous_patch:
         prompt = _build_refine_prompt(previous_patch, entries, raw_context, contradictions)
@@ -378,27 +401,34 @@ def _run_consolidation_pass(
         prompt = _build_consolidation_prompt(entries, raw_context, category_weights)
 
     try:
+        # A2: PatchProposalList as response_model (Hard Invariant #11)
         spec = LLMSpec(
             workload=workload,
             messages=[{"role": "user", "content": prompt}],
+            response_model=PatchProposalList,
         )
         result = llm_call(spec)
         content = result.get("content", "") if isinstance(result, dict) else str(result)
-
-        # Extract cost info from result
         usage = result.get("usage", {}) if isinstance(result, dict) else {}
         cost = CostInfo(
             tokens_in=usage.get("prompt_tokens", 0),
             tokens_out=usage.get("completion_tokens", 0),
             cache_read_tokens=usage.get("cache_read_input_tokens", 0),
         )
-
-        proposals = _parse_proposals_from_llm(content)
-        return proposals, cost
-
+        proposals, parse_failures = _parse_proposals_from_llm(content)
+        # P5: categorize outcome
+        if not proposals and cost.tokens_in > 0:
+            outcome = "empty" if parse_failures == 0 else "parse-failed"
+        elif not proposals:
+            outcome = "llm-failed"
+        else:
+            outcome = "ok"
+        if parse_failures > 0:
+            logger.warning("_run_consolidation_pass: %d items dropped during parsing", parse_failures)
+        return proposals, cost, outcome
     except Exception as e:
         logger.warning("_run_consolidation_pass: LLM call failed: %s", e)
-        return [], CostInfo()
+        return [], CostInfo(), "llm-failed"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -437,43 +467,47 @@ def _run_baseline_comparison(
         )
 
         # Run single-pass baseline
-        baseline_proposals, baseline_cost = _run_consolidation_pass(
+        baseline_proposals, baseline_cost, _ = _run_consolidation_pass(
             entries, raw_context, category_weights,
         )
         comparison.single_pass_cost = baseline_cost
 
         # Write baseline memory.patch to a temp dir
-        import tempfile
         baseline_dir = artifact_dir / ".hermes-private" / "baseline"
         baseline_dir.mkdir(parents=True, exist_ok=True)
-        if baseline_proposals:
-            import yaml as _yaml
-            patches_yaml = _yaml.dump(
-                [p.model_dump() for p in baseline_proposals],
-                default_flow_style=False, allow_unicode=True, sort_keys=False,
+        try:
+            if baseline_proposals:
+                import yaml as _yaml
+                patches_yaml = _yaml.dump(
+                    [p.model_dump() for p in baseline_proposals],
+                    default_flow_style=False, allow_unicode=True, sort_keys=False,
+                )
+                (baseline_dir / "memory.patch").write_text(patches_yaml, encoding="utf-8")
+
+            multi_recall = run_recall_at_create(artifact_dir, memory_dir)
+            comparison.multi_pass_top1 = multi_recall.current_score
+
+            baseline_recall = run_recall_at_create(baseline_dir, memory_dir)
+            comparison.single_pass_top1 = baseline_recall.current_score
+
+            comparison.delta = comparison.multi_pass_top1 - comparison.single_pass_top1
+
+            # P7: Verdict per spec
+            cost_delta = (multi_pass_cost.tokens_in + multi_pass_cost.tokens_out) - (
+                comparison.single_pass_cost.tokens_in + comparison.single_pass_cost.tokens_out
             )
-            (baseline_dir / "memory.patch").write_text(patches_yaml, encoding="utf-8")
+            cost_dollars = cost_delta * 15 / 1_000_000
 
-        # Run recall harness on both
-        multi_recall = run_recall_at_create(artifact_dir, memory_dir)
-        comparison.multi_pass_top1 = multi_recall.current_score
+            if comparison.delta >= 0.02:
+                comparison.verdict = "keep"
+            elif comparison.delta < 0.02 and cost_dollars > 0.50:
+                comparison.verdict = "revert"
+            else:
+                comparison.verdict = "inconclusive"
 
-        baseline_recall = run_recall_at_create(baseline_dir, memory_dir)
-        comparison.single_pass_top1 = baseline_recall.current_score
-
-        comparison.delta = comparison.multi_pass_top1 - comparison.single_pass_top1
-
-        # Verdict
-        if comparison.delta >= 0.02:
-            comparison.verdict = "keep"
-        elif comparison.delta < 0.00:
-            comparison.verdict = "revert"
-        else:
-            comparison.verdict = "inconclusive"
-
-        # Cleanup baseline dir
-        import shutil
-        shutil.rmtree(baseline_dir, ignore_errors=True)
+        finally:
+            import shutil as _shutil
+            _shutil.rmtree(baseline_dir, ignore_errors=True)
 
     except Exception as e:
         logger.debug("_run_baseline_comparison: failed: %s", e)
@@ -498,6 +532,11 @@ class PatchProposal(BaseModel):
     source_refs: list[str] = Field(default_factory=list)
     # Story 10.5: contradiction tracking for intra-dream resolution
     contradicts: Optional[str] = None  # entry_id this proposal contradicts
+
+
+class PatchProposalList(BaseModel):
+    """A2: Pydantic gate for memory_dream_consolidate LLM output (Hard Invariant #11)."""
+    proposals: list[PatchProposal] = Field(default_factory=list, max_length=50)
 
 
 class DreamManifest(BaseModel):
@@ -861,6 +900,7 @@ def create_dream_artifact(
         pass_audit_entries: list[PassAuditEntry] = []
         per_pass_costs: list[CostInfo] = []
         raw_context = ""  # Populated by multi-pass if needed
+        baseline_cmp = None
 
         if dry_run:
             for i, entry in enumerate(entries[:3]):
@@ -880,10 +920,11 @@ def create_dream_artifact(
                     "entry_id": entry["id"],
                 })
 
-        # Story 10.2: N-loop orchestrator — runs when effective_n > 1 and
+        # Story 10.2: N-loop orchestrator — runs when effective_n >= 1 and
         # proposals weren't provided externally (dry_run already populated them).
-        if effective_n > 1 and not proposals and not dry_run:
-            logger.info("Multi-pass consolidation: N=%d, depth_tier=%s, signal_density=%.4f",
+        # A4: N=1 also enters this path (single-pass consolidation).
+        if effective_n >= 1 and not proposals and not dry_run:
+            logger.info("Consolidation: N=%d, depth_tier=%s, signal_density=%.4f",
                         effective_n, depth_tier, signal_density)
 
             # Category weights from Epic 9 Story 9.3
@@ -898,73 +939,101 @@ def create_dream_artifact(
                         category_weights[nudge["category"]] = {"direction": "down", "hit_rate": nudge["hit_rate"]}
                     for nudge in nudges.get("high_hit_rate", []):
                         category_weights[nudge["category"]] = {"direction": "up", "hit_rate": nudge["hit_rate"]}
-            except Exception:
-                pass
+            except Exception as e:
+                logger.warning("hit-rate report failed, dropping category weights: %s", e)
 
             all_pass_patches: list[list[PatchProposal]] = []
-            previous_patch_text = ""
+            last_valid_proposals: list[PatchProposal] = []
+            previous_patch_parts: list[str] = []
+            baseline_cmp = None
 
             for pass_idx in range(effective_n):
                 # Story 10.5: extract contradictions from previous pass
                 contradictions = None
-                if pass_idx > 0 and all_pass_patches:
-                    contradictions = _extract_contradictions(all_pass_patches[-1])
+                ref = last_valid_proposals if not all_pass_patches else all_pass_patches[-1]
+                if pass_idx > 0 and ref:
+                    contradictions = _extract_contradictions(ref)
 
-                pass_proposals, pass_cost = _run_consolidation_pass(
+                # P12: populate raw_context from raw layer
+                raw_ctx = raw_context
+                if not raw_ctx and memory_dir:
+                    try:
+                        from lib.hermes_memory import _resolve_raw_dir
+                        raw_root = _resolve_raw_dir()
+                        project = os.environ.get("HERMES_PROJECT", "default")
+                        role = os.environ.get("HERMES_ROLE", "engineer")
+                        raw_file = raw_root / project / role / f"{datetime.now(timezone.utc).strftime('%Y-%m-%d')}.jsonl"
+                        if raw_file.exists():
+                            raw_ctx = raw_file.read_text(encoding="utf-8")[-4000:]
+                    except Exception:
+                        pass
+
+                pass_proposals, pass_cost, outcome = _run_consolidation_pass(
                     entries=entries,
-                    raw_context=raw_context,
+                    raw_context=raw_ctx,
                     category_weights=category_weights,
-                    previous_patch=previous_patch_text,
+                    previous_patch="\n".join(previous_patch_parts),
                     contradictions=contradictions,
                 )
                 per_pass_costs.append(pass_cost)
 
-                # Story 10.3: compute audit diff
-                prev_proposals = all_pass_patches[-1] if all_pass_patches else []
-                added, modified, removed = _compute_proposal_diff(prev_proposals, pass_proposals)
-
+                # P4: update last_valid on success
                 if pass_proposals:
-                    outcome = "ok"
-                elif pass_cost.tokens_in > 0:
-                    outcome = "empty"
-                else:
-                    outcome = "validation-failed"
+                    last_valid_proposals = pass_proposals
 
+                # Story 10.3: compute audit diff
+                prev_for_diff = all_pass_patches[-1] if all_pass_patches else []
+                added, modified, removed = _compute_proposal_diff(prev_for_diff, pass_proposals)
+
+                # P8: 0-based; P9: cost nested in audit entry
                 pass_audit_entries.append(PassAuditEntry(
-                    pass_index=pass_idx + 1,
+                    pass_index=pass_idx,
                     proposals_added=added,
                     proposals_modified=modified,
                     proposals_removed=removed,
                     outcome=outcome,
                     cost=pass_cost,
                 ))
-
                 all_pass_patches.append(pass_proposals)
 
-                # Update previous_patch_text for next pass
+                # P2: XML sentinels; P3: only immediate prior pass
                 if pass_proposals:
                     patches_yaml = _yaml.dump(
                         [p.model_dump() for p in pass_proposals],
                         default_flow_style=False, allow_unicode=True, sort_keys=False,
                     )
-                    previous_patch_text += f"\n--- pass_{pass_idx + 1} ---\n{patches_yaml}"
+                    previous_patch_parts = [
+                        f'<previous_pass index="{pass_idx}">', patches_yaml, '</previous_pass>'
+                    ]
 
-                # Persist intermediate patches for audit (not at top-level)
+                # Persist intermediate patches for audit
                 if pass_idx < effective_n - 1 and pass_proposals:
                     passes_dir = artifact_dir / ".hermes-private" / "passes"
                     passes_dir.mkdir(parents=True, exist_ok=True)
-                    _write_file_atomic(
-                        passes_dir / f"memory.patch.v{pass_idx + 1}",
-                        patches_yaml,
-                    )
+                    _write_file_atomic(passes_dir / f"memory.patch.v{pass_idx + 1}", patches_yaml)
+
+                # P1: populate source_rows from multi-pass proposals
+                for p in pass_proposals:
+                    if p.target_entry_id and p.target_entry_id not in {s.get("entry_id") for s in source_rows}:
+                        source_rows.append({"id": p.target_entry_id, "source": f"consolidation-pass-{pass_idx}", "entry_id": p.target_entry_id})
 
                 logger.info("Pass %d/%d: %d proposals, outcome=%s, cost=%d/%d tokens",
-                            pass_idx + 1, effective_n, len(pass_proposals), outcome,
+                            pass_idx, effective_n, len(pass_proposals), outcome,
                             pass_cost.tokens_in, pass_cost.tokens_out)
 
-            # Final proposals = last pass
-            if all_pass_patches:
-                proposals = all_pass_patches[-1]
+            # P4: final = last valid (not last iteration)
+            if last_valid_proposals:
+                proposals = last_valid_proposals
+
+            # A1: baseline comparison when multi-pass
+            if effective_n > 1:
+                baseline_cmp = _run_baseline_comparison(
+                    artifact_dir, memory_dir, proposals,
+                    CostInfo(tokens_in=sum(c.tokens_in for c in per_pass_costs),
+                             tokens_out=sum(c.tokens_out for c in per_pass_costs),
+                             cache_read_tokens=sum(c.cache_read_tokens for c in per_pass_costs)),
+                    entries, raw_context, category_weights,
+                )
 
         # memory.patch (FR-16) — written FIRST so the recall harness can replay it.
         if proposals:
@@ -1034,12 +1103,17 @@ def create_dream_artifact(
                 "proposals_modified": e.proposals_modified,
                 "proposals_removed": e.proposals_removed,
                 "outcome": e.outcome,
+                "cost": {"tokens_in": e.cost.tokens_in, "tokens_out": e.cost.tokens_out, "cache_read_tokens": e.cost.cache_read_tokens},
             } for e in pass_audit_entries],
             per_pass_cost=[{
-                "tokens_in": c.tokens_in,
-                "tokens_out": c.tokens_out,
-                "cache_read_tokens": c.cache_read_tokens,
+                "tokens_in": c.tokens_in, "tokens_out": c.tokens_out, "cache_read_tokens": c.cache_read_tokens,
             } for c in per_pass_costs],
+            baseline_comparison={
+                "single_pass_top1": baseline_cmp.single_pass_top1,
+                "multi_pass_top1": baseline_cmp.multi_pass_top1,
+                "delta": baseline_cmp.delta,
+                "verdict": baseline_cmp.verdict,
+            } if baseline_cmp else None,
         )
         _write_file_atomic(
             artifact_dir / "manifest.json",
@@ -1152,7 +1226,7 @@ def create_dream_artifact(
                 )
             report_lines.append("")
 
-            # Story 10.6: baseline comparison if available
+            # Story 10.6: baseline comparison deltas (A1)
             total_cost = sum(c.tokens_in + c.tokens_out for c in per_pass_costs)
             report_lines.append(f"**Total tokens across all passes:** {total_cost}")
             if len(per_pass_costs) > 1:
@@ -1160,6 +1234,19 @@ def create_dream_artifact(
                 if pass1_cost > 0:
                     cache_ratio = per_pass_costs[1].cache_read_tokens / per_pass_costs[1].tokens_in if per_pass_costs[1].tokens_in > 0 else 0
                     report_lines.append(f"**Pass-2 prompt-cache hit rate:** {cache_ratio:.0%}")
+
+            # A1: baseline comparison verdict
+            if baseline_cmp and baseline_cmp.verdict:
+                report_lines += ["", "### Falsifier Verdict (Story 10.6)", ""]
+                report_lines.append(
+                    f"**Top-1 hit-rate delta:** {baseline_cmp.delta:+.1%} "
+                    f"(multi={baseline_cmp.multi_pass_top1:.1%}, "
+                    f"single={baseline_cmp.single_pass_top1:.1%})"
+                )
+                single_cost = baseline_cmp.single_pass_cost.tokens_in + baseline_cmp.single_pass_cost.tokens_out
+                multi_cost = baseline_cmp.multi_pass_cost.tokens_in + baseline_cmp.multi_pass_cost.tokens_out
+                report_lines.append(f"**Cost delta:** {multi_cost - single_cost:+d} tokens")
+                report_lines.append(f"**VERDICT: {baseline_cmp.verdict}**")
 
         if dry_run:
             report_lines += ["", "*This is a dry-run artifact for pipeline validation.*"]
