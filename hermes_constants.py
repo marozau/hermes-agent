@@ -400,6 +400,15 @@ def get_skills_dir() -> Path:
     return get_hermes_home() / "skills"
 
 
+def get_shared_skills_dir() -> Path:
+    """Return the path to the shared skills directory under HERMES_HOME.
+
+    The shared skills directory (``~/.hermes/skills/shared/``) holds skills
+    that are visible to all profiles on the same machine.  Profile-local
+    skills take precedence over shared skills with the same name.
+    """
+    return get_skills_dir() / "shared"
+
 
 def get_env_path() -> Path:
     """Return the path to the ``.env`` file under HERMES_HOME."""
