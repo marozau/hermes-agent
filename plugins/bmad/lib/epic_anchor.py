@@ -102,8 +102,17 @@ def parse_epic_file(path: Path) -> EpicSpec:
 
 
 def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> EpicSpec:
-    """Parse epic text into an EpicSpec."""
+    """Parse epic text into an EpicSpec.
+
+    Handles both plain and markdown-bold field formats:
+    - ``success_predicates:`` and ``**success_predicates:**``
+    - ``verification_gate:`` and ``**verification_gate:**``
+    - ``Dependencies:`` and ``**Dependencies:**``
+    """
     stories: list[StorySpec] = []
+
+    # Strip markdown bold markers for cleaner parsing
+    clean_text = re.sub(r"\*\*([^*]+)\*\*", r"\1", text)
 
     # Pattern 1: Table rows like "| 7.1 | description | 1.5h | — |"
     table_pattern = re.compile(
@@ -133,8 +142,9 @@ def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> Epic
         ))
 
     # Pattern 2: Story headings like "### 7.3 lib/orchestrator.py"
-    heading_pattern = re.compile(r"###\s+(\d+\.\d+)\s+(.*)")
-    for m in heading_pattern.finditer(text):
+    # Match story headings: ### 7.1: Title OR ## Story 7.1: Title OR ### 7.1 Title
+    heading_pattern = re.compile(r"#{2,3}\s+(?:Story\s+)?(\d+\.\d+)\s*[:\-]?\s*(.*)")
+    for m in heading_pattern.finditer(clean_text):
         sid = m.group(1).strip()
         title = m.group(2).strip()
         existing = next((s for s in stories if s.id == sid), None)
@@ -144,18 +154,21 @@ def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> Epic
             stories.append(StorySpec(id=sid, title=title))
 
     # Extract success predicates from text blocks after "success_predicates" or "AC:"
+    # Handles both plain and markdown-bold format: **success_predicates:**
     ac_pattern = re.compile(
-        r"(?:success_predicates?|AC|acceptance criteria)[:\s]*\n((?:[-*]\s+.*\n)+)",
+        r"(?:\*\*)?(?:success_predicates?|AC|acceptance criteria)(?:\*\*)?[:\s]*\n((?:[-*]\s+.*\n?)+)",
         re.IGNORECASE,
     )
-    for m in ac_pattern.finditer(text):
+    for m in ac_pattern.finditer(clean_text):
         predicates = [
             line.lstrip("-* ").strip()
             for line in m.group(1).strip().split("\n")
-            if line.strip()
+            if line.strip() and line.strip().startswith(("-", "*"))
         ]
+        # Only keep predicates that match kind:payload format (B-7)
+        predicates = [p for p in predicates if ":" in p and not p.startswith("**")]
         # Try to associate with the nearest story heading above this block
-        prefix = text[:m.start()]
+        prefix = clean_text[:m.start()]
         last_heading = heading_pattern.findall(prefix)
         if last_heading:
             sid = last_heading[-1][0]
@@ -164,13 +177,16 @@ def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> Epic
                 story.success_predicates = predicates
 
     # B-2: Extract verification_gate from per-story sections
+    # Handles: verification_gate: adversarial OR **verification_gate:** adversarial
     vg_pattern = re.compile(
-        r"verification_gate[:\s]+(\S+)",
+        r"(?:\*\*)?verification_gate(?:\*\*)?[:\s]+(\w+)",
         re.IGNORECASE,
     )
-    for m in vg_pattern.finditer(text):
+    for m in vg_pattern.finditer(clean_text):
         gate_value = m.group(1).strip().lower()
-        prefix = text[:m.start()]
+        if gate_value in ("**", "*", ""):
+            continue
+        prefix = clean_text[:m.start()]
         last_heading = heading_pattern.findall(prefix)
         if last_heading:
             sid = last_heading[-1][0]
@@ -179,14 +195,38 @@ def parse_epic_text(text: str, source_path: str = "", epic_id: str = "") -> Epic
                 story.verification_gate = gate_value
                 logger.debug("[epic_anchor] Story %s: verification_gate=%s", sid, gate_value)
 
+    # Extract dependencies from per-story sections
+    # Handles: Dependencies: 7.1, 7.2 OR **Dependencies:** 7.1, 7.2
+    dep_pattern = re.compile(
+        r"(?:\*\*)?Dependencies(?:\*\*)?[:\s]+(.+)",
+        re.IGNORECASE,
+    )
+    for m in dep_pattern.finditer(clean_text):
+        dep_text = m.group(1).strip().rstrip("*").strip()
+        if dep_text.lower() in ("none", "n/a", ""):
+            continue
+        deps = [d.strip() for d in re.split(r"[,;]", dep_text) if d.strip() and re.match(r"\d+\.\d+", d.strip())]
+        prefix = clean_text[:m.start()]
+        last_heading = heading_pattern.findall(prefix)
+        if last_heading:
+            sid = last_heading[-1][0]
+            story = next((s for s in stories if s.id == sid), None)
+            if story:
+                story.dependencies = deps
+
     if not epic_id:
         # Infer from filename or first heading
         heading = re.search(r"#\s+.*?Epic\s+(\d+)", text, re.IGNORECASE)
         epic_id = heading.group(1) if heading else "unknown"
 
+    # Extract epic name from heading
+    epic_name = ""
+    name_match = re.search(r"#\s+(?:Epic\s+\d+[:\s-]*)?(.+)", text, re.IGNORECASE)
+    epic_name = name_match.group(1).strip() if name_match else f"Epic {epic_id}"
+
     return EpicSpec(
         id=epic_id,
-        name=f"Epic {epic_id}",
+        name=epic_name,
         stories=stories,
         source_path=source_path,
     )
