@@ -659,8 +659,9 @@ def _extract_llm_findings(llm_results: list[dict], reviewers: list[dict]) -> dic
 
 
 # Regex for common file:line patterns in LLM reviewer output
+# NN-1 fix: extended allowlist for polyglot repos
 _FILE_LINE_RE = re.compile(
-    r"(?:^|\s|[`\"'])([a-zA-Z0-9_/.\\-]+\.(?:py|ts|tsx|js|rs|md|yaml|yml|json))"
+    r"(?:^|\s|[`\"'])([a-zA-Z0-9_/.\\-]+\.(?:py|ts|tsx|js|rs|md|yaml|yml|json|go|rb|java|kt|cpp|c|h|swift|sql|sh|html|css|toml|cfg|lock))"
     r"(?:[:\s#]+)(\d+)",
     re.MULTILINE,
 )
@@ -701,18 +702,18 @@ def _parse_llm_summary(summary: str, source: str) -> list[dict]:
         file_path, line_str = matches[0]
         line_num = int(line_str)
 
-        # Guess severity from keywords in the block
-        severity = "MINOR"  # default for LLM findings
+        # NN-2 fix: default MAJOR when no keyword match (conservative)
+        severity = "MAJOR"
         block_lower = block.lower()
         for keyword, sev in _SEV_KEYWORDS.items():
             if keyword in block_lower:
                 severity = sev
                 break
 
-        # Extract message: first sentence or first 200 chars
-        message = block.strip().split("\n")[0][:200]
-        # Strip markdown formatting
-        message = re.sub(r"[*#`\[\]()]", "", message).strip()
+        # NN-3 fix: extract full block text (first line + continuation)
+        # NN-4 fix: preserve parens in markdown stripping
+        message = block.strip()[:200]
+        message = re.sub(r"[*#`\[\]]", "", message).strip()
 
         findings.append({
             "file": file_path,
