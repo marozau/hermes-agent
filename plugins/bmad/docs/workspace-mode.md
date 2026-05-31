@@ -469,3 +469,154 @@ print(dag_visualize(dag))
 | `templates/AGENTS.md.j2` | 6.1 | Agent orientation template |
 | `templates/WORKTREES.md.j2` | 6.1 | Session manifest template |
 | `templates/.envrc.example` | 6.1 | direnv stub |
+
+---
+
+# Epic 7 — Orchestration Engine
+
+## Overview
+
+The orchestrator executes an epic's stories in wave-topological order using Hermes sub-agent delegation. It enforces 8 hard invariants (OI-1..OI-8), supports resume, and checkpoints progress to `sprint-status.yaml`.
+
+## Quick Start
+
+```bash
+# Dry-run an epic
+/bmad:orchestrate 7 --dry-run
+
+# Execute all stories
+/bmad:orchestrate 7
+
+# Resume a halted run (skips done stories)
+/bmad:orchestrate 7 --resume
+
+# Run a single story
+/bmad:orchestrate 7 --story 7.3
+
+# Run a single wave
+/bmad:orchestrate 7 --wave 0
+
+# Export as Prefect flow
+/bmad:orchestrate 7 --prefect
+```
+
+## Orchestrate Flags
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--resume` | `false` | Skip stories already `status: done` in sprint-status.yaml |
+| `--dry-run` | `false` | Parse and validate without dispatching workers |
+| `--story X.Y` | `""` | Run only the specified story |
+| `--wave N` | `-1` (all) | Run only the Nth wave |
+| `--max-retries N` | `2` | Max attempts per story (OI-7) |
+| `--no-halt` | `false` | Continue on failure (debug mode) |
+| `--no-telemetry` | `false` | Skip telemetry recording |
+| `--prefect` | `false` | Export as Prefect flow after run |
+
+## Wave Execution
+
+Stories are grouped into execution waves via topological sort:
+
+```
+Wave 0: stories with no unmet dependencies (run in parallel)
+Wave 1: stories depending only on wave 0 (run in parallel)
+Wave N: stories depending only on waves 0..N-1
+```
+
+Within each wave, stories are dispatched as parallel sub-agents. Between waves, the orchestrator waits for all stories to complete before proceeding.
+
+## Worker Goals
+
+Each worker receives a goal prompt containing:
+- Story description and acceptance criteria
+- Success predicates (the stop condition)
+- Anti-rationalization table (OI-3, OI-4, OI-5 constraints)
+- Forbidden deploy verbs list (OI-4)
+- Forbidden credential paths (OI-5)
+
+## Success Predicates
+
+Predicates are evaluated after each worker completes:
+
+| Type | Syntax | Description |
+|------|--------|-------------|
+| File exists | `file_exists:<path>` | Checks if file exists in project |
+| Tests pass | `tests_pass:<glob>` | Runs pytest on matching files |
+| Grep | `grep:<pattern>:<file>` | Checks if pattern exists in file |
+| Shell | `<command>` | Runs bash command (exit 0 = pass) |
+
+## Sprint-Status Checkpoint
+
+Progress is checkpointed to `sprint-status.yaml` after each story:
+
+```yaml
+epic_id: "7"
+updated_at: "2026-05-31T12:00:00Z"
+stories:
+  7.1:
+    status: done
+    attempts: 1
+    predicates_passed: 1
+    predicates_total: 1
+  7.2:
+    status: failed
+    attempts: 2
+    predicates_passed: 0
+    predicates_total: 2
+    error: "Predicates: 0/2 passed"
+halted: true
+halt_reason: "Story 7.2 failed after 2 attempts"
+```
+
+## Adversarial Verification
+
+Stories with `verification_gate: adversarial` get an extra review step:
+
+```yaml
+### 7.3 Complex feature
+verification_gate: adversarial
+success_predicates:
+- file_exists:lib/feature.py
+```
+
+The adversarial reviewer (default: Claude Opus) checks the implementation against all acceptance criteria and returns PASS/FAIL with findings.
+
+## Prefect Integration
+
+Export orchestration as a Prefect flow:
+
+```bash
+/bmad:orchestrate 7 --prefect
+# Creates: orchestration/epic-7-flow.py
+```
+
+The generated flow file contains:
+- One `@task` per story with retry logic
+- Dependency wiring via `wait_for`
+- Predicate evaluation
+
+## Hard Invariants (Orchestration)
+
+| # | Invariant | Enforcement |
+|---|-----------|-------------|
+| OI-1 | One level deep | `BMAD_ORCHESTRATE_DEPTH=1` env var; workers refuse if already set |
+| OI-2 | Mandatory predicates | All stories must have `success_predicates`; halt if missing |
+| OI-3 | Workers commit only | Worker goal includes constraint; supervisor never push/merge/rebase |
+| OI-4 | No deploy verbs | Forbidden verbs list in worker goal; 10 deploy verbs blocked |
+| OI-5 | No credential paths | 7 credential paths listed in worker goal |
+| OI-6 | Idempotent resume | `--resume` reads sprint-status.yaml, skips `status: done` stories |
+| OI-7 | Halt-on-failure | Default `max_attempts=2`; no infinite retry |
+| OI-8 | One epic per run | Cross-epic deps detected at parse time → halt with error |
+
+## File Reference
+
+| File | Story | Purpose |
+|------|-------|---------|
+| `lib/orchestrator.py` | 7.3 | Core orchestrator: waves, delegation, predicates, checkpoint |
+| `lib/adversarial_gate.py` | 7.8 | Adversarial verification via strong model |
+| `lib/prefect_bridge.py` | 7.10 | Prefect flow export + launch |
+| `commands/orchestrate.py` | 7.4+7.5 | `/bmad:orchestrate` CLI handler |
+| `commands/migrate_stories.py` | 7.6 | `/bmad:migrate-stories-to-epic` legacy migration |
+| `lib/telemetry.py` | 7.9 | Per-worker metrics (12 metrics) |
+| `lib/epic_anchor.py` | 7.2 | Epic parser, wave builder |
+

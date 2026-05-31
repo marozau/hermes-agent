@@ -509,4 +509,19 @@ def register(ctx) -> None:
         args_hint="[--fan-out] <topic>",
     )
 
-    logger.info("[bmad] plugin registered: hooks=8, cli=2, slash=40")
+    # Epic 7: orchestrate + migration
+    from plugins.bmad.commands.orchestrate import handler as _orchestrate_handler
+    from plugins.bmad.commands.migrate_stories import handler as _migrate_stories_handler
+
+    ctx.register_command(
+        name="bmad:orchestrate",
+        handler=_bind_ctx(_orchestrate_handler),
+        args_hint="<epic-number-or-path> [--resume] [--dry-run] [--story X.Y] [--wave N]",
+    )
+    ctx.register_command(
+        name="bmad:migrate-stories-to-epic",
+        handler=_bind_ctx(_migrate_stories_handler),
+        args_hint="--epic N [--dry-run]",
+    )
+
+    logger.info("[bmad] plugin registered: hooks=8, cli=2, slash=42")

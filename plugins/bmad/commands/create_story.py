@@ -11,6 +11,11 @@ def handler(ctx, args: str) -> str:
     raw_dir = getattr(ctx, "working_directory", None) or "."
     project_dir = Path(raw_dir).resolve()
 
+    # Deprecation notice (Epic 7)
+    if "--no-deprecation-notice" not in args:
+        from plugins.bmad.lib.epic_anchor import deprecation_message
+        return deprecation_message()
+
     config_path = project_dir / "bmad" / "config.yaml"
     if not config_path.exists():
         return "⚠️  Not a BMAD project. Run `/bmad:init` to initialize."
