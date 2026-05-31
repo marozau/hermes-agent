@@ -24,6 +24,7 @@ If the fallback dispatch also fails, the failure is surfaced as before.
 
 from __future__ import annotations
 
+import json
 import logging
 from typing import Any
 
@@ -109,12 +110,13 @@ def fan_out(
     base_url: str | None = None,
     api_key: str | None = None,
     api_mode: str | None = None,
+    subprocess_tasks: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
     """Dispatch *goals* as parallel sub-agents using Hermes delegate_task.
 
     Args:
         ctx: Hermes plugin context (has dispatch_tool)
-        goals: One goal string per sub-agent
+        goals: One goal string per sub-agent (LLM-delegated)
         parent_skill: BMAD skill name for audit logging
         max_workers: Max concurrent children (None = Hermes default)
         context: Shared context string for all children (optional)
@@ -123,9 +125,15 @@ def fan_out(
         base_url: Override the API base URL
         api_key: Override the API key
         api_mode: Override the API mode (e.g. ``"messages"`` vs ``"responses"``)
+        subprocess_tasks: Optional list of subprocess task dicts for
+            kind=subprocess execution (Epic 8 — OCR integration).
+            Each dict must have: {"kind": "subprocess", "fn": callable,
+            "kwargs": dict, "label": str}. Results are appended after
+            LLM-delegated results.
 
     Returns:
-        List of result dicts, one per goal in input order.
+        List of result dicts. LLM results first (in goal order),
+        then subprocess results (in subprocess_tasks order).
 
     If an override is provided AND the dispatch fails, we silently retry
     once with the overrides stripped (using the profile's default
@@ -160,6 +168,56 @@ def fan_out(
                 "parent_skill_name": parent_skill,
                 "error": True,
             })
+
+    # Epic 8: kind=subprocess tasks (e.g. OCR) run in parallel alongside LLM tasks.
+    # OI-11: OCR findings are NEVER injected into LLM reviewer prompts.
+    if subprocess_tasks:
+        import time as _time
+        for stask in subprocess_tasks:
+            label = stask.get("label", "subprocess")
+            fn = stask["fn"]
+            kwargs = stask.get("kwargs", {})
+            start = _time.monotonic()
+            try:
+                raw_result = fn(**kwargs)
+                elapsed = _time.monotonic() - start
+                results.append({
+                    "index": len(results),
+                    "goal": f"[subprocess:{label}]",
+                    "task_id": None,
+                    "status": "success",
+                    "summary": json.dumps([{
+                        "rule_id": f.rule_id,
+                        "file": f.file,
+                        "line": f.line,
+                        "severity": f.severity.value,
+                        "message": f.message,
+                        "source": f.source,
+                    } for f in raw_result]) if raw_result else "[]",
+                    "parent_skill_name": parent_skill,
+                    "source": "ocr",
+                    "kind": "subprocess",
+                    "elapsed_seconds": round(elapsed, 2),
+                    "findings": raw_result,
+                })
+            except Exception as exc:
+                elapsed = _time.monotonic() - start
+                logger.warning(
+                    "[bmad:delegation] subprocess task '%s' failed: %s", label, exc
+                )
+                results.append({
+                    "index": len(results),
+                    "goal": f"[subprocess:{label}]",
+                    "task_id": None,
+                    "status": "failure",
+                    "summary": f"Subprocess task failed: {label}: {exc}",
+                    "parent_skill_name": parent_skill,
+                    "source": "ocr",
+                    "kind": "subprocess",
+                    "elapsed_seconds": round(elapsed, 2),
+                    "error": True,
+                })
+
     return results
 
 

@@ -169,12 +169,18 @@ def handler(ctx, args: str) -> str:
     # Resolve reviewer model + provider overrides (from profile_config + CLI)
     model_overrides = _resolve_reviewer_model(ctx, cli_model=parsed.get("model"))
 
+    # ── Epic 8: OCR 4th reviewer (OI-9, OI-10, OI-11) ─────────────────
+    ocr_profile_overrides = _read_ocr_profile_override(ctx)
+    ocr_subprocess_tasks = _build_ocr_task(project_dir, diff_text, ocr_profile_overrides)
+
     # Fan out
     from plugins.bmad.lib import delegation
+    total_reviewers = len(active_reviewers) + len(ocr_subprocess_tasks)
     logger.info(
-        "[bmad:code-review] spawning %d reviewers (mode=%s, diff=%s, model=%s)",
-        len(active_reviewers), review_mode, parsed["diff_rev"],
+        "[bmad:code-review] spawning %d reviewers (mode=%s, diff=%s, model=%s, ocr=%s)",
+        total_reviewers, review_mode, parsed["diff_rev"],
         model_overrides.get("model", "<profile-default>"),
+        "enabled" if ocr_subprocess_tasks else "disabled",
     )
     results = delegation.fan_out(
         ctx,
@@ -185,6 +191,7 @@ def handler(ctx, args: str) -> str:
             f"Diff range: {parsed['diff_rev']}\n"
             f"Project: {project_dir.name}\n"
         ),
+        subprocess_tasks=ocr_subprocess_tasks or None,
         **model_overrides,
     )
 
@@ -306,6 +313,33 @@ def _read_profile_override(ctx) -> dict | None:
         return None
 
 
+def _read_ocr_profile_override(ctx) -> dict:
+    """Read OCR overrides from profile config.
+
+    Looks at ``delegation.skill_overrides.bmad-code-review.ocr`` for
+    per-profile OCR overrides (enable, timeout, etc.).
+
+    Story 8.6: Different profiles can override OCR independently.
+
+    Returns:
+        Dict with OCR override fields. Empty dict if not configured.
+        Never raises.
+    """
+    try:
+        override = _read_profile_override(ctx)
+        if override is None:
+            return {}
+        ocr = override.get("ocr")
+        if not isinstance(ocr, dict):
+            return {}
+        return ocr
+    except Exception:
+        logger.exception(
+            "[bmad:code-review] failed to read OCR profile override",
+        )
+        return {}
+
+
 # ── Diff capture ────────────────────────────────────────────────────────────
 
 
@@ -410,6 +444,74 @@ def _build_goals(
 # ── Aggregation ─────────────────────────────────────────────────────────────
 
 
+def _build_ocr_task(project_dir: Path, diff_text: str, profile_overrides: dict | None = None) -> list[dict]:
+    """Build OCR subprocess task if OCR is enabled for this project.
+
+    OI-9: OCR is OPT-IN — only runs if bmad/config.yaml has code_review.ocr.enabled=true.
+    OI-10: If OCR binary not installed, returns empty (warn + continue).
+    OI-11: OCR runs independently; findings never injected into LLM prompts.
+
+    Story 8.6: profile_overrides can enable/disable OCR per profile.
+
+    Returns:
+        List with one subprocess task dict (for fan_out), or empty list.
+    """
+    from plugins.bmad.lib.config import load_workspace_config
+    from plugins.bmad.lib.ocr_runner import run_ocr_review, resolve_rule_path
+
+    ws_cfg = load_workspace_config(project_dir)
+    ocr_cfg = ws_cfg.code_review_ocr
+
+    # Story 8.6: Profile overrides can enable OCR even if project config doesn't.
+    # Profile can also disable/override timeout.
+    if profile_overrides:
+        profile_enabled = profile_overrides.get("enabled")
+        if profile_enabled is True and not ocr_cfg.enabled:
+            # Profile enables OCR even though project default is off
+            from plugins.bmad.lib.config import OCRConfig
+            ocr_cfg = OCRConfig(
+                enabled=True,
+                rule_path=profile_overrides.get("rule_path", ocr_cfg.rule_path),
+                timeout_seconds=profile_overrides.get("timeout_seconds", ocr_cfg.timeout_seconds),
+                languages=profile_overrides.get("languages", ocr_cfg.languages),
+            )
+        elif profile_enabled is False:
+            # Profile explicitly disables OCR
+            return []
+        elif ocr_cfg.enabled:
+            # OCR enabled in project; apply profile overrides for timeout etc.
+            timeout_override = profile_overrides.get("timeout_seconds")
+            if timeout_override:
+                from plugins.bmad.lib.config import OCRConfig
+                ocr_cfg = OCRConfig(
+                    enabled=True,
+                    rule_path=ocr_cfg.rule_path,
+                    timeout_seconds=timeout_override,
+                    languages=ocr_cfg.languages,
+                )
+
+    # OI-9: default off
+    if not ocr_cfg.enabled:
+        return []
+
+    # Resolve rule path (OI-13)
+    rule_path = resolve_rule_path(
+        project_dir,
+        ocr_cfg.rule_path,
+    )
+
+    return [{
+        "kind": "subprocess",
+        "fn": run_ocr_review,
+        "kwargs": {
+            "diff_text": diff_text,
+            "rule_path": rule_path,
+            "timeout_seconds": ocr_cfg.timeout_seconds,
+        },
+        "label": "ocr",
+    }]
+
+
 def _aggregate(
     reviewers: list[dict],
     results: list[dict],
@@ -417,9 +519,12 @@ def _aggregate(
     review_mode: str,
     reviewer_model: str | None = None,
 ) -> str:
-    """Format the 3-reviewer output into canonical Markdown."""
+    """Format the reviewer output into canonical Markdown.
+
+    Handles both LLM-delegated and subprocess (OCR) results.
+    """
     lines: list[str] = []
-    lines.append("# Code Review — adversarial 3-reviewer fan-out")
+    lines.append("# Code Review — adversarial multi-reviewer fan-out")
     lines.append("")
     lines.append(
         f"**Diff:** {diff_meta.get('rev', '?')} — "
@@ -427,13 +532,23 @@ def _aggregate(
         f"+{diff_meta.get('insertions', '?')}/-{diff_meta.get('deletions', '?')} lines"
     )
     lines.append(f"**Mode:** {review_mode}")
-    lines.append(f"**Reviewers:** {len(reviewers)} ({', '.join(r['id'] for r in reviewers)})")
+
+    # Separate LLM and OCR results
+    llm_results = [r for r in results if r.get("kind") != "subprocess"]
+    ocr_results = [r for r in results if r.get("kind") == "subprocess"]
+
+    total = len(llm_results) + len(ocr_results)
+    reviewer_ids = [r["id"] for r in reviewers] + (
+        ["ocr"] if ocr_results else []
+    )
+    lines.append(f"**Reviewers:** {total} ({', '.join(reviewer_ids)})")
     if reviewer_model:
         lines.append(f"**Reviewer model:** `{reviewer_model}`")
     lines.append("")
     lines.append("---")
 
-    for reviewer, result in zip(reviewers, results):
+    # LLM reviewer sections
+    for reviewer, result in zip(reviewers, llm_results):
         lines.append(f"## {reviewer['role']}")
         lines.append("")
         if result.get("error"):
@@ -443,6 +558,24 @@ def _aggregate(
         else:
             summary = result.get("summary", "")
             lines.append(summary if summary else "_(no findings returned)_")
+        lines.append("")
+
+    # OCR section (Epic 8 — OI-12: one of 4 independent sources)
+    for ocr_result in ocr_results:
+        elapsed = ocr_result.get("elapsed_seconds", "?")
+        lines.append(f"## OCR (Open Code Review)")
+        lines.append("")
+        if ocr_result.get("error"):
+            lines.append(
+                f"_⚠️ OCR failed: {ocr_result.get('summary', 'unknown error')}_"
+            )
+        else:
+            summary = ocr_result.get("summary", "")
+            if summary and summary != "[]":
+                lines.append(summary)
+            else:
+                lines.append("_(no findings returned)_")
+        lines.append(f"_OCR completed in {elapsed}s_")
         lines.append("")
 
     # Triage hint at the end

@@ -1,0 +1,11 @@
+{
+  "version": "1.0",
+  "description": "BMAD project OCR rule routing",
+  "rules": [
+    {"pattern": "**/*.py", "rule": "python.md"},
+    {"pattern": "**/*.ts", "rule": "typescript.md"},
+    {"pattern": "**/*.tsx", "rule": "typescript.md"},
+    {"pattern": "**/*.rs", "rule": "rust.md"}
+  ],
+  "disabled_builtin": ["java", "kotlin", "scala", "go"]
+}

@@ -602,12 +602,21 @@ live per-project in the working directory — NOT in `~/.hermes/`. The
 plugin loads them based on `os.getcwd()` at session start. Profile
 templates seed initial config; everything after that is project-local.
 
-**Code-review flow.** `/bmad:bmad-code-review` runs three parallel
+**Code-review flow.** `/bmad:bmad-code-review` runs parallel
 reviewer agents (Blind Hunter, Edge Case Hunter, Acceptance Auditor)
 with no shared conversation context, then triages findings into
 `decision_needed` / `patch` / `defer` / `dismiss` buckets. Per-profile
 model override (added in commit `9ef647382`) lets each reviewer use a
 different model (e.g. one DeepSeek + two Anthropic for diversity).
+
+**OCR integration (Epic 8).** An optional 4th reviewer, OCR (Open Code
+Review), can be enabled per project (`bmad/config.yaml`:
+`code_review.ocr.enabled: true`) or per profile
+(`delegation.skill_overrides.bmad-code-review.ocr.enabled: true`).
+OCR runs as a subprocess in parallel with the 3 LLM reviewers (OI-11:
+findings never injected into LLM prompts). Rule files live at
+`bmad/.opencodereview/` (OI-13). OCR is one of 4 independent sources,
+not an authority (OI-12). See `plugins/bmad/docs/code-review-ocr.md`.
 
 ### gitnexus-autorefresh plugin (`plugins/gitnexus-autorefresh/`)
 

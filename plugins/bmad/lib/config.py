@@ -18,6 +18,42 @@ import yaml
 from pydantic import BaseModel, ConfigDict, field_validator
 
 
+class OCRConfig(BaseModel):
+    """Configuration for OCR (Open Code Review) integration — Epic 8.
+
+    Hard invariants:
+    - OI-9: OCR is OPT-IN per project (enabled defaults to False).
+    - OI-15: Built-in Java rules are DISABLED for non-Java projects
+      (handled at rule-routing level, not config).
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    enabled: bool = False
+    rule_path: Optional[str] = None
+    timeout_seconds: int = 120
+    languages: list[str] = []
+
+    @field_validator("timeout_seconds")
+    @classmethod
+    def timeout_must_be_positive(cls, v: int) -> int:
+        if v <= 0:
+            raise ValueError(f"OCR timeout must be positive: {v}")
+        return v
+
+    @field_validator("rule_path")
+    @classmethod
+    def rule_path_must_be_relative_or_none(cls, v: str | None) -> str | None:
+        if v is None:
+            return v
+        p = Path(v)
+        if p.is_absolute():
+            raise ValueError(
+                f"OCR rule_path must be relative to project root: {v!r}"
+            )
+        return v
+
+
 class WorktreeSpec(BaseModel):
     """Specification for a single git worktree in a BMAD workspace."""
 
@@ -88,6 +124,7 @@ class WorkspaceConfig(BaseModel):
 
     workspace_mode: bool = False
     worktrees: list[WorktreeSpec] = []
+    code_review_ocr: OCRConfig = OCRConfig()
 
 
 def load_workspace_config(project_dir: Path) -> WorkspaceConfig:
@@ -105,10 +142,15 @@ def load_workspace_config(project_dir: Path) -> WorkspaceConfig:
     ws_mode = raw.get("workspace_mode", False)
     ws_raw = raw.get("worktrees", [])
 
-    if not ws_mode and not ws_raw:
+    # OCR config: nested under code_review.ocr in bmad/config.yaml
+    code_review_raw = raw.get("code_review", {})
+    ocr_raw = (code_review_raw.get("ocr", {}) if isinstance(code_review_raw, dict) else {})
+    ocr_cfg = OCRConfig(**ocr_raw) if ocr_raw else OCRConfig()
+
+    if not ws_mode and not ws_raw and not ocr_raw:
         return WorkspaceConfig()
 
-    return WorkspaceConfig(workspace_mode=ws_mode, worktrees=ws_raw)
+    return WorkspaceConfig(workspace_mode=ws_mode, worktrees=ws_raw, code_review_ocr=ocr_cfg)
 
 
 def serialize_workspace_config(cfg: WorkspaceConfig) -> dict[str, Any]:
@@ -126,4 +168,15 @@ def serialize_workspace_config(cfg: WorkspaceConfig) -> dict[str, Any]:
             }
             for wt in cfg.worktrees
         ]
+    # Serialize OCR config if it differs from defaults (OI-9: opt-in)
+    ocr = cfg.code_review_ocr
+    if ocr.enabled or ocr.rule_path or ocr.languages or ocr.timeout_seconds != 120:
+        ocr_dict: dict[str, Any] = {"enabled": ocr.enabled}
+        if ocr.rule_path:
+            ocr_dict["rule_path"] = ocr.rule_path
+        if ocr.timeout_seconds != 120:
+            ocr_dict["timeout_seconds"] = ocr.timeout_seconds
+        if ocr.languages:
+            ocr_dict["languages"] = ocr.languages
+        result["code_review"] = {"ocr": ocr_dict}
     return result

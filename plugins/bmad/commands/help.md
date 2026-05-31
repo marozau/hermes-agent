@@ -35,8 +35,8 @@ namespaced form (e.g. `/bmad:brainstorm`, not `/brainstorm`).
 - `/bmad:sprint-planning` — sprint plan + sprint-status.yaml
 - `/bmad:create-story` — rich story spec for a single sprint story
 - `/bmad:dev-story` — implement a story end-to-end with TDD
-- `/bmad:code-review` — 3-reviewer adversarial fan-out (Blind Hunter +
-  Edge Case Hunter + Acceptance Auditor)
+- `/bmad:code-review` — multi-reviewer adversarial fan-out (Blind Hunter +
+  Edge Case Hunter + Acceptance Auditor + optional OCR static analysis)
 - `/bmad:correct-course` — fix off-track implementation
 - `/bmad:quick-dev` — quick-flow level-0/1 implementation
 
