@@ -1,0 +1,145 @@
+# AGENTS.md — {{ project_name }}
+
+> ## ⮕ Where to do the work
+>
+> **All development happens inside the git worktree at `./worktree/{{ worktrees[0].name }}/` on branch `{{ worktrees[0].branch }}`.** Open your editor / agent session *there*, not at the top of this workspace and not in the parent dev tree at `{{ worktrees[0].upstream }}/`.
+>
+> ```bash
+> cd {{ project_root }}/worktree/{{ worktrees[0].name }}
+> git branch --show-current          # → {{ worktrees[0].branch }}
+> ```
+>
+> You are working on **{{ project_name }}**. Read this file first.
+
+**Date:** {{ date }}
+**Workspace root:** {{ project_root }}
+
+---
+
+## 0. Layout — where things live in this workspace
+
+```
+{{ project_name }}/
+├── AGENTS.md                                  ← this file (READ FIRST)
+├── CLAUDE.md                                  ← symlink → AGENTS.md
+├── WORKTREES.md                               ← live session manifest
+├── bmad/
+│   └── config.yaml                            ← workspace config
+├── planning-artifacts/                        ← ★ THE PLAN
+│   ├── product-brief.md
+│   ├── prd-*.md
+│   ├── architecture-*.md
+│   ├── epics-stories-*.md
+│   ├── workflow-status.yaml
+│   ├── sprint-status.yaml
+│   └── research/
+└── worktree/
+{% for wt in worktrees %}    ├── {{ wt.name }}/
+{% endfor %}
+```
+
+**Planning artifacts live at the workspace root — `./planning-artifacts/`.** Worktrees carry code only.
+
+---
+
+## 1. Mission in one paragraph
+
+{{ mission }}
+
+---
+
+## 2. Read order — always
+
+| # | File | What it answers |
+|---|---|---|
+| 1 | `planning-artifacts/product-brief.md` | Why; vision; scope |
+| 2 | `planning-artifacts/prd-*.md` | Contract |
+| 3 | `planning-artifacts/architecture-*.md` | How |
+| 4 | `planning-artifacts/epics-stories-*.md` | Work |
+| 5 | `planning-artifacts/workflow-status.yaml` | Phase status |
+| 6 | `planning-artifacts/sprint-status.yaml` | Per-story status |
+
+---
+
+## 3. The feature you are extending
+
+{{ feature_description }}
+
+---
+
+## 4. How to pick up a story
+
+1. Open `planning-artifacts/sprint-status.yaml`. Find the next story in `backlog`.
+{% if worktrees | length > 1 %}2. Run `/bmad:worktree-status --claim <worktree> --task "Story X.Y"`.
+3. Open the story spec.
+{% else %}2. Open the story spec.
+{% endif %}4. Read the AC list (Given/When/Then).
+5. Implement in the appropriate worktree:
+{% for wt in worktrees %}   - `worktree/{{ wt.name }}/` for {{ wt.name }}
+{% endfor %}6. Move story to `in-progress` → write code + tests → `review` → `done`.
+7. Update `sprint-status.yaml`.
+{% if worktrees | length > 1 %}8. Run `/bmad:worktree-status --release <worktree>` when done.
+{% endif %}
+
+---
+
+## 5. Hard invariants — DO NOT violate
+<!-- MUST be numbered -->
+
+{{ hard_invariants }}
+
+---
+
+## 6. Canonical helpers
+
+{{ canonical_helpers }}
+
+---
+
+## 7. Provider/profile routing
+
+{{ provider_routing }}
+
+---
+
+## 8. Anti-patterns — refused
+
+{{ anti_patterns }}
+
+---
+
+## 9. Key paths cheat sheet
+
+| Path | Description |
+|---|---|
+| `{{ project_root }}/` | Workspace root |
+| `{{ project_root }}/planning-artifacts/` | Planning |
+| `{{ project_root }}/bmad/config.yaml` | Config |
+| `{{ project_root }}/WORKTREES.md` | Session manifest |
+{% for wt in worktrees %}| `{{ project_root }}/worktree/{{ wt.name }}/` | {{ wt.name }} (branch: `{{ wt.branch }}`) |
+| `{{ wt.upstream }}/` | {{ wt.name }} upstream |
+{% if wt.runtime_mirror is defined and wt.runtime_mirror %}| `{{ wt.runtime_mirror }}` | {{ wt.name }} runtime mirror |
+{% endif %}{% endfor %}
+
+{% if has_runtime_mirror %}
+## 10. Sync discipline — worktree → runtime
+
+Edits in worktrees with `runtime_mirror:` are auto-synced by the `post_tool_call` hook.
+
+**Manual fallback:**
+```bash
+{% for wt in worktrees %}{% if wt.runtime_mirror is defined and wt.runtime_mirror %}cp worktree/{{ wt.name }}/<file> {{ wt.runtime_mirror }}/<file>
+rm -f {{ wt.runtime_mirror }}/<dir>/__pycache__/<file_stem>.cpython-*.pyc
+{% endif %}{% endfor %}
+```
+{% endif %}
+
+---
+
+## 11. If you get stuck
+
+1. Re-read the relevant planning artifact.
+2. Check `planning-artifacts/research/`.
+3. Look at existing code for patterns.
+4. Write down the ambiguity and surface it.
+5. **Do not invent.**

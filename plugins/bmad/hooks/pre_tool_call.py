@@ -1,4 +1,4 @@
-"""pre_tool_call hook — BMAD phase gate enforcement.
+"""pre_tool_call hook — BMAD phase gate + workspace write-boundary enforcement.
 
 Per architecture A-5 (FR-9): intercepts Write/Edit tool calls and
 blocks them if they target a file that belongs to a phase whose
@@ -8,6 +8,8 @@ Enforces:
 - M1: Read complete file mandate (detects Read(offset, limit) on known workflow files)
 - Phase gates: prevents writing to a later phase's artifacts before the
   preceding phase's required slots are complete
+- FR-21 (Story 6.4): workspace write boundary — in workspace mode, blocks
+  writes outside planning-artifacts/ and worktree/<name>/
 
 Per architecture §4.1: NEVER raises. Returns {"action": "block", "reason": str}
 on denial, None to allow.
@@ -24,9 +26,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Pattern table: (regex, phase, slot)
-# Matches file paths written to determine which phase/slot they belong to.
 PATH_RULES: list[tuple[re.Pattern, str, str]] = [
-    # Most-specific patterns FIRST (first-match wins)
     (re.compile(r"planning-artifacts/solutioning-gate-check.*\.md$"), "solutioning", "solutioning-gate-check"),
     (re.compile(r"planning-artifacts/(epics-stories|epics)[-_/].*"), "solutioning", "epics-stories"),
     (re.compile(r"planning-artifacts/(architecture|tech-spec)[-_].*\.md$"), "solutioning", "architecture"),
@@ -37,7 +37,6 @@ PATH_RULES: list[tuple[re.Pattern, str, str]] = [
 ]
 
 # Paths whose Read calls must always be complete (M1/M7 mandate).
-# Read(offset=..., limit=...) on any of these is rejected, even under YOLO.
 WORKFLOW_FILE_PATTERNS: list[re.Pattern] = [
     re.compile(r"workflow\.xml$"),
     re.compile(r"instructions\.md$"),
@@ -48,7 +47,7 @@ WORKFLOW_FILE_PATTERNS: list[re.Pattern] = [
 
 
 def pre_tool_call(ctx, tool_name: str, args: dict, result: dict | None = None, **kwargs) -> dict | None:
-    """Phase gate + M1/M7 enforcement.
+    """Phase gate + M1/M7 + workspace write-boundary enforcement.
 
     Returns ``{"action": "block", "reason": str}`` to deny, or ``None`` to allow.
     """
@@ -81,6 +80,26 @@ def pre_tool_call(ctx, tool_name: str, args: dict, result: dict | None = None, *
     if not file_path:
         return None
 
+    # ── Story 6.4: Workspace write-boundary check (WI-2) ────────────
+    try:
+        import yaml
+        raw_config = yaml.safe_load(config_path.read_text()) or {}
+        if raw_config.get("workspace_mode"):
+            from plugins.bmad.lib.workspace import is_write_allowed
+            from plugins.bmad.lib.config import load_workspace_config
+
+            ws_config = load_workspace_config(project_dir)
+            if not is_write_allowed(file_path, project_dir, ws_config):
+                reason = (
+                    f"workspace_mode: write outside planning-artifacts/ and worktree/*: "
+                    f"{file_path}"
+                )
+                logger.warning("[bmad:pre_tool_call] %s", reason)
+                return {"action": "block", "reason": reason}
+    except Exception:
+        logger.exception("[bmad:pre_tool_call] Workspace boundary check failed — allowing through")
+
+    # ── Phase gate check (existing logic) ────────────────────────────
     rel = _relative_to_project(file_path, project_dir)
     if rel is None:
         return None  # Writing outside the project — not gated
@@ -100,7 +119,6 @@ def pre_tool_call(ctx, tool_name: str, args: dict, result: dict | None = None, *
         level = state.get("level", 1)
         yolo = ctx.profile_config.get("bmad_yolo", False)
 
-        # Build a minimal status dict for can_run with just the phase-slot state
         allowed, reason = phases.can_run(
             _slot_to_command(phase_slot),
             state,
@@ -141,7 +159,6 @@ def _slot_to_command(phase_slot: tuple[str, str]) -> str:
     for cmd, (p, s) in COMMAND_PHASE.items():
         if p == phase_slot[0] and s == phase_slot[1]:
             return cmd
-    # Fallback: construct from slot
     return phase_slot[1]
 
 

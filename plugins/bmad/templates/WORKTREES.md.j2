@@ -1,0 +1,8 @@
+# WORKTREES.md — {{ project_name }}
+
+> Live session manifest. Updated by `/bmad:worktree-status`.
+
+| Worktree | Branch | Agent | Task | Status | Last commit |
+|---|---|---|---|---|---|
+{% for wt in worktrees %}| `worktree/{{ wt.name }}` | `{{ wt.branch }}` | - | - | idle | {{ wt.last_commit | default("-") }} |
+{% endfor %}

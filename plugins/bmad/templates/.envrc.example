@@ -1,0 +1,5 @@
+# .envrc — auto-loaded by direnv (optional)
+# Run: direnv allow
+
+export BMAD_WORKSPACE_ROOT="$(pwd)"
+export HERMES_PROFILE="${HERMES_PROFILE:-engineer}"
