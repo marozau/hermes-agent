@@ -119,6 +119,8 @@ class PreflightTelemetry:
     rerank_outcome: str = ""       # "disabled" | "ok" | "parse-failed" | "failed" | ""
     # Story 9.3: category for hit-rate report (A4: derived from domains[0])
     category: str = ""
+    # Story 11.6: per-stage wall-clock timings (ms)
+    stage_timings: dict[str, float] = field(default_factory=dict)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -342,12 +344,42 @@ def _normalize_bm25_scores(hits: list[TrajectoryHit]) -> list[float]:
     return [(s - min_s) / (max_s - min_s) for s in scores]
 
 
+def _active_embedding_workload() -> tuple[str, str]:
+    """Story 11.3: Get the active embedding provider+model from providers.yaml.
+
+    Returns (provider_name, model_slug) where model_slug has / replaced with -.
+    """
+    try:
+        from lib.hermes_llm import load_providers_config
+        providers = load_providers_config()
+        wl = providers.get("recall_embed")
+        if wl:
+            return wl.primary.provider, wl.primary.model.lower().replace("/", "-")
+    except Exception:
+        pass
+    return "deepseek", "deepseek-embed-v2"  # safe default matching providers.yaml
+
+
+def _resolve_sidecar_path(entry_id: str, provider: str, model: str) -> Path:
+    """Story 11.3: Resolve the .vec sidecar path for an entry.
+
+    Looks in the same directory as the entry .md file.
+    """
+    from lib.hermes_memory import _resolve_memory_dir
+    mem_dir = _resolve_memory_dir()
+    return mem_dir / f"{entry_id}.{provider}-{model}.vec"
+
+
 def apply_hybrid_scoring(
     hits: list[TrajectoryHit],
     query_text: str,
     config: Optional[dict] = None,
 ) -> tuple[list[TrajectoryHit], str]:
-    """Story 8.4: Apply hybrid BM25 + cosine scoring to hits.
+    """Story 8.4 + 11.3: Apply hybrid BM25 + cosine scoring to hits.
+
+    Story 11.3: Reads candidate vectors from .vec sidecars on disk
+    instead of making per-candidate HTTP calls. Only one HTTP call
+    is made (for the query embedding).
 
     When embeddings are available:
         hybrid = 0.7 * cosine_sim(query, candidate) + 0.3 * bm25_normalized
@@ -356,10 +388,9 @@ def apply_hybrid_scoring(
 
     Returns (hits, embedding_source) where embedding_source is one of:
         "disabled" — config flag off
-        "ok" — embeddings used for at least one candidate
-        "cache" — all hits served from LRU cache
+        "ok" — all candidates scored with embeddings
         "failed" — query embedding failed; fell back to pure BM25
-        "partial" — some candidate embeddings failed
+        "partial" — some candidate sidecars missing; those use BM25
     """
     # Check config flag
     use_embeddings = True
@@ -374,40 +405,50 @@ def apply_hybrid_scoring(
     # Normalize BM25 scores once
     bm25_normalized = _normalize_bm25_scores(hits)
 
-    # Get query embedding — fail-open to pure BM25 (AC3)
-    query_vec = _get_embedding(query_text)
+    # Story 11.3: Single HTTP call for query embedding via batched API
+    try:
+        from lib.hermes_llm import llm_embed_one
+        query_vec = llm_embed_one(query_text)
+    except Exception as e:
+        logger.debug("Hybrid scoring: query embedding failed: %s", e)
+        query_vec = None
+
     if query_vec is None:
         logger.debug("Hybrid scoring: query embedding unavailable, falling back to BM25")
         for i, h in enumerate(hits):
             h.hybrid_score = bm25_normalized[i]
         return hits, "failed"
 
-    # Get candidate embeddings and compute hybrid scores
-    all_from_cache = True
-    any_failed = False
+    # Story 11.3: Read candidate vectors from .vec sidecars on disk
+    provider, model = _active_embedding_workload()
+    sidecar_misses = 0
     for i, h in enumerate(hits):
-        cand_text = h.content[:500]
-        cand_vec = _get_embedding(cand_text)
-        if cand_vec is not None:
-            cos_sim = _cosine_similarity(query_vec, cand_vec)
-            h.hybrid_score = (
-                _HYBRID_COSINE_WEIGHT * cos_sim
-                + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
-            )
-            # Check if this came from cache vs fresh call
-            if _text_hash(cand_text) not in _embedding_cache:
-                all_from_cache = False
+        sidecar_path = _resolve_sidecar_path(h.entry_id, provider, model)
+        if sidecar_path.exists():
+            try:
+                import numpy
+                cand_vec = numpy.fromfile(str(sidecar_path), dtype=numpy.float32).tolist()
+                cos_sim = _cosine_similarity(query_vec, cand_vec)
+                h.hybrid_score = (
+                    _HYBRID_COSINE_WEIGHT * cos_sim
+                    + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
+                )
+            except Exception as e:
+                logger.debug("Sidecar read failed for %s: %s", h.entry_id, e)
+                h.hybrid_score = bm25_normalized[i]
+                sidecar_misses += 1
         else:
-            # Candidate embedding failed — use pure BM25 for this one (AC3)
+            # Missing sidecar — BM25 fallback for this candidate
             h.hybrid_score = bm25_normalized[i]
-            any_failed = True
+            sidecar_misses += 1
 
-    if any_failed:
-        source = "partial"
-    elif all_from_cache:
-        source = "cache"
-    else:
+    if sidecar_misses == 0:
         source = "ok"
+    elif sidecar_misses < len(hits):
+        source = "partial"
+    else:
+        # All sidecars missing — query embedding succeeded but no candidates
+        source = "partial"
 
     return hits, source
 
@@ -1071,6 +1112,7 @@ def write_preflight_telemetry(
         "embedding_source": telemetry.embedding_source,
         "rerank_outcome": telemetry.rerank_outcome,
         "category": telemetry.category,  # A4: for Story 9.3 hit-rate report
+        "stage_timings": {k: round(v, 2) for k, v in telemetry.stage_timings.items()},
     }, ensure_ascii=False, sort_keys=True) + "\n"
     _atomic_append(log_path / f"{today}.jsonl", row)
 
@@ -1275,14 +1317,19 @@ def should_run_preflight(
     message_hash = hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
 
     # P16: classify once and reuse.
+    stage_timings: dict[str, float] = {}
+    _fn_start = time.perf_counter()
+    _st = time.perf_counter()
     intent = classify_intent(message, vocab_path)
+    stage_timings["classify_intent"] = (time.perf_counter() - _st) * 1000
 
-    t0 = time.perf_counter()
+    _st = time.perf_counter()
     reason = evaluate_skip_ladder(
         gate, message, message_hash=message_hash,
         force=force, intent=intent, vocab_path=vocab_path,
         session_search_fn=session_search_fn,
     )
+    stage_timings["evaluate_skip_ladder"] = (time.perf_counter() - _st) * 1000
 
     # Story 8.1 / AC2: YAKE fallback when classify_intent fails
     # (SMALL_NO_DOMAIN means no domain vocab matched AND message is short).
@@ -1292,14 +1339,16 @@ def should_run_preflight(
     yake_terms: list[str] = []
     if reason == SkipReason.SMALL_NO_DOMAIN and intent.complexity:
         # Complexity hit but no domain — try YAKE
+        _st = time.perf_counter()
         enriched, yake_terms = enrich_query_with_yake(intent.domains, message)
         if enriched:
             intent.domains = enriched
             intent_source = "yake-fallback"
             reason = None  # override the skip
+        stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
 
     if reason is not None:
-        elapsed = (time.perf_counter() - t0) * 1000
+        elapsed = (time.perf_counter() - _fn_start) * 1000
         # P13 / FR-34: emit telemetry on skip path.
         write_preflight_telemetry(PreflightTelemetry(
             session_id=session_id,
@@ -1319,24 +1368,40 @@ def should_run_preflight(
 
     # Fire path.
     # Story 8.1 / AC3: enrich query with YAKE keywords
+    _st = time.perf_counter()
     enriched_domains, fire_yake_terms = enrich_query_with_yake(intent.domains, message)
     if fire_yake_terms and not yake_terms:
         yake_terms = fire_yake_terms
         intent_source = "rule-based+yake"
+    stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
+
+    _st = time.perf_counter()
     hits = retrieve_trajectories(
         enriched_domains, session_search_fn or _noop_search,
     )
+    stage_timings["retrieve_trajectories"] = (time.perf_counter() - _st) * 1000
+
+    _st = time.perf_counter()
     hits = _filter_stale_trajectories(hits)  # P11 / FR-33
+    stage_timings["filter_stale_trajectories"] = (time.perf_counter() - _st) * 1000
+
     # Story 8.4: apply hybrid BM25 + embedding scoring before ranking
     embedding_source = "disabled"
     cfg_for_preflight = _load_config()
+    _st = time.perf_counter()
     if hits:
         hits, embedding_source = apply_hybrid_scoring(hits, message, config=cfg_for_preflight)
+    stage_timings["apply_hybrid_scoring"] = (time.perf_counter() - _st) * 1000
+
+    _st = time.perf_counter()
     ranked = rank_trajectories(hits, config_path)
+    stage_timings["rank_trajectories"] = (time.perf_counter() - _st) * 1000
+
     primary_domain = intent.domains[0] if intent.domains else None
     # Story 8.6: LLM reranker — operate on top-N=8 before dedupe_and_cap
     rerank_outcome = ""
     top_n_for_rerank = ranked[:_RERANK_TOP_N]
+    _st = time.perf_counter()
     if top_n_for_rerank and cfg_for_preflight.get("recall", {}).get("use_reranker", False):
         top_n_for_rerank, rerank_outcome = rerank_with_llm(
             top_n_for_rerank, message, config=cfg_for_preflight,
@@ -1345,6 +1410,8 @@ def should_run_preflight(
         reranked_set = set(id(h) for h in top_n_for_rerank)
         un_promoted = [h for h in ranked[:_RERANK_TOP_N] if id(h) not in reranked_set]
         ranked = top_n_for_rerank + un_promoted + ranked[_RERANK_TOP_N:]
+    stage_timings["rerank_with_llm"] = (time.perf_counter() - _st) * 1000
+
     # P5: read top_k from config, validate [1,3], pass to dedupe_and_cap
     recall_cfg = cfg_for_preflight.get("recall", {})
     configured_top_k = 3
@@ -1353,12 +1420,19 @@ def should_run_preflight(
             configured_top_k = validate_top_k(int(recall_cfg["top_k"]))
         except ValueError as e:
             logger.warning("config.recall.top_k invalid: %s — using default 3", e)
+
+    _st = time.perf_counter()
     deduped = dedupe_and_cap(ranked, k=configured_top_k, primary_domain=primary_domain)
+    stage_timings["dedupe_and_cap"] = (time.perf_counter() - _st) * 1000
+
     # Story 8.5: truncated_count = entries that scored but were capped out
     truncated_count = max(0, len(ranked) - len(deduped))
-    heads_up = format_heads_up(deduped)
 
-    elapsed = (time.perf_counter() - t0) * 1000
+    _st = time.perf_counter()
+    heads_up = format_heads_up(deduped)
+    stage_timings["format_heads_up"] = (time.perf_counter() - _st) * 1000
+
+    elapsed = (time.perf_counter() - _fn_start) * 1000
     cited_ids = [h.entry_id or h.id for h in deduped]
 
     # P25 / P20: telemetry BEFORE mark_fired (so a telemetry failure leaves
@@ -1371,6 +1445,7 @@ def should_run_preflight(
     # joining preflight rows with verify_citation events, NOT by reading
     # cited_entry_ids on the original row (that field is reserved for an
     # in-process verify hook that may land in a later iteration).
+    _st = time.perf_counter()
     write_preflight_telemetry(PreflightTelemetry(
         session_id=session_id,
         intent_hash=intent.intent_hash,
@@ -1389,7 +1464,9 @@ def should_run_preflight(
         embedding_source=embedding_source,
         rerank_outcome=rerank_outcome,
         category=primary_domain or (intent.domains[0] if intent.domains else ""),  # A4
+        stage_timings=stage_timings,
     ), log_dir=log_dir)
+    stage_timings["write_preflight_telemetry"] = (time.perf_counter() - _st) * 1000
 
     if cited_ids:
         persist_citations(session_id, cited_ids)

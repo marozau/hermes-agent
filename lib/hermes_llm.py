@@ -401,7 +401,7 @@ def classify_exception(exc: BaseException) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 _PROVIDER_DISPATCH: dict[str, Callable[..., dict]] = {}
-_EMBEDDING_DISPATCH: dict[str, Callable[..., list[float]]] = {}
+_EMBEDDING_DISPATCH: dict[str, Callable[..., list[list[float]]]] = {}
 
 
 def register_provider_dispatch(provider: str, fn: Callable[..., dict]) -> None:
@@ -410,8 +410,8 @@ def register_provider_dispatch(provider: str, fn: Callable[..., dict]) -> None:
     _PROVIDER_DISPATCH[provider] = fn
 
 
-def register_embedding_dispatch(provider: str, fn: Callable[..., list[float]]) -> None:
-    """Story 8.4: register an embedding provider implementation."""
+def register_embedding_dispatch(provider: str, fn: Callable[..., list[list[float]]]) -> None:
+    """Story 8.4/11.1: register a batched embedding provider implementation."""
     _EMBEDDING_DISPATCH[provider] = fn
 
 
@@ -665,25 +665,34 @@ def llm_call(
 
 
 def llm_embed(
-    text: str,
+    texts: "Union[str, list[str]]",
     workload: str = "recall_embed",
     *,
     observability_dir: Optional[str] = None,
     providers_config: Optional[dict[str, WorkloadSpec]] = None,
-) -> Optional[list[float]]:
-    """Story 8.4: canonical embedding call site.
+) -> "Union[Optional[list[float]], list[Optional[list[float]]]]":
+    """Story 11.1: batched embedding call site (back-compat with single string).
 
-    Routes through providers.yaml like llm_call. Returns embedding vector
-    or None on failure (fail-open per Story 7.6 skip-ladder discipline).
+    Routes through providers.yaml like llm_call.  Returns a list of embedding
+    vectors (one per input text) or ``None`` on failure.
+
+    Back-compat: if *texts* is a plain ``str`` it is wrapped in a list and
+    the return value is a single ``list[float] | None`` (the old behaviour).
 
     Hard Invariant #2: this is the only sanctioned embedding call site.
     Cross-provider fallback is enforced (Hard Invariant #10).
     """
+    # Back-compat shim: single string in → single vector out
+    _single = isinstance(texts, str)
+    if _single:
+        texts = [texts]  # type: ignore[list-item]
+
     config = providers_config if providers_config is not None else load_providers_config()
     wl = config.get(workload)
     if wl is None:
         logger.warning("llm_embed: workload '%s' not in providers.yaml", workload)
-        return None
+        fallback: list[Optional[list[float]]] = [None] * len(texts)
+        return None if _single else fallback
 
     t0 = _time.monotonic()
     chain: list[ProviderSpec] = [wl.primary] + [
@@ -703,16 +712,16 @@ def llm_embed(
             )
             continue
         try:
-            vec = fn(prov, text)
+            vecs = fn(prov, texts)  # type: list[list[float]]
             elapsed_ms = (_time.monotonic() - t0) * 1000
             _write_telemetry(
                 workload=workload, model=prov.model,
-                tokens_in=len(text.split()), tokens_out=0,
+                tokens_in=sum(len(t.split()) for t in texts), tokens_out=0,
                 cache_read_tokens=0, latency_ms=elapsed_ms,
                 schema_status="embedding", outcome="ok", error=None,
                 idempotency_key=None, observability_dir=observability_dir,
             )
-            return vec
+            return vecs[0] if _single else list(vecs)  # list[float] | list[list[float]]
         except Exception as exc:
             last_exc = exc
             tried.append(prov.provider)
@@ -727,7 +736,7 @@ def llm_embed(
     elapsed_ms = (_time.monotonic() - t0) * 1000
     _write_telemetry(
         workload=workload, model="unknown",
-        tokens_in=len(text.split()), tokens_out=0,
+        tokens_in=sum(len(t.split()) for t in texts), tokens_out=0,
         cache_read_tokens=0, latency_ms=elapsed_ms,
         schema_status="embedding", outcome="failed",
         error=f"exhausted: tried={tried}",
@@ -737,4 +746,25 @@ def llm_embed(
         "llm_embed: all providers exhausted for workload '%s': tried=%s",
         workload, tried,
     )
-    return None  # fail-open
+    fallback2: list[Optional[list[float]]] = [None] * len(texts)
+    return None if _single else fallback2  # fail-open
+
+
+def llm_embed_one(
+    text: str,
+    workload: str = "recall_embed",
+    *,
+    observability_dir: Optional[str] = None,
+    providers_config: Optional[dict[str, WorkloadSpec]] = None,
+) -> Optional[list[float]]:
+    """Back-compat shim: embed a single text, return one vector or None."""
+    result = llm_embed(
+        [text], workload,
+        observability_dir=observability_dir,
+        providers_config=providers_config,
+    )
+    if result is None or not isinstance(result, list):
+        return None
+    # result is list[list[float] | None] with one element
+    val = result[0]
+    return val  # type: ignore[return-value]

@@ -30,6 +30,8 @@ Spec references:
     FR-12 (deferred) raw-layer pairing arrives with Epic 2.
     NFR-16 Secret-scanner pre-check aborts writes with secrets.
 """
+import atexit
+import concurrent.futures
 import logging
 import json
 import os
@@ -40,6 +42,46 @@ from pathlib import Path
 from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Async sidecar embedding writer (Story 11.2, NFR-29)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EMBED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="embed"
+)
+atexit.register(_EMBED_EXECUTOR.shutdown, wait=False)
+
+
+def _queue_embedding_write(entry_id: str, body: str, entry_path: Path) -> None:
+    """Submit background embedding job; non-blocking (NFR-29)."""
+    _EMBED_EXECUTOR.submit(_compute_and_write_sidecar, entry_id, body, entry_path)
+
+
+def _compute_and_write_sidecar(entry_id: str, body: str, entry_path: Path) -> None:
+    """Compute embedding and write .vec sidecar file atomically."""
+    try:
+        import numpy
+        from lib.hermes_llm import llm_embed, load_providers_config
+
+        providers = load_providers_config()
+        wl = providers.get("recall_embed")
+        if not wl:
+            return
+        provider = wl.primary.provider
+        model = wl.primary.model.lower().replace("/", "-")
+        result = llm_embed([body])
+        if not result or result[0] is None:
+            return
+        vec = result[0]
+        sidecar = entry_path.parent / f"{entry_id}.{provider}-{model}.vec"
+        tmp = sidecar.with_suffix(".vec.tmp")
+        numpy.array(vec, dtype=numpy.float32).tofile(str(tmp))
+        os.replace(tmp, sidecar)
+        logger.debug("Sidecar wrote %s (%d dims)", sidecar.name, len(vec))
+    except Exception as e:
+        logger.debug("Sidecar write failed for %s: %s", entry_id, e)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +437,11 @@ def add_entry(
         raise
 
     logger.debug("add_entry: wrote %s (type=%s, source=%s)", filepath, type, source)
+
+    # ── Story 11.2: async sidecar embedding for trajectories (NFR-29) ──
+    if type == "trajectory":
+        _queue_embedding_write(entry_id, body, filepath)
+
     return entry_id
 
 
