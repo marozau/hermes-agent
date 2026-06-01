@@ -141,6 +141,9 @@ def _resolve_observability_dir(override: Optional[str] = None) -> Path:
 _REQUIRED_PROVIDER_FIELDS = ("provider", "model", "max_tokens", "timeout")
 _VALID_CACHE_MODES = ("5m", "1h", "none")
 
+# F13: module-level cache for load_providers_config keyed by (path, mtime)
+_providers_cache: dict[tuple, dict[str, WorkloadSpec]] = {}
+
 
 def _validate_provider_dict(d: dict, *, scope: str) -> ProviderSpec:
     """P11: validate provider entry (primary OR fallback). Rejects bool sneak-in."""
@@ -179,6 +182,17 @@ def load_providers_config(
     import yaml as _yaml
 
     filepath = _resolve_providers_path(path)
+
+    # F13: check cache keyed by (resolved_path, mtime)
+    cache_key = None
+    try:
+        mtime = filepath.stat().st_mtime if filepath.exists() else -1
+        cache_key = (str(filepath), mtime)
+        if cache_key in _providers_cache:
+            return _providers_cache[cache_key]
+    except OSError:
+        pass
+
     if not filepath.exists():
         logger.warning("providers.yaml not found at %s", filepath)
         return {}
@@ -242,7 +256,12 @@ def load_providers_config(
             same_provider_ok=same_provider_ok,
         )))
 
-    return dict(staged)
+    result = dict(staged)
+    # F13: populate cache
+    if cache_key is not None:
+        _providers_cache.clear()  # single-entry cache (only one config file)
+        _providers_cache[cache_key] = result
+    return result
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -712,7 +731,15 @@ def llm_embed(
             )
             continue
         try:
-            vecs = fn(prov, texts)  # type: list[list[float]]
+            # F4: backward-compat guard — old dispatch functions may have
+            # signature fn(prov, text: str) instead of fn(prov, texts: list).
+            try:
+                vecs = fn(prov, texts)  # type: list[list[float]]
+            except TypeError:
+                if len(texts) == 1:
+                    vecs = [fn(prov, texts[0])]  # type: ignore[reportAssignmentType]  # old sig returns list[float]
+                else:
+                    raise
             elapsed_ms = (_time.monotonic() - t0) * 1000
             _write_telemetry(
                 workload=workload, model=prov.model,

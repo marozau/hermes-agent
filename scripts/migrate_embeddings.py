@@ -7,6 +7,11 @@ sidecar files.
 
 Usage:
     python scripts/migrate_embeddings.py [--memory-dir PATH] [--batch-size N] [--dry-run]
+
+NOTE: This runs as a standalone script. The HERMES_HOME ContextVar used by
+the agent runtime is NOT set. Either pass --memory-dir explicitly or set the
+HERMES_HOME environment variable before running. Without either, the script
+defaults to ~/.hermes/memory/typed.
 """
 import argparse
 import os
@@ -77,26 +82,45 @@ def main():
     import numpy
 
     total = len(entries)
+    failure_count = 0
     for i in range(0, total, args.batch_size):
         batch = entries[i : i + args.batch_size]
         bodies = [b for _, b, _ in batch]
         result = llm_embed(bodies)
         if not result:
-            print(f"Batch {i // args.batch_size}: llm_embed failed, skipping")
+            print(f"Batch {i // args.batch_size}: llm_embed returned None, skipping")
+            failure_count += len(batch)
             continue
+        # F14: track per-batch failure count
+        batch_failures = 0
         for (entry_id, _, filepath), vec in zip(batch, result):
             if vec is None:
+                batch_failures += 1
+                failure_count += 1
                 continue
             sidecar = mem_dir / f"{entry_id}{suffix}"
             tmp = sidecar.with_suffix(".vec.tmp")
-            numpy.array(vec, dtype=numpy.float32).tofile(str(tmp))
-            os.replace(tmp, sidecar)
-        print(
-            f"Batch {i // args.batch_size}: wrote "
-            f"{sum(1 for v in result if v is not None)} sidecars"
-        )
-
-    print(f"Done. {total} entries processed.")
+            try:
+                numpy.array(vec, dtype=numpy.float32).tofile(str(tmp))
+                os.replace(tmp, sidecar)
+            except Exception as exc:
+                print(f"  WARNING: failed to write sidecar for {entry_id}: {exc}")
+                failure_count += 1
+                try:
+                    os.unlink(str(tmp))
+                except OSError:
+                    pass
+        batch_ok = len(batch) - batch_failures
+        if batch_failures == len(batch):
+            # F14: whole-batch failure — warn prominently
+            print(f"Batch {i // args.batch_size}: ALL {len(batch)} entries failed embedding")
+        else:
+            print(f"Batch {i // args.batch_size}: wrote {batch_ok} sidecars, {batch_failures} failed")
+    # F14: exit non-zero if any failures occurred
+    if failure_count > 0:
+        print(f"WARNING: {failure_count}/{total} entries failed")
+        sys.exit(1)
+    print(f"Done. {total} entries processed successfully.")
 
 
 if __name__ == "__main__":

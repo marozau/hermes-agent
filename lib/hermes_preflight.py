@@ -355,18 +355,19 @@ def _active_embedding_workload() -> tuple[str, str]:
         wl = providers.get("recall_embed")
         if wl:
             return wl.primary.provider, wl.primary.model.lower().replace("/", "-")
-    except Exception:
-        pass
+    except Exception as exc:
+        logger.warning("_active_embedding_workload: config error, using defaults: %s", exc)
     return "deepseek", "deepseek-embed-v2"  # safe default matching providers.yaml
 
 
-def _resolve_sidecar_path(entry_id: str, provider: str, model: str) -> Path:
+def _resolve_sidecar_path(entry_id: str, provider: str, model: str, *, memory_dir: Optional[str] = None) -> Path:
     """Story 11.3: Resolve the .vec sidecar path for an entry.
 
     Looks in the same directory as the entry .md file.
+    F1: accept caller-supplied memory_dir so reader matches writer path.
     """
     from lib.hermes_memory import _resolve_memory_dir
-    mem_dir = _resolve_memory_dir()
+    mem_dir = _resolve_memory_dir(memory_dir)
     return mem_dir / f"{entry_id}.{provider}-{model}.vec"
 
 
@@ -374,6 +375,7 @@ def apply_hybrid_scoring(
     hits: list[TrajectoryHit],
     query_text: str,
     config: Optional[dict] = None,
+    memory_dir: Optional[str] = None,  # F1: thread through to sidecar reader
 ) -> tuple[list[TrajectoryHit], str]:
     """Story 8.4 + 11.3: Apply hybrid BM25 + cosine scoring to hits.
 
@@ -406,12 +408,17 @@ def apply_hybrid_scoring(
     bm25_normalized = _normalize_bm25_scores(hits)
 
     # Story 11.3: Single HTTP call for query embedding via batched API
-    try:
-        from lib.hermes_llm import llm_embed_one
-        query_vec = llm_embed_one(query_text)
-    except Exception as e:
-        logger.debug("Hybrid scoring: query embedding failed: %s", e)
-        query_vec = None
+    # F8: check LRU cache first to avoid redundant HTTP calls
+    query_vec = _get_cached_embedding(query_text)
+    if query_vec is None:
+        try:
+            from lib.hermes_llm import llm_embed_one
+            query_vec = llm_embed_one(query_text)
+            if query_vec:
+                _cache_embedding(query_text, query_vec)
+        except Exception as e:
+            logger.warning("Hybrid scoring: query embedding failed: %s", e)
+            query_vec = None
 
     if query_vec is None:
         logger.debug("Hybrid scoring: query embedding unavailable, falling back to BM25")
@@ -423,16 +430,25 @@ def apply_hybrid_scoring(
     provider, model = _active_embedding_workload()
     sidecar_misses = 0
     for i, h in enumerate(hits):
-        sidecar_path = _resolve_sidecar_path(h.entry_id, provider, model)
+        sidecar_path = _resolve_sidecar_path(h.entry_id, provider, model, memory_dir=memory_dir)
         if sidecar_path.exists():
             try:
                 import numpy
                 cand_vec = numpy.fromfile(str(sidecar_path), dtype=numpy.float32).tolist()
-                cos_sim = _cosine_similarity(query_vec, cand_vec)
-                h.hybrid_score = (
-                    _HYBRID_COSINE_WEIGHT * cos_sim
-                    + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
-                )
+                # F3: dimension check — mismatched sidecar is corrupt; BM25 fallback
+                if len(cand_vec) != len(query_vec):
+                    logger.warning(
+                        "Sidecar dimension mismatch for %s: expected %d, got %d — falling back to BM25",
+                        h.entry_id, len(query_vec), len(cand_vec),
+                    )
+                    h.hybrid_score = bm25_normalized[i]
+                    sidecar_misses += 1
+                else:
+                    cos_sim = _cosine_similarity(query_vec, cand_vec)
+                    h.hybrid_score = (
+                        _HYBRID_COSINE_WEIGHT * cos_sim
+                        + _HYBRID_BM25_WEIGHT * bm25_normalized[i]
+                    )
             except Exception as e:
                 logger.debug("Sidecar read failed for %s: %s", h.entry_id, e)
                 h.hybrid_score = bm25_normalized[i]
@@ -1345,7 +1361,8 @@ def should_run_preflight(
             intent.domains = enriched
             intent_source = "yake-fallback"
             reason = None  # override the skip
-        stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
+        # F12: distinct key to avoid overwriting fire-path timing
+        stage_timings["yake_enrichment_skip"] = (time.perf_counter() - _st) * 1000
 
     if reason is not None:
         elapsed = (time.perf_counter() - _fn_start) * 1000
@@ -1373,7 +1390,8 @@ def should_run_preflight(
     if fire_yake_terms and not yake_terms:
         yake_terms = fire_yake_terms
         intent_source = "rule-based+yake"
-    stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
+    # F12: distinct key to avoid overwriting skip-path timing
+    stage_timings["yake_enrichment_fire"] = (time.perf_counter() - _st) * 1000
 
     _st = time.perf_counter()
     hits = retrieve_trajectories(
@@ -1445,7 +1463,9 @@ def should_run_preflight(
     # joining preflight rows with verify_citation events, NOT by reading
     # cited_entry_ids on the original row (that field is reserved for an
     # in-process verify hook that may land in a later iteration).
-    _st = time.perf_counter()
+    # F11: pre-populate key so it appears in serialized telemetry
+    stage_timings["write_preflight_telemetry"] = 0.0
+    _st_telem = time.perf_counter()
     write_preflight_telemetry(PreflightTelemetry(
         session_id=session_id,
         intent_hash=intent.intent_hash,
@@ -1466,7 +1486,7 @@ def should_run_preflight(
         category=primary_domain or (intent.domains[0] if intent.domains else ""),  # A4
         stage_timings=stage_timings,
     ), log_dir=log_dir)
-    stage_timings["write_preflight_telemetry"] = (time.perf_counter() - _st) * 1000
+    stage_timings["write_preflight_telemetry"] = (time.perf_counter() - _st_telem) * 1000
 
     if cited_ids:
         persist_citations(session_id, cited_ids)

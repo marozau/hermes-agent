@@ -51,7 +51,7 @@ logger = logging.getLogger(__name__)
 _EMBED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=2, thread_name_prefix="embed"
 )
-atexit.register(_EMBED_EXECUTOR.shutdown, wait=False)
+atexit.register(_EMBED_EXECUTOR.shutdown, wait=True)
 
 
 def _queue_embedding_write(entry_id: str, body: str, entry_path: Path) -> None:
@@ -61,6 +61,7 @@ def _queue_embedding_write(entry_id: str, body: str, entry_path: Path) -> None:
 
 def _compute_and_write_sidecar(entry_id: str, body: str, entry_path: Path) -> None:
     """Compute embedding and write .vec sidecar file atomically."""
+    tmp = None
     try:
         import numpy
         from lib.hermes_llm import llm_embed, load_providers_config
@@ -79,9 +80,18 @@ def _compute_and_write_sidecar(entry_id: str, body: str, entry_path: Path) -> No
         tmp = sidecar.with_suffix(".vec.tmp")
         numpy.array(vec, dtype=numpy.float32).tofile(str(tmp))
         os.replace(tmp, sidecar)
+        tmp = None  # os.replace succeeded; tmp no longer exists
         logger.debug("Sidecar wrote %s (%d dims)", sidecar.name, len(vec))
     except Exception as e:
-        logger.debug("Sidecar write failed for %s: %s", entry_id, e)
+        # F9: WARNING level so failures are visible (not silently DEBUG)
+        logger.warning("Sidecar write failed for %s: %s", entry_id, e)
+    finally:
+        # F15: clean up orphan .vec.tmp on failure
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────

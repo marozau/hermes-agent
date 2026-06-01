@@ -151,22 +151,26 @@ class TestBM25Normalization:
 class TestHybridScoring:
     """AC2: base = 0.7 * cosine_sim + 0.3 * bm25_normalized."""
 
-    def test_hybrid_with_mock_embeddings(self):
-        """When embeddings available, hybrid score is computed."""
+    def test_hybrid_with_mock_embeddings(self, tmp_path):
+        """When embeddings available, hybrid score is computed via sidecars."""
+        import struct
         hits = [
-            TrajectoryHit(id="a", content="configure k3d cluster", bm25_score=0.3),
-            TrajectoryHit(id="b", content="debug docker network", bm25_score=0.5),
+            TrajectoryHit(id="a", entry_id="a", content="configure k3d cluster", bm25_score=0.3),
+            TrajectoryHit(id="b", entry_id="b", content="debug docker network", bm25_score=0.5),
         ]
-        # Mock embedding: similar vectors for "configure k3d" and "set up k3d"
-        similar_vec = [0.8, 0.6, 0.0]
-        different_vec = [0.0, 0.1, 0.9]
 
-        def mock_embed(text, workload="recall_embed"):
-            if "k3d" in text:
-                return similar_vec
-            return different_vec
+        similar_vec = [1.0, 0.0, 0.0]  # Query direction
+        different_vec = [0.0, 1.0, 0.0]  # Orthogonal
 
-        with mock.patch("lib.hermes_preflight._get_embedding", side_effect=mock_embed):
+        # Write sidecar files for both entries
+        for entry_id, vec in [("a", similar_vec), ("b", different_vec)]:
+            sidecar = tmp_path / f"{entry_id}.deepseek-deepseek-embed-v2.vec"
+            with open(str(sidecar), "wb") as f:
+                f.write(struct.pack(f"{len(vec)}f", *vec))
+
+        with mock.patch("lib.hermes_llm.llm_embed_one", return_value=similar_vec), \
+             mock.patch("lib.hermes_preflight._active_embedding_workload", return_value=("deepseek", "deepseek-embed-v2")), \
+             mock.patch("lib.hermes_preflight._resolve_sidecar_path", side_effect=lambda eid, p, m, memory_dir=None: tmp_path / f"{eid}.deepseek-deepseek-embed-v2.vec"):
             result, source = apply_hybrid_scoring(hits, "set up k3d", config={"recall": {"use_embeddings": True}})
 
         # Both hits should have updated scores
@@ -180,7 +184,7 @@ class TestHybridScoring:
         hits = [
             TrajectoryHit(id="a", content="test", bm25_score=0.5),
         ]
-        with mock.patch("lib.hermes_preflight._get_embedding", return_value=None):
+        with mock.patch("lib.hermes_llm.llm_embed_one", return_value=None):
             result, source = apply_hybrid_scoring(hits, "test query", config={"recall": {"use_embeddings": True}})
         # Should not crash; scores unchanged
         assert len(result) == 1
@@ -200,7 +204,7 @@ class TestHybridScoring:
             call_count += 1
             return None
 
-        with mock.patch("lib.hermes_preflight._get_embedding", side_effect=counting_embed):
+        with mock.patch("lib.hermes_llm.llm_embed_one", side_effect=counting_embed):
             result, source = apply_hybrid_scoring(hits, "test", config={"recall": {"use_embeddings": False}})
 
         assert call_count == 0  # No embedding calls made
@@ -216,12 +220,19 @@ class TestHybridScoring:
 class TestLatencyBudget:
     """AC4: Config flag recall.use_embeddings controls embedding step."""
 
-    def test_config_flag_default_true(self):
+    def test_config_flag_default_true(self, tmp_path):
         """Default config enables embeddings."""
-        hits = [TrajectoryHit(id="a", content="test", bm25_score=0.5)]
-        with mock.patch("lib.hermes_preflight._get_embedding", return_value=[0.1, 0.2]):
-            result, source = apply_hybrid_scoring(hits, "test", config={})
-        # Should attempt embeddings (default true)
+        import struct
+        hits = [TrajectoryHit(id="a", entry_id="a", content="test", bm25_score=0.5)]
+        vec = [0.1, 0.2]
+        sidecar = tmp_path / "a.deepseek-deepseek-embed-v2.vec"
+        with open(str(sidecar), "wb") as f:
+            f.write(struct.pack(f"{len(vec)}f", *vec))
+        with mock.patch("lib.hermes_llm.llm_embed_one", return_value=vec), \
+             mock.patch("lib.hermes_preflight._active_embedding_workload", return_value=("deepseek", "deepseek-embed-v2")), \
+             mock.patch("lib.hermes_preflight._resolve_sidecar_path", side_effect=lambda eid, p, m, memory_dir=None: tmp_path / f"{eid}.deepseek-deepseek-embed-v2.vec"):
+            result, source = apply_hybrid_scoring(hits, "test")
+        assert source in ("ok", "partial")
         assert len(result) == 1
         assert source in ("ok", "cache", "partial")
 

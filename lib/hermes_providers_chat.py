@@ -343,9 +343,10 @@ def embeddings(
             f"Embeddings response ({provider.provider}) has no data: "
             f"{json.dumps(data)[:500]}"
         )
-    # Sort by index to guarantee order matches input order
-    sorted_items = sorted(embeddings_list, key=lambda item: item.get("index", 0))
-    return [item["embedding"] for item in sorted_items[:len(texts)]]
+    # F2: Don't sort by index — OpenAI spec guarantees `data` is returned in
+    # input order.  When provider omits `index`, every item defaults to 0 and
+    # sort is a no-op at best, reorder-dependent on server at worst.
+    return [item["embedding"] for item in embeddings_list[:len(texts)]]
 
 
 def _register_embedding_one(provider_name: str) -> None:
