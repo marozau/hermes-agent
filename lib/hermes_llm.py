@@ -23,6 +23,7 @@ import json as _json
 import logging
 import os
 import re as _re
+import threading
 import time as _time
 from datetime import datetime as _dt, timedelta, timezone as _tz
 from pathlib import Path
@@ -143,6 +144,7 @@ _VALID_CACHE_MODES = ("5m", "1h", "none")
 
 # F13: module-level cache for load_providers_config keyed by (path, mtime)
 _providers_cache: dict[tuple, dict[str, WorkloadSpec]] = {}
+_providers_cache_lock = threading.Lock()
 
 
 def _validate_provider_dict(d: dict, *, scope: str) -> ProviderSpec:
@@ -188,8 +190,10 @@ def load_providers_config(
     try:
         mtime = filepath.stat().st_mtime if filepath.exists() else -1
         cache_key = (str(filepath), mtime)
-        if cache_key in _providers_cache:
-            return _providers_cache[cache_key]
+        with _providers_cache_lock:
+            if cache_key in _providers_cache:
+                import copy
+                return copy.deepcopy(_providers_cache[cache_key])
     except OSError:
         pass
 
@@ -257,10 +261,11 @@ def load_providers_config(
         )))
 
     result = dict(staged)
-    # F13: populate cache
+    # F13: populate cache (thread-safe)
     if cache_key is not None:
-        _providers_cache.clear()  # single-entry cache (only one config file)
-        _providers_cache[cache_key] = result
+        with _providers_cache_lock:
+            _providers_cache.clear()
+            _providers_cache[cache_key] = result
     return result
 
 
@@ -733,13 +738,21 @@ def llm_embed(
         try:
             # F4: backward-compat guard — old dispatch functions may have
             # signature fn(prov, text: str) instead of fn(prov, texts: list).
-            try:
+            import inspect as _inspect
+            _params = list(_inspect.signature(fn).parameters.values())
+            _accepts_list = len(_params) >= 2 and _params[1].annotation in (
+                list, list[str], "list[str]", _inspect.Parameter.empty,
+            )
+            if _accepts_list:
                 vecs = fn(prov, texts)  # type: list[list[float]]
-            except TypeError:
-                if len(texts) == 1:
-                    vecs = [fn(prov, texts[0])]  # type: ignore[reportAssignmentType]  # old sig returns list[float]
-                else:
-                    raise
+            else:
+                # Old single-text signature — only works for batch=1
+                if len(texts) != 1:
+                    raise TypeError(
+                        f"Legacy embedding dispatch {fn.__name__} only accepts "
+                        f"single text; got {len(texts)} texts"
+                    )
+                vecs = [fn(prov, texts[0])]  # type: ignore[reportAssignmentType]
             elapsed_ms = (_time.monotonic() - t0) * 1000
             _write_telemetry(
                 workload=workload, model=prov.model,

@@ -408,14 +408,16 @@ def apply_hybrid_scoring(
     bm25_normalized = _normalize_bm25_scores(hits)
 
     # Story 11.3: Single HTTP call for query embedding via batched API
-    # F8: check LRU cache first to avoid redundant HTTP calls
-    query_vec = _get_cached_embedding(query_text)
+    # F8: check LRU cache first with provider-aware key + 500-char truncation
+    provider, model = _active_embedding_workload()
+    _query_truncated = query_text[:500]  # P10: consistent truncation
+    query_vec = _get_cached_embedding(_query_truncated, provider, model)
     if query_vec is None:
         try:
             from lib.hermes_llm import llm_embed_one
             query_vec = llm_embed_one(query_text)
             if query_vec:
-                _cache_embedding(query_text, query_vec)
+                _cache_embedding(_query_truncated, query_vec, provider, model)
         except Exception as e:
             logger.warning("Hybrid scoring: query embedding failed: %s", e)
             query_vec = None
@@ -427,7 +429,6 @@ def apply_hybrid_scoring(
         return hits, "failed"
 
     # Story 11.3: Read candidate vectors from .vec sidecars on disk
-    provider, model = _active_embedding_workload()
     sidecar_misses = 0
     for i, h in enumerate(hits):
         sidecar_path = _resolve_sidecar_path(h.entry_id, provider, model, memory_dir=memory_dir)
@@ -1362,7 +1363,7 @@ def should_run_preflight(
             intent_source = "yake-fallback"
             reason = None  # override the skip
         # F12: distinct key to avoid overwriting fire-path timing
-        stage_timings["yake_enrichment_skip"] = (time.perf_counter() - _st) * 1000
+        stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
 
     if reason is not None:
         elapsed = (time.perf_counter() - _fn_start) * 1000
@@ -1391,7 +1392,7 @@ def should_run_preflight(
         yake_terms = fire_yake_terms
         intent_source = "rule-based+yake"
     # F12: distinct key to avoid overwriting skip-path timing
-    stage_timings["yake_enrichment_fire"] = (time.perf_counter() - _st) * 1000
+    stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
 
     _st = time.perf_counter()
     hits = retrieve_trajectories(
@@ -1408,7 +1409,8 @@ def should_run_preflight(
     cfg_for_preflight = _load_config()
     _st = time.perf_counter()
     if hits:
-        hits, embedding_source = apply_hybrid_scoring(hits, message, config=cfg_for_preflight)
+        from lib.hermes_memory import _resolve_memory_dir as _rmd
+        hits, embedding_source = apply_hybrid_scoring(hits, message, config=cfg_for_preflight, memory_dir=str(_rmd()))
     stage_timings["apply_hybrid_scoring"] = (time.perf_counter() - _st) * 1000
 
     _st = time.perf_counter()
@@ -1463,8 +1465,9 @@ def should_run_preflight(
     # joining preflight rows with verify_citation events, NOT by reading
     # cited_entry_ids on the original row (that field is reserved for an
     # in-process verify hook that may land in a later iteration).
-    # F11: pre-populate key so it appears in serialized telemetry
-    stage_timings["write_preflight_telemetry"] = 0.0
+    # F11: write_preflight_telemetry timing is excluded from the serialized
+    # stage_timings because the dict is already serialized when we can measure
+    # it. Accept this — the write is ~1ms JSONL append, not a latency concern.
     _st_telem = time.perf_counter()
     write_preflight_telemetry(PreflightTelemetry(
         session_id=session_id,

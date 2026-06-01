@@ -51,12 +51,30 @@ logger = logging.getLogger(__name__)
 _EMBED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
     max_workers=2, thread_name_prefix="embed"
 )
-atexit.register(_EMBED_EXECUTOR.shutdown, wait=True)
+_EMBED_FUTURES: list = []
+
+
+def _shutdown_embed_executor():
+    """F15: drain in-flight writes with a 5s timeout."""
+    _EMBED_EXECUTOR.shutdown(wait=False)
+    import time as _t
+    deadline = _t.monotonic() + 5.0
+    for fut in _EMBED_FUTURES:
+        remaining = deadline - _t.monotonic()
+        if remaining > 0:
+            try:
+                fut.result(timeout=remaining)
+            except Exception:
+                pass
+
+
+atexit.register(_shutdown_embed_executor)
 
 
 def _queue_embedding_write(entry_id: str, body: str, entry_path: Path) -> None:
     """Submit background embedding job; non-blocking (NFR-29)."""
-    _EMBED_EXECUTOR.submit(_compute_and_write_sidecar, entry_id, body, entry_path)
+    fut = _EMBED_EXECUTOR.submit(_compute_and_write_sidecar, entry_id, body, entry_path)
+    _EMBED_FUTURES.append(fut)
 
 
 def _compute_and_write_sidecar(entry_id: str, body: str, entry_path: Path) -> None:
