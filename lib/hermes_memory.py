@@ -55,17 +55,23 @@ _EMBED_FUTURES: list = []
 
 
 def _shutdown_embed_executor():
-    """F15: drain in-flight writes with a 5s timeout."""
+    """F15: drain in-flight writes with a 5s timeout + orphan tmp cleanup."""
     _EMBED_EXECUTOR.shutdown(wait=False)
-    import time as _t
-    deadline = _t.monotonic() + 5.0
-    for fut in _EMBED_FUTURES:
-        remaining = deadline - _t.monotonic()
-        if remaining > 0:
+    if _EMBED_FUTURES:
+        done, not_done = concurrent.futures.wait(_EMBED_FUTURES, timeout=5.0)
+        # Cancel futures that didn't complete in time
+        for fut in not_done:
+            fut.cancel()
+    # F15: clean up any orphan .vec.tmp files
+    try:
+        mem_dir = _resolve_memory_dir()
+        for tmp in mem_dir.glob("*.vec.tmp"):
             try:
-                fut.result(timeout=remaining)
-            except Exception:
+                tmp.unlink(missing_ok=True)
+            except OSError:
                 pass
+    except Exception:
+        pass
 
 
 atexit.register(_shutdown_embed_executor)

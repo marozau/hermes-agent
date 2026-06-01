@@ -261,11 +261,12 @@ def load_providers_config(
         )))
 
     result = dict(staged)
-    # F13: populate cache (thread-safe)
+    # F13: populate cache (thread-safe, deepcopy to prevent mutation)
     if cache_key is not None:
+        import copy
         with _providers_cache_lock:
             _providers_cache.clear()
-            _providers_cache[cache_key] = result
+            _providers_cache[cache_key] = copy.deepcopy(result)
     return result
 
 
@@ -739,20 +740,34 @@ def llm_embed(
             # F4: backward-compat guard — old dispatch functions may have
             # signature fn(prov, text: str) instead of fn(prov, texts: list).
             import inspect as _inspect
-            _params = list(_inspect.signature(fn).parameters.values())
-            _accepts_list = len(_params) >= 2 and _params[1].annotation in (
-                list, list[str], "list[str]", _inspect.Parameter.empty,
-            )
+            import typing as _typing
+            try:
+                _params = list(_inspect.signature(fn).parameters.values())
+                _p1_ann = _params[1].annotation if len(_params) >= 2 else _inspect.Parameter.empty
+                # Check if annotation explicitly indicates a NON-list type (str)
+                # Treat Parameter.empty (no annotation) as "unknown — assume batch"
+                # for backward compat with existing unannotated dispatchers.
+                _is_str_annotated = (
+                    _p1_ann is str
+                    or (isinstance(_p1_ann, str) and _p1_ann.lower() == "str")
+                )
+                _accepts_list = not _is_str_annotated
+            except (ValueError, IndexError):
+                # Can't inspect signature (C extension, partial, etc.)
+                # Assume batch-aware for backward compat
+                _accepts_list = True
+
             if _accepts_list:
                 vecs = fn(prov, texts)  # type: list[list[float]]
             else:
-                # Old single-text signature — only works for batch=1
-                if len(texts) != 1:
-                    raise TypeError(
-                        f"Legacy embedding dispatch {fn.__name__} only accepts "
-                        f"single text; got {len(texts)} texts"
-                    )
-                vecs = [fn(prov, texts[0])]  # type: ignore[reportAssignmentType]
+                # Legacy single-text dispatcher — iterate sequentially
+                # F4: don't raise, fall back to per-text calls
+                import logging as _logging
+                _logging.getLogger(__name__).warning(
+                    "Legacy embedding dispatch %s — calling per-text for batch of %d",
+                    fn.__name__, len(texts),
+                )
+                vecs = [fn(prov, t) for t in texts]  # type: ignore[reportAssignmentType]
             elapsed_ms = (_time.monotonic() - t0) * 1000
             _write_telemetry(
                 workload=workload, model=prov.model,

@@ -415,7 +415,8 @@ def apply_hybrid_scoring(
     if query_vec is None:
         try:
             from lib.hermes_llm import llm_embed_one
-            query_vec = llm_embed_one(query_text)
+            # F8: embed the TRUNCATED text so key matches cached value
+            query_vec = llm_embed_one(_query_truncated)
             if query_vec:
                 _cache_embedding(_query_truncated, query_vec, provider, model)
         except Exception as e:
@@ -1386,12 +1387,15 @@ def should_run_preflight(
 
     # Fire path.
     # Story 8.1 / AC3: enrich query with YAKE keywords
+    # F12: skip second YAKE call if skip-recovery already populated yake_terms
     _st = time.perf_counter()
-    enriched_domains, fire_yake_terms = enrich_query_with_yake(intent.domains, message)
-    if fire_yake_terms and not yake_terms:
-        yake_terms = fire_yake_terms
-        intent_source = "rule-based+yake"
-    # F12: distinct key to avoid overwriting skip-path timing
+    if not yake_terms:
+        enriched_domains, fire_yake_terms = enrich_query_with_yake(intent.domains, message)
+        if fire_yake_terms:
+            yake_terms = fire_yake_terms
+            intent_source = "rule-based+yake"
+    else:
+        enriched_domains = intent.domains
     stage_timings["yake_enrichment"] = (time.perf_counter() - _st) * 1000
 
     _st = time.perf_counter()
@@ -1465,10 +1469,9 @@ def should_run_preflight(
     # joining preflight rows with verify_citation events, NOT by reading
     # cited_entry_ids on the original row (that field is reserved for an
     # in-process verify hook that may land in a later iteration).
-    # F11: write_preflight_telemetry timing is excluded from the serialized
-    # stage_timings because the dict is already serialized when we can measure
-    # it. Accept this — the write is ~1ms JSONL append, not a latency concern.
-    _st_telem = time.perf_counter()
+    # F11: write timing excluded from serialized stage_timings (documented).
+    # No dead measurement code — the dict is already serialized when we
+    # could measure the write.
     write_preflight_telemetry(PreflightTelemetry(
         session_id=session_id,
         intent_hash=intent.intent_hash,
@@ -1489,7 +1492,6 @@ def should_run_preflight(
         category=primary_domain or (intent.domains[0] if intent.domains else ""),  # A4
         stage_timings=stage_timings,
     ), log_dir=log_dir)
-    stage_timings["write_preflight_telemetry"] = (time.perf_counter() - _st_telem) * 1000
 
     if cited_ids:
         persist_citations(session_id, cited_ids)
