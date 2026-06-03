@@ -56,4 +56,4 @@ class CommandSpec:
     imperative_preamble: bool = True
     predicate_module: str | None = None
     output_artifacts: tuple[str, ...] = ()
-    metadata: dict[str, Any] = field(default_factory=dict)
+    metadata: tuple[tuple[str, Any], ...] = ()

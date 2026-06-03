@@ -6,8 +6,12 @@ stop condition.  Pure function: render_command(spec, body, args, ctx) -> str.
 For commands without a spec: block (legacy), returns body unchanged.
 
 Body IS a Jinja2 template — {{args}}, {{ctx.foo}}, etc. are substituted.
-{% ... %} control flow in bodies is safe because PreservingUndefined
-handles missing variables gracefully.
+PreservingUndefined handles missing variables gracefully (renders as
+{{var_name}}).  Note: {% if %} branches on undefined vars silently
+evaluate to False — avoid Jinja control flow in command bodies.
+
+Set template_body=False for user-supplied content (epic-doc anchor
+sections) that may contain {{var}} examples in prose.
 
 ≤150 LOC target.  No DSPy, no external dependencies beyond jinja2.
 """
@@ -42,7 +46,18 @@ class PreservingUndefined(Undefined):
     def __bool__(self) -> bool:
         return False
 
+    # G-12: Filters on PreservingUndefined should be no-ops
+    def upper(self): return self
+    def lower(self): return self
+    def capitalize(self): return self
+    def title(self): return self
+    def strip(self): return self
+    def replace(self, *args, **kwargs): return self
+
     def __getattr__(self, name: str) -> "PreservingUndefined":
+        # G-8: Filter dunder names to prevent Jinja2/MarkupSafe probe issues
+        if name.startswith("_"):
+            raise AttributeError(name)
         return PreservingUndefined(
             hint=self._undefined_hint,
             obj=self._undefined_obj,
@@ -102,6 +117,7 @@ def render_command(
     body: str,
     args: str = "",
     ctx: Any = None,
+    template_body: bool = True,
 ) -> str:
     """Render a command with its spec block.
 
@@ -110,6 +126,9 @@ def render_command(
         body: The command body text (after frontmatter).
         args: Raw arguments string from the user.
         ctx: Optional command context (for variable injection).
+        template_body: If True (default), body is rendered as a Jinja2
+            template.  Set False for user-supplied content (e.g. epic-doc
+            anchor sections) that may contain {{var}} examples.
 
     Returns:
         Rendered command string.  For legacy commands (spec=None),
@@ -119,15 +138,24 @@ def render_command(
         return body
 
     env = Environment(undefined=PreservingUndefined)
+    # G-5: When ctx is None, use PreservingUndefined so {{ctx.foo}} preserves the prefix
+    safe_ctx = ctx if ctx is not None else PreservingUndefined(
+        hint=None, obj=None, name="ctx", exc=None
+    )
     variables = {
         "args": args,
-        "ctx": ctx,
+        "ctx": safe_ctx,
     }
 
     # 1. Preamble (skip if imperative_preamble is False)
     sections = []
     # F-7: Render body as a template so {{args}} etc. are substituted
-    rendered_body = env.from_string(body).render(**variables)
+    # P0-2: Only template the command's own body, not user-supplied content
+    # (anchor mode passes epic-doc sections that contain {{var}} examples)
+    if template_body:
+        rendered_body = env.from_string(body).render(**variables)
+    else:
+        rendered_body = body
     if spec.imperative_preamble:
         preamble = env.from_string(_PREAMBLE_TPL).render(
             persona=spec.persona,

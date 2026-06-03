@@ -9,6 +9,7 @@ Each check_* function returns (passed: bool | None, reason: str).
 from __future__ import annotations
 
 import subprocess
+import re
 from pathlib import Path
 
 
@@ -75,6 +76,7 @@ def diff_minimal(project_dir: Path, **kwargs) -> tuple[bool | None, str]:
             capture_output=True,
             text=True,
             timeout=10,
+            env={"PATH": "/usr/bin:/usr/local/bin", "LC_ALL": "C"},
         )
         if result.returncode != 0:
             return None, "Not a git repo or no diff"
@@ -82,8 +84,9 @@ def diff_minimal(project_dir: Path, **kwargs) -> tuple[bool | None, str]:
         if not stdout:
             return None, "no diff — clean tree"
         lines = stdout.split("\n")
-        # F-13: Filter out the summary line (contains "file changed" or "files changed")
-        file_lines = [l for l in lines if "file" not in l.lower() or "changed" not in l.lower()]
+        # G-7: Filter out the git summary line (anchored regex)
+        summary_re = re.compile(r"^\s*\d+ files? changed")
+        file_lines = [l for l in lines if not summary_re.match(l)]
         count = len(file_lines)
         if count > 20:
             return False, f"Diff touches {count} files — may be unfocused"

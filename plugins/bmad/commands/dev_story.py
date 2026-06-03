@@ -72,7 +72,7 @@ def handler(ctx, args: str) -> str:
                     from plugins.bmad.lib.spec_parser import parse_command_body
                     from plugins.bmad.lib.render import render_command
                     spec, _ = parse_command_body(body_path.read_text(encoding="utf-8"))
-                    return render_command(spec, section, args=args_stripped, ctx=ctx)
+                    return render_command(spec, section, args=args_stripped, ctx=ctx, template_body=False)
                 return f"⚠️  Story {story_id} not found in {epic_path}"
             return f"⚠️  Epic document not found: {epic_path}"
 

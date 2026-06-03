@@ -85,12 +85,21 @@ def _call_predicate(
         except ImportError:
             continue
         except (SyntaxError, Exception) as e:
-            # F-9: Don't mask inner failures — surface them directly
+            # F-9/P0-3: Don't mask inner failures — surface them directly
             logger.warning("[predicate_runner] import error for %s: %s", prefix + module_path, e)
-            return None, f"import error: {e}"
+            return False, f"import error: {e}"
 
     if module is None:
-        return None, f"module not found: {module_path}"
+        # G-10: Try predicate_module + leaf_func as final fallback
+        if predicate_module and "." in predicate_path:
+            leaf_func = parts[-1]
+            try:
+                module = importlib.import_module(predicate_module)
+                func_name = leaf_func
+            except ImportError:
+                pass
+        if module is None:
+            return None, f"module not found: {module_path}"
 
     func = getattr(module, func_name, None)
     if func is None:
@@ -102,7 +111,7 @@ def _call_predicate(
         if not isinstance(result, tuple) or len(result) != 2:
             return False, f"predicate contract violation: expected (bool|None, str), got {type(result).__name__}"
         passed, reason = result
-        if passed not in (True, False, None):
+        if not isinstance(passed, bool) and passed is not None:
             return False, f"predicate contract violation: first element must be bool|None, got {type(passed).__name__}"
         if not isinstance(reason, str):
             return False, f"predicate contract violation: second element must be str, got {type(reason).__name__}"

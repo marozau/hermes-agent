@@ -31,7 +31,8 @@ def parse_command_body(content: str) -> tuple[CommandSpec | None, str]:
 
     Returns:
         (spec, body_text) if frontmatter with spec: is present.
-        (None, original_content) if no spec: block (legacy command).
+        (None, body_without_frontmatter) if frontmatter exists but no spec.
+        (None, original_content) if no frontmatter at all.
     """
     m = _FRONTMATTER_RE.match(content)
     if not m:
@@ -44,18 +45,23 @@ def parse_command_body(content: str) -> tuple[CommandSpec | None, str]:
         fm = yaml.safe_load(frontmatter_str)
     except yaml.YAMLError as e:
         logger.warning("[bmad:spec_parser] malformed YAML frontmatter: %s", e)
-        return None, content
+        # G-9: Still strip the malformed frontmatter
+        return None, body
 
-    if not isinstance(fm, dict) or "spec" not in fm:
-        return None, content
+    if not isinstance(fm, dict):
+        return None, body
+
+    if "spec" not in fm:
+        # G-9: Strip non-spec frontmatter (title, version, etc.)
+        return None, body
 
     spec_raw = fm["spec"]
     if not isinstance(spec_raw, dict):
-        return None, content
+        return None, body
 
     spec = _build_spec(spec_raw)
     if spec is None:
-        return None, content
+        return None, body
 
     return spec, body
 
@@ -93,12 +99,25 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
     if not verification:
         return None
 
+    # G-6: Guard against YAML scalar strings (common typo: missing list-dash)
+    oa_raw = raw.get("output_artifacts") or []
+    if isinstance(oa_raw, str):
+        logger.warning("[bmad:spec_parser] output_artifacts should be a list, got string — wrapping")
+        oa_raw = [oa_raw]
+    elif not isinstance(oa_raw, list):
+        oa_raw = []
+
+    meta_raw = raw.get("metadata") or {}
+    if not isinstance(meta_raw, dict):
+        logger.warning("[bmad:spec_parser] metadata should be a dict, got %s — ignoring", type(meta_raw).__name__)
+        meta_raw = {}
+
     return CommandSpec(
         persona=str(persona),
         phase=str(phase),
         verification=tuple(verification),
         imperative_preamble=bool(raw.get("imperative_preamble", True)),
         predicate_module=raw.get("predicate_module"),
-        output_artifacts=tuple(str(a) for a in raw.get("output_artifacts") or []),
-        metadata=dict(raw.get("metadata") or {}),
+        output_artifacts=tuple(str(a) for a in oa_raw),
+        metadata=tuple((k, v) for k, v in meta_raw.items()),
     )
