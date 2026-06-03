@@ -108,7 +108,7 @@ def run_doctor(project_dir: Path) -> DoctorReport:
         ("Config Schema", lambda: _check_config_schema(project_dir, report)),
         ("Status Drift", lambda: _check_status_drift(project_dir, report)),
         ("Missing Artifacts", lambda: _check_missing_artifacts(project_dir, report, overrides)),
-        ("Epic Structure", lambda: _check_epic_structure(project_dir, report, overrides)),
+        ("Epic Structure", lambda: _check_epic_structure(project_dir, report)),
         ("Schema Version", lambda: _check_schema_version(project_dir, report)),
         ("Runtime Drift", lambda: _check_runtime_drift(project_dir, report)),
         ("Story Consolidation", lambda: _check_story_consolidation(project_dir, report)),
@@ -125,12 +125,12 @@ def run_doctor(project_dir: Path) -> DoctorReport:
             logger.warning("[doctor] check '%s' failed: %s", name, e)
             report.findings.append(DoctorFinding(
                 category=name,
-                severity=Severity.LOW,
-                title=f"Check failed: {name}",
-                detail=f"Diagnostic check raised an exception: {e}",
-                remediation="Report this as a bug in the doctor tool."
+                severity=Severity.HIGH,  # L-21: crashing check is a bug, not noise
+                title=f"Diagnostic check crashed: {name}",
+                detail=f"Exception: {type(e).__name__}: {e}",
+                remediation="This is a doctor bug — report it."
             ))
-            actual_checked += 1  # Count as checked (with error finding)
+            actual_checked += 1
 
     report.categories_checked = actual_checked
     return report
@@ -140,9 +140,10 @@ def run_doctor(project_dir: Path) -> DoctorReport:
 
 def _check_workspace_pattern(project_dir: Path, report: DoctorReport,
                               overrides: dict[str, str]):
-    """Cat 1: workspace pattern validation. DI-3: honors overrides."""
-    if is_phase_overridden(overrides, "solutioning"):
-        return  # Workspace pattern is part of solutioning
+    """Cat 1: workspace pattern validation.
+
+    Workspace is operational state, not a planning phase — always checked.
+    """
 
     config_path = project_dir / "bmad" / "config.yaml"
     if not config_path.exists():
@@ -247,8 +248,8 @@ def _check_status_drift(project_dir: Path, report: DoctorReport):
         from plugins.bmad.lib.status_reconciliation import reconcile_project, EvidenceState
         results = reconcile_project(project_dir)
     except Exception as e:
-        logger.warning("[doctor] reconciliation failed: %s", e)
-        return
+        # Don't swallow — let the per-check wrapper handle it
+        raise RuntimeError(f"reconcile_project failed: {e}") from e
 
     for evidence in results:
         # DI-4: flag stories with no evidence but marked done
@@ -301,11 +302,8 @@ def _check_missing_artifacts(project_dir: Path, report: DoctorReport,
                 ))
 
 
-def _check_epic_structure(project_dir: Path, report: DoctorReport,
-                           overrides: dict[str, str]):
-    """Cat 5: epic structure validation. DI-3: honors overrides."""
-    if is_phase_overridden(overrides, "solutioning"):
-        return
+def _check_epic_structure(project_dir: Path, report: DoctorReport):
+    """Cat 5: epic structure validation."""
 
     epics_dir = project_dir / "planning-artifacts"
     if not epics_dir.exists():

@@ -5,11 +5,11 @@ DI-2: One git commit per wave; failure halts before next wave.
 DI-5: Compose existing machinery — no re-implementation.
 
 Waves:
-1. Workspace pattern fix (Epic 6 bmad-init --workspace)
-2. Config schema upgrade (re-init)
-3. Epic structure repair (Epic 7 consolidated shape)
-4. Story consolidation (Epic 7 migrate-stories-to-epic)
-5. OCR install (Epic 8, optional)
+1. Config bootstrap (calls bmad-init bootstrap)
+2. Config schema upgrade (add version field)
+3. Epic structure repair (ensure planning-artifacts/)
+4. Story consolidation (calls migrate-stories-to-epic scanner)
+5. OCR status check (calls ocr_runner.check_ocr_installed)
 """
 
 from __future__ import annotations
@@ -19,7 +19,6 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 import yaml
 
@@ -79,25 +78,25 @@ class MigrationPlan:
 
 
 def create_migration_plan(project_dir: Path) -> MigrationPlan:
-    """Create a migration plan based on doctor findings. DI-1: read-only."""
+    """Create a migration plan. DI-1: read-only."""
     plan = MigrationPlan(project_dir=str(project_dir))
-
-    plan.waves.append(WaveResult(wave=1, name="Workspace Pattern Fix"))
+    plan.waves.append(WaveResult(wave=1, name="Config Bootstrap"))
     plan.waves.append(WaveResult(wave=2, name="Config Schema Upgrade"))
     plan.waves.append(WaveResult(wave=3, name="Epic Structure Repair"))
     plan.waves.append(WaveResult(wave=4, name="Story Consolidation"))
-    plan.waves.append(WaveResult(wave=5, name="OCR Integration (optional)"))
-
+    plan.waves.append(WaveResult(wave=5, name="OCR Status Check"))
     return plan
 
 
 def _check_dirty_worktree(project_dir: Path) -> str | None:
-    """Check for uncommitted changes. Returns status output or None if clean."""
+    """Check for uncommitted changes. Returns output or None if clean."""
     try:
         result = subprocess.run(
             ["git", "status", "--porcelain"],
             cwd=project_dir, capture_output=True, text=True, timeout=10
         )
+        if result.returncode != 0:
+            return None  # Not a git repo — not "dirty" in the git sense
         if result.stdout.strip():
             return result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
@@ -105,12 +104,43 @@ def _check_dirty_worktree(project_dir: Path) -> str | None:
     return None
 
 
+def _get_last_wave_from_git(project_dir: Path) -> int:
+    """Find last completed migration wave from git log."""
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]", "-10"],
+            cwd=project_dir, capture_output=True, text=True, timeout=10
+        )
+        if result.returncode != 0:
+            return 0
+        last_wave = 0
+        for line in result.stdout.strip().split("\n"):
+            for w in range(1, 6):
+                if f"wave {w}:" in line.lower():
+                    last_wave = max(last_wave, w)
+        return last_wave
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        return 0
+
+
 def execute_migration(plan: MigrationPlan, project_dir: Path,
                       waves: list[int] | None = None,
-                      dry_run: bool = False) -> MigrationPlan:
+                      dry_run: bool = False,
+                      resume: bool = False) -> MigrationPlan:
     """Execute migration waves. DI-2: atomic commits per wave."""
     plan.dry_run = dry_run
     target_waves = waves or [1, 2, 3, 4, 5]
+
+    # Resume: skip waves already completed in git history
+    if resume and not waves:
+        last_done = _get_last_wave_from_git(project_dir)
+        if last_done > 0:
+            target_waves = [w for w in target_waves if w > last_done]
+            if not target_waves:
+                for wave in plan.waves:
+                    wave.status = WaveStatus.DONE
+                    wave.message = f"Already completed (found wave {last_done} in git)"
+                return plan
 
     # Pre-flight: check for dirty worktree
     if not dry_run:
@@ -143,72 +173,102 @@ def execute_migration(plan: MigrationPlan, project_dir: Path,
 
 
 def _preview_wave(wave: WaveResult, project_dir: Path):
-    """Preview what a wave would change (dry-run mode)."""
-    if wave.wave == 1:
-        config = project_dir / "bmad" / "config.yaml"
-        if not config.exists():
-            wave.would_change.append("Create bmad/config.yaml")
-        else:
-            wave.would_change.append("bmad/config.yaml already exists — verify workspace_mode")
-    elif wave.wave == 2:
-        config = project_dir / "bmad" / "config.yaml"
-        if config.exists():
-            data = yaml.safe_load(config.read_text()) or {}
-            if "version" not in data:
-                wave.would_change.append("Add version: 1 to bmad/config.yaml")
+    """Preview what a wave would change. Never raises — dry-run must be safe."""
+    try:
+        if wave.wave == 1:
+            config = project_dir / "bmad" / "config.yaml"
+            if not config.exists():
+                wave.would_change.append("Create bmad/config.yaml via bmad-init bootstrap")
             else:
-                wave.would_change.append("Config already has version field")
-        else:
-            wave.would_change.append("Create bmad/config.yaml with version field")
-    elif wave.wave == 3:
-        pa = project_dir / "planning-artifacts"
-        if not pa.exists():
-            wave.would_change.append("Create planning-artifacts/")
-        else:
-            wave.would_change.append("planning-artifacts/ already exists")
-    elif wave.wave == 4:
-        wave.would_change.append("Run story consolidation (check sprint-status.yaml)")
-    elif wave.wave == 5:
-        wave.would_change.append("Check OCR integration status")
+                wave.would_change.append("bmad/config.yaml exists — verify structure")
+        elif wave.wave == 2:
+            config = project_dir / "bmad" / "config.yaml"
+            if config.exists():
+                data = yaml.safe_load(config.read_text()) or {}
+                if "version" not in data:
+                    wave.would_change.append("Add version: 1 to bmad/config.yaml")
+                else:
+                    wave.would_change.append("Config already has version field")
+            else:
+                wave.would_change.append("Create bmad/config.yaml with version field")
+        elif wave.wave == 3:
+            pa = project_dir / "planning-artifacts"
+            if not pa.exists():
+                wave.would_change.append("Create planning-artifacts/")
+            else:
+                wave.would_change.append("planning-artifacts/ already exists")
+        elif wave.wave == 4:
+            _preview_wave4(wave, project_dir)
+        elif wave.wave == 5:
+            _preview_wave5(wave, project_dir)
+    except Exception as e:
+        wave.would_change.append(f"Preview error: {e}")
 
     wave.status = WaveStatus.DONE
     wave.message = "DRY RUN — preview only"
 
 
+def _preview_wave4(wave: WaveResult, project_dir: Path):
+    """Preview wave 4: scan for legacy stories."""
+    stories_dir = project_dir / "implementation-artifacts" / "stories"
+    if stories_dir.exists():
+        try:
+            from plugins.bmad.commands.migrate_stories import _scan_legacy_stories
+            legacy = _scan_legacy_stories(stories_dir)
+            if legacy:
+                wave.would_change.append(f"Found {len(legacy)} legacy story files to consolidate")
+                for s in legacy[:5]:
+                    wave.would_change.append(f"  - {s.get('file', 'unknown')}")
+            else:
+                wave.would_change.append("No legacy story files found")
+        except ImportError:
+            wave.would_change.append("Cannot import migrate_stories scanner")
+    else:
+        wave.would_change.append("No implementation-artifacts/stories/ directory")
+
+
+def _preview_wave5(wave: WaveResult, project_dir: Path):
+    """Preview wave 5: check OCR status."""
+    try:
+        from plugins.bmad.lib.ocr_runner import check_ocr_installed
+        if check_ocr_installed():
+            wave.would_change.append("OCR CLI is installed")
+        else:
+            wave.would_change.append("OCR CLI not installed — no action taken")
+    except ImportError:
+        wave.would_change.append("ocr_runner module not available")
+
+
 def _execute_wave(wave: WaveResult, project_dir: Path):
     """Execute a single migration wave."""
     if wave.wave == 1:
-        _wave_workspace(project_dir, wave)
+        _wave_config_bootstrap(project_dir, wave)
     elif wave.wave == 2:
-        _wave_config(project_dir, wave)
+        _wave_config_upgrade(project_dir, wave)
     elif wave.wave == 3:
         _wave_epic_structure(project_dir, wave)
     elif wave.wave == 4:
         _wave_story_consolidation(project_dir, wave)
     elif wave.wave == 5:
-        _wave_ocr(project_dir, wave)
+        _wave_ocr_check(project_dir, wave)
 
 
-def _git_commit(project_dir: Path, message: str, files: list[str] | None = None) -> str:
-    """Stage specific files and commit. Returns SHA.
+def _git_commit(project_dir: Path, message: str, files: list[str]) -> str:
+    """Stage specific files and commit. Returns full SHA.
 
-    DI-2: Uses targeted `git add` (not `git add -A`) to avoid staging user work.
+    DI-2: Always uses targeted `git add` — never `git add -A`.
     Handles 'nothing to commit' gracefully.
     """
     if files:
         for f in files:
             subprocess.run(["git", "add", f], cwd=project_dir, check=True,
                            capture_output=True, timeout=30)
-    else:
-        subprocess.run(["git", "add", "-A"], cwd=project_dir, check=True,
-                       capture_output=True, timeout=30)
 
     result = subprocess.run(
         ["git", "commit", "-m", f"[bmad-migrate] {message}"],
         cwd=project_dir, capture_output=True, text=True, timeout=30
     )
 
-    # 'nothing to commit' is not an error — return current HEAD
     if result.returncode != 0:
         if "nothing to commit" in result.stdout or "nothing to commit" in result.stderr:
             logger.info("[migrate] nothing to commit for: %s", message)
@@ -219,51 +279,66 @@ def _git_commit(project_dir: Path, message: str, files: list[str] | None = None)
         ["git", "rev-parse", "HEAD"],
         cwd=project_dir, capture_output=True, text=True, timeout=10
     )
-    return sha_result.stdout.strip()[:8]
+    return sha_result.stdout.strip()  # Full 40-char SHA
 
 
-def _wave_workspace(project_dir: Path, wave: WaveResult):
-    """Wave 1: Ensure bmad/config.yaml exists with proper structure."""
+def _wave_config_bootstrap(project_dir: Path, wave: WaveResult):
+    """Wave 1: Bootstrap BMAD config via bmad-init machinery.
+
+    DI-5: Composes existing bmad_init.bootstrap() function.
+    """
+    from plugins.bmad.scripts.bmad_init import bootstrap
+
     config_path = project_dir / "bmad" / "config.yaml"
     created_files = []
 
-    if not config_path.exists():
-        (project_dir / "bmad").mkdir(exist_ok=True)
-        config_path.write_text("version: 1\nworkspace_mode: false\n")
-        created_files.append("bmad/config.yaml")
-        wave.message = "Created bmad/config.yaml"
-    else:
-        # Verify existing config is valid
-        try:
-            with open(config_path, encoding="utf-8") as f:
-                data = yaml.safe_load(f)
-            if not isinstance(data, dict):
-                wave.message = "Config exists but is not a mapping — needs manual fix"
-                wave.status = WaveStatus.FAILED
-                return
-            wave.message = "bmad/config.yaml already exists and is valid"
-        except (yaml.YAMLError, OSError) as e:
-            wave.message = f"Config exists but is malformed: {e}"
-            wave.status = WaveStatus.FAILED
-            return
+    if config_path.exists():
+        wave.message = "bmad/config.yaml already exists — bootstrap skipped"
+        wave.commit_sha = _git_commit(project_dir, "wave 1: config bootstrap (exists)", [])
+        wave.status = WaveStatus.DONE
+        return
 
-    wave.commit_sha = _git_commit(project_dir, "wave 1: workspace pattern fix",
-                                   created_files if created_files else None)
+    try:
+        config = bootstrap(
+            project_dir,
+            project_name=project_dir.name,
+            project_type="other",
+            project_level=1,
+            user_name="",
+            force=False,
+            interactive=False,
+        )
+        created_files.append("bmad/config.yaml")
+        # bootstrap creates multiple files
+        for p in ["planning-artifacts/workflow-status.yaml"]:
+            if (project_dir / p).exists():
+                created_files.append(p)
+        wave.message = f"Bootstrapped BMAD project: {config.get('project_name', project_dir.name)}"
+    except RuntimeError as e:
+        wave.message = f"Bootstrap failed: {e}"
+        wave.status = WaveStatus.FAILED
+        return
+    except Exception as e:
+        wave.message = f"Bootstrap error: {e}"
+        wave.status = WaveStatus.FAILED
+        return
+
+    wave.commit_sha = _git_commit(project_dir, "wave 1: config bootstrap", created_files)
     wave.status = WaveStatus.DONE
 
 
-def _wave_config(project_dir: Path, wave: WaveResult):
-    """Wave 2: Upgrade config schema — add version field if missing."""
+def _wave_config_upgrade(project_dir: Path, wave: WaveResult):
+    """Wave 2: Add version field to config if missing."""
     config_path = project_dir / "bmad" / "config.yaml"
 
     if not config_path.exists():
-        wave.message = "No bmad/config.yaml found — run wave 1 first"
+        wave.message = "No bmad/config.yaml — run wave 1 first"
         wave.status = WaveStatus.FAILED
         return
 
     try:
         with open(config_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f) or {}
+            config = yaml.safe_load(f)
     except (yaml.YAMLError, OSError) as e:
         wave.message = f"Cannot read config: {e}"
         wave.status = WaveStatus.FAILED
@@ -274,19 +349,15 @@ def _wave_config(project_dir: Path, wave: WaveResult):
         wave.status = WaveStatus.FAILED
         return
 
-    changed = False
     if "version" not in config:
         config["version"] = 1
-        changed = True
-
-    if changed:
         config_path.write_text(yaml.dump(config, default_flow_style=False, sort_keys=False))
         wave.commit_sha = _git_commit(project_dir, "wave 2: config schema upgrade",
                                        ["bmad/config.yaml"])
         wave.message = "Added version field to config"
     else:
         wave.message = "Config already has version field"
-        wave.commit_sha = _git_commit(project_dir, "wave 2: config schema upgrade (no-op)")
+        wave.commit_sha = _git_commit(project_dir, "wave 2: config schema upgrade (no-op)", [])
 
     wave.status = WaveStatus.DONE
 
@@ -294,97 +365,72 @@ def _wave_config(project_dir: Path, wave: WaveResult):
 def _wave_epic_structure(project_dir: Path, wave: WaveResult):
     """Wave 3: Ensure planning-artifacts directory exists."""
     pa_dir = project_dir / "planning-artifacts"
-    created = False
+    created_files = []
 
     if not pa_dir.exists():
         pa_dir.mkdir(parents=True)
-        created = True
-
-    if created:
-        # Create a placeholder .gitkeep so the dir is tracked
         (pa_dir / ".gitkeep").write_text("")
-        wave.commit_sha = _git_commit(project_dir, "wave 3: epic structure repair",
-                                       ["planning-artifacts/.gitkeep"])
+        created_files.append("planning-artifacts/.gitkeep")
         wave.message = "Created planning-artifacts/"
     else:
         wave.message = "planning-artifacts/ already exists"
-        wave.commit_sha = _git_commit(project_dir, "wave 3: epic structure repair (no-op)")
 
+    wave.commit_sha = _git_commit(project_dir, "wave 3: epic structure repair", created_files)
     wave.status = WaveStatus.DONE
 
 
 def _wave_story_consolidation(project_dir: Path, wave: WaveResult):
-    """Wave 4: Story consolidation.
+    """Wave 4: Scan for legacy stories using migrate-stories-to-epic scanner.
 
-    DI-5: Compose existing machinery. Checks sprint-status.yaml for stories
-    that need consolidation. Invokes the migration path if needed.
+    DI-5: Composes existing migrate_stories._scan_legacy_stories().
     """
-    status_path = project_dir / "planning-artifacts" / "sprint-status.yaml"
-
-    if not status_path.exists():
-        wave.message = "No sprint-status.yaml — nothing to consolidate"
-        wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation (no-op)")
+    stories_dir = project_dir / "implementation-artifacts" / "stories"
+    if not stories_dir.exists():
+        wave.message = "No implementation-artifacts/stories/ — nothing to consolidate"
+        wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation (no stories)", [])
         wave.status = WaveStatus.DONE
         return
 
     try:
-        with open(status_path, encoding="utf-8") as f:
-            status = yaml.safe_load(f)
-    except (yaml.YAMLError, OSError) as e:
-        wave.message = f"Cannot read sprint-status.yaml: {e}"
+        from plugins.bmad.commands.migrate_stories import _scan_legacy_stories
+        legacy = _scan_legacy_stories(stories_dir)
+    except ImportError as e:
+        wave.message = f"Cannot import migrate_stories: {e}"
         wave.status = WaveStatus.FAILED
         return
 
-    if not isinstance(status, dict) or "stories" not in status:
-        wave.message = "sprint-status.yaml has no stories section"
-        wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation (no-op)")
-        wave.status = WaveStatus.DONE
-        return
-
-    stories = status.get("stories", {})
-    # Check for stories needing consolidation (non-kebab IDs, missing fields)
-    needs_consolidation = []
-    for story_id, data in stories.items():
-        if not isinstance(data, dict):
-            needs_consolidation.append(str(story_id))
-        elif "status" not in data:
-            needs_consolidation.append(str(story_id))
-
-    if needs_consolidation:
-        wave.message = f"Found {len(needs_consolidation)} stories needing consolidation"
-        wave.details = f"Stories: {', '.join(needs_consolidation[:10])}"
+    if not legacy:
+        wave.message = "No legacy story files found"
+        wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation (clean)", [])
     else:
-        wave.message = f"All {len(stories)} stories have valid structure"
+        wave.message = f"Found {len(legacy)} legacy story files"
+        wave.details = "\n".join(f"- {s.get('file', '?')}" for s in legacy[:10])
+        # Report only — actual consolidation requires user review
+        wave.commit_sha = _git_commit(project_dir, f"wave 4: story scan ({len(legacy)} legacy)", [])
 
-    wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation")
     wave.status = WaveStatus.DONE
 
 
-def _wave_ocr(project_dir: Path, wave: WaveResult):
-    """Wave 5: OCR integration check.
+def _wave_ocr_check(project_dir: Path, wave: WaveResult):
+    """Wave 5: Check OCR integration status.
 
-    DI-5: Compose — check if OCR is available and configured.
+    DI-5: Composes existing ocr_runner.check_ocr_installed().
     """
-    ocr_runner = project_dir / "plugins" / "bmad" / "lib" / "ocr_runner.py"
-    has_ocr_runner = ocr_runner.exists()
-
-    # Check if OCR CLI is available
-    ocr_cli_available = False
     try:
-        result = subprocess.run(
-            ["which", "ocr"], capture_output=True, text=True, timeout=5
-        )
-        ocr_cli_available = result.returncode == 0
-    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
+        from plugins.bmad.lib.ocr_runner import check_ocr_installed
+        ocr_available = check_ocr_installed()
+    except ImportError:
+        ocr_available = False
 
-    if has_ocr_runner and ocr_cli_available:
-        wave.message = "OCR integration: runner + CLI both present"
-    elif has_ocr_runner:
+    ocr_runner_exists = (project_dir / "plugins" / "bmad" / "lib" / "ocr_runner.py").exists()
+
+    if ocr_available:
+        wave.message = "OCR CLI installed and available"
+    elif ocr_runner_exists:
         wave.message = "OCR runner exists but CLI not installed"
-        wave.details = "Install OCR CLI if OCR features are needed"
+        wave.details = "Install OCR CLI: `pip install ocr-cli` or equivalent"
     else:
         wave.message = "OCR not configured (no ocr_runner.py)"
 
-    wave.commit_sha = _git_commit(project_dir, "wave 5: OCR integration check")
+    wave.commit_sha = _git_commit(project_dir, "wave 5: OCR status check", [])
     wave.status = WaveStatus.DONE

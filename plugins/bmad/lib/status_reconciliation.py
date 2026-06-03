@@ -31,7 +31,7 @@ class EvidenceState(str, Enum):
 
 
 # Canonical status vocabulary (kebab-case per project convention)
-VALID_STATUSES = {"pending", "in-progress", "done", "blocked", "deferred"}
+VALID_STATUSES = {"not-started", "in-progress", "done", "blocked", "deferred"}
 
 
 @dataclass(frozen=True)
@@ -123,9 +123,9 @@ def _gather_evidence(project_dir: Path, story_id: str,
         state = EvidenceState.NOT_STARTED
         # DI-4: If marked done with ZERO evidence, flag for demotion
         if current == "done":
-            recommended = "pending"  # Clearly stale
+            recommended = "not-started"  # Clearly stale
         else:
-            recommended = "pending" if current == "" else current
+            recommended = "not-started" if current == "" else current
 
     details = (
         f"files={'✓' if file_exists else '✗'} "
@@ -148,13 +148,13 @@ def _gather_evidence(project_dir: Path, story_id: str,
 def _check_git_commits(project_dir: Path, story_id: str) -> bool:
     """Check if git history has commits mentioning this story.
 
-    Uses word-boundary regex to avoid substring matches (e.g. '9.1' matching 'v9.1.0').
+    Uses extended-regexp with negative lookahead to avoid substring matches.
     """
     try:
-        # Use regex with word boundaries for precise matching
-        pattern = rf"\b{re.escape(story_id)}\b"
+        # Negative lookahead: match story ID not followed by .digit (avoids v9.1.0)
+        pattern = rf"(?<!\d){re.escape(story_id)}(?!\.\d)"
         result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", pattern, "-1"],
+            ["git", "log", "--oneline", "--extended-regexp", "--grep", pattern, "-1"],
             cwd=project_dir,
             capture_output=True,
             text=True,

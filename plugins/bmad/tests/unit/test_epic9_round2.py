@@ -79,5 +79,5 @@ class TestGitCommit:
         subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
 
         # Now try to commit with no changes — should not raise
-        sha = _git_commit(tmp_path, "test no-op")
+        sha = _git_commit(tmp_path, "test no-op", [])
         assert sha  # returns HEAD sha

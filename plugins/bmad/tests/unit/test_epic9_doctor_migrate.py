@@ -244,7 +244,7 @@ class TestMigrate:
     def test_create_plan(self, minimal_project):
         plan = create_migration_plan(minimal_project)
         assert len(plan.waves) == 5
-        assert plan.waves[0].name == "Workspace Pattern Fix"
+        assert plan.waves[0].name == "Config Bootstrap"
 
     def test_dry_run(self, minimal_project):
         plan = create_migration_plan(minimal_project)
