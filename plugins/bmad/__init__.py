@@ -290,6 +290,10 @@ def register(ctx) -> None:
     # Meta — multi-persona round table (ungated)
     from plugins.bmad.commands.party_mode import handler as _party_mode_handler
 
+    # Epic 9 — Doctor + Migrate
+    from plugins.bmad.commands.doctor import handler as _doctor_handler
+    from plugins.bmad.commands.migrate import handler as _migrate_handler
+
     ctx.register_command(
         name="bmad:init",
         handler=_bind_ctx(_init_handler),
@@ -505,6 +509,18 @@ def register(ctx) -> None:
         name="bmad:party-mode",
         handler=_bind_ctx(_party_mode_handler),
         args_hint="[--fan-out] <topic>",
+    )
+
+    # Epic 9: doctor + migrate
+    ctx.register_command(
+        name="bmad:doctor",
+        handler=_bind_ctx(_doctor_handler),
+        args_hint="[project_dir]",
+    )
+    ctx.register_command(
+        name="bmad:migrate",
+        handler=_bind_ctx(_migrate_handler),
+        args_hint="[--plan|--apply|--dry-run] [--wave N]",
     )
 
     # Epic 7: orchestrate + migration
