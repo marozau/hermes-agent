@@ -123,10 +123,26 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
     )
 
 
-def _freeze_value(value):
-    """Recursively freeze nested structures for hashability (T-9)."""
+def _freeze_value(value, _seen=None):
+    """Recursively freeze nested structures for hashability (T-9/R5-3).
+
+    Handles: dict → sorted tuple-of-pairs, list → tuple, set → sorted tuple.
+    Includes cycle guard for YAML anchor/alias self-references.
+    """
+    if _seen is None:
+        _seen = set()
+    vid = id(value)
+    if vid in _seen:
+        return "<circular>"  # Break YAML anchor/alias cycles
+    _seen.add(vid)
+
     if isinstance(value, dict):
-        return tuple(sorted((_freeze_value(k), _freeze_value(v)) for k, v in value.items()))
-    if isinstance(value, list):
-        return tuple(_freeze_value(v) for v in value)
+        return tuple(sorted(
+            ((_freeze_value(k, _seen), _freeze_value(v, _seen)) for k, v in value.items()),
+            key=lambda kv: str(kv[0])
+        ))
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_value(v, _seen) for v in value)
+    if isinstance(value, (set, frozenset)):
+        return tuple(sorted(_freeze_value(v, _seen) for v in value))
     return value

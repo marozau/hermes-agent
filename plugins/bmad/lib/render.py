@@ -142,23 +142,33 @@ def render_command(
     safe_ctx = ctx if ctx is not None else PreservingUndefined(
         hint=None, obj=None, name="ctx", exc=None
     )
-    # G-12/T-1: Override Jinja filters to preserve PreservingUndefined literals
+    # R5-1/R5-2: Override Jinja filters to preserve PreservingUndefined literals.
+    # Don't wrap `default` — Jinja's do_default handles Undefined natively.
+    # For context-aware filters (jinja_pass_arg), check args[0] for Undefined.
     from jinja2 import Undefined
 
-    def _make_preserving_filter(original):
+    _SKIP_WRAPPING = {"default"}  # Jinja handles these correctly on Undefined
+
+    def _make_preserving_filter(original, name):
         """Create a filter wrapper that no-ops on Undefined values."""
+        has_pass_arg = hasattr(original, 'jinja_pass_arg')
+
         def wrapper(value, *args, **kwargs):
-            if isinstance(value, Undefined):
+            # R5-1: For context-aware filters, value is EvalContext — check args[0]
+            if has_pass_arg and args:
+                if isinstance(args[0], Undefined):
+                    return args[0]
+            elif isinstance(value, Undefined):
                 return value
             return original(value, *args, **kwargs)
-        # Preserve jinja_pass_arg markers for context-aware filters
-        if hasattr(original, 'jinja_pass_arg'):
+
+        if has_pass_arg:
             wrapper.jinja_pass_arg = original.jinja_pass_arg
         return wrapper
 
     for name, func in list(env.filters.items()):
-        if callable(func):
-            env.filters[name] = _make_preserving_filter(func)
+        if name not in _SKIP_WRAPPING and callable(func):
+            env.filters[name] = _make_preserving_filter(func, name)
 
     variables = {
         "args": args,
