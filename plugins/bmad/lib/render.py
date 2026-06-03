@@ -142,17 +142,23 @@ def render_command(
     safe_ctx = ctx if ctx is not None else PreservingUndefined(
         hint=None, obj=None, name="ctx", exc=None
     )
-    # G-12: Override Jinja filters to preserve PreservingUndefined literals
-    def _preserve_filter(value, filter_func):
-        """Wrap a Jinja filter to no-op on PreservingUndefined."""
-        if isinstance(value, PreservingUndefined):
-            return value
-        return filter_func(value)
+    # G-12/T-1: Override Jinja filters to preserve PreservingUndefined literals
+    from jinja2 import Undefined
 
-    _original_filters = dict(env.filters)
-    for name, func in _original_filters.items():
+    def _make_preserving_filter(original):
+        """Create a filter wrapper that no-ops on Undefined values."""
+        def wrapper(value, *args, **kwargs):
+            if isinstance(value, Undefined):
+                return value
+            return original(value, *args, **kwargs)
+        # Preserve jinja_pass_arg markers for context-aware filters
+        if hasattr(original, 'jinja_pass_arg'):
+            wrapper.jinja_pass_arg = original.jinja_pass_arg
+        return wrapper
+
+    for name, func in list(env.filters.items()):
         if callable(func):
-            env.filters[name] = lambda v, f=func: _preserve_filter(v, f)
+            env.filters[name] = _make_preserving_filter(func)
 
     variables = {
         "args": args,

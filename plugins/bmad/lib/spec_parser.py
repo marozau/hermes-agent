@@ -119,7 +119,7 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
         imperative_preamble=bool(raw.get("imperative_preamble", True)),
         predicate_module=raw.get("predicate_module"),
         output_artifacts=tuple(str(a) for a in oa_raw),
-        metadata=tuple(sorted(_freeze_value((k, v)) for k, v in meta_raw.items())),
+        metadata=tuple(sorted(((k, _freeze_value(v)) for k, v in meta_raw.items()), key=lambda kv: str(kv[0])),),
     )
 
 

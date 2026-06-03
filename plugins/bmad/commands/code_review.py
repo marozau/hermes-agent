@@ -736,6 +736,7 @@ def _legacy_body(project_dir: Path) -> str:
     body_path = Path(__file__).with_name(f"{COMMAND}.md")
     if body_path.exists():
         from plugins.bmad.lib.spec_parser import parse_command_body
+        from plugins.bmad.lib.render import render_command
         spec, body = parse_command_body(body_path.read_text(encoding="utf-8"))
-        return body
+        return render_command(spec, body, args="")
     return f"# {COMMAND}\n\nBody file not found."
