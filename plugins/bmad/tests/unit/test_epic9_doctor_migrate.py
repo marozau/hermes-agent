@@ -1,15 +1,16 @@
 """Tests for Epic 9 — Doctor + Migrate (Story 9.8).
 
 Tests against fixture projects and drift scenarios.
+18 existing + edge cases for checklist items 5-6.
 """
 
 import pytest
 import yaml
 from pathlib import Path
 
-from plugins.bmad.lib.doctor import run_doctor, DoctorReport, Severity
+from plugins.bmad.lib.doctor import run_doctor, DoctorReport, Severity, DoctorFinding
 from plugins.bmad.lib.phase_overrides import load_phase_overrides, is_phase_overridden
-from plugins.bmad.lib.status_reconciliation import reconcile_project, EvidenceState
+from plugins.bmad.lib.status_reconciliation import reconcile_project, EvidenceState, StoryEvidence, _gather_evidence
 from plugins.bmad.lib.migrate import create_migration_plan, execute_migration, WaveStatus
 
 
@@ -73,9 +74,24 @@ class TestPhaseOverrides:
         overrides = load_phase_overrides(tmp_path)
         assert "invalid_phase" not in overrides
 
+    def test_load_invalid_state(self, tmp_path):
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text(
+            "phase_overrides:\n  analysis: invalid_state\n"
+        )
+        overrides = load_phase_overrides(tmp_path)
+        assert "analysis" not in overrides
+
+    def test_load_malformed_yaml(self, tmp_path):
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text("{{bad yaml}}")
+        overrides = load_phase_overrides(tmp_path)
+        assert overrides == {}
+
     def test_is_overridden(self):
         assert is_phase_overridden({"analysis": "skipped"}, "analysis")
         assert not is_phase_overridden({}, "analysis")
+        assert is_phase_overridden({"ANALYSIS": "skipped"}, "analysis")  # case insensitive
 
 
 # ── Doctor ──────────────────────────────────────────────────────────────
@@ -89,13 +105,11 @@ class TestDoctor:
 
     def test_full_project_fewer_issues(self, full_project):
         report = run_doctor(full_project)
-        # Full project should have fewer critical issues
         critical = [f for f in report.findings if f.severity == Severity.CRITICAL]
         assert len(critical) == 0
 
     def test_outdated_project_detects_drift(self, outdated_project):
         report = run_doctor(outdated_project)
-        # Should find workspace pattern issue (worktree dir missing)
         workspace_findings = [f for f in report.findings if f.category == "Workspace Pattern"]
         assert len(workspace_findings) > 0
 
@@ -112,7 +126,6 @@ class TestDoctor:
             "version: 1\nphase_overrides:\n  analysis: skipped\n"
         )
         report = run_doctor(tmp_path)
-        # Should NOT flag missing product-brief (analysis is overridden)
         missing = [f for f in report.findings
                    if "product-brief" in f.title.lower() and f.category == "Missing Artifacts"]
         assert len(missing) == 0
@@ -123,6 +136,59 @@ class TestDoctor:
         run_doctor(full_project)
         after = set(full_project.rglob("*"))
         assert before == after
+
+    def test_empty_directory(self, tmp_path):
+        """Edge case: empty directory (no BMAD project)."""
+        report = run_doctor(tmp_path)
+        assert isinstance(report, DoctorReport)
+        assert report.categories_checked == 10
+
+    def test_nonexistent_directory(self, tmp_path):
+        """Edge case: nonexistent path."""
+        fake = tmp_path / "nonexistent"
+        report = run_doctor(fake)
+        assert isinstance(report, DoctorReport)
+
+    def test_corrupted_config(self, tmp_path):
+        """Edge case: corrupted config.yaml."""
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text("not: valid: yaml: [[")
+        report = run_doctor(tmp_path)
+        assert isinstance(report, DoctorReport)
+
+    def test_critical_count(self):
+        """Test severity counting."""
+        report = DoctorReport(project_dir=".", findings=[
+            DoctorFinding("test", Severity.CRITICAL, "t1", "d1"),
+            DoctorFinding("test", Severity.HIGH, "t2", "d2"),
+            DoctorFinding("test", Severity.CRITICAL, "t3", "d3"),
+        ])
+        assert report.critical_count == 2
+        assert report.high_count == 1
+
+    def test_empty_report_markdown(self):
+        """Empty report renders cleanly."""
+        report = DoctorReport(project_dir=".", findings=[])
+        md = report.to_markdown()
+        assert "No issues found" in md
+
+    def test_workspace_mode_no_worktrees(self, tmp_path):
+        """Edge case: workspace_mode enabled but no worktrees."""
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text("workspace_mode: true\nworktrees: []\n")
+        report = run_doctor(tmp_path)
+        ws = [f for f in report.findings if "worktrees" in f.title.lower()]
+        assert len(ws) > 0
+
+    def test_missing_worktree_dir(self, tmp_path):
+        """Edge case: worktree referenced but dir missing."""
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text(
+            "workspace_mode: true\nworktrees:\n  - name: my-wt\n"
+        )
+        report = run_doctor(tmp_path)
+        wt = [f for f in report.findings if "my-wt" in f.title]
+        assert len(wt) > 0
 
 
 # ── Status Reconciliation ───────────────────────────────────────────────
@@ -135,7 +201,6 @@ class TestStatusReconciliation:
         results = reconcile_project(full_project)
         story_91 = [r for r in results if r.story_id == "9.1"]
         if story_91:
-            # 9.1 has dev notes + git commits may exist
             assert story_91[0].evidence_state in (
                 EvidenceState.CONFIRMED, EvidenceState.PROBABLE, EvidenceState.UNCERTAIN
             )
@@ -144,12 +209,33 @@ class TestStatusReconciliation:
         """DI-4: Don't promote silently on ambiguous evidence."""
         (tmp_path / "planning-artifacts").mkdir()
         (tmp_path / "planning-artifacts" / "sprint-status.yaml").write_text(
-            "stories:\n  X.1:\n    status: pending\n"
+            'stories:\n  "X.1":\n    status: pending\n'
         )
         results = reconcile_project(tmp_path)
         if results:
-            # No evidence → should not recommend 'done'
             assert results[0].recommended_status != "done"
+
+    def test_gather_evidence_empty(self, tmp_path):
+        """Edge case: empty story data."""
+        evidence = _gather_evidence(tmp_path, "test.1", {})
+        assert evidence.story_id == "test.1"
+        assert evidence.evidence_state == EvidenceState.NOT_STARTED
+
+    def test_gather_evidence_no_status(self, tmp_path):
+        """Edge case: story data without status."""
+        evidence = _gather_evidence(tmp_path, "test.1", {"other": "data"})
+        assert evidence.current_status == ""
+
+    def test_story_evidence_fields(self):
+        """Test StoryEvidence dataclass."""
+        e = StoryEvidence(
+            story_id="1.1", file_exists=True, has_commits=True,
+            predicates_pass=False, current_status="done",
+            recommended_status="done", evidence_state=EvidenceState.PROBABLE,
+            details="files=✓ commits=✓ predicates=✗"
+        )
+        assert e.story_id == "1.1"
+        assert e.evidence_state == EvidenceState.PROBABLE
 
 
 # ── Migrate ─────────────────────────────────────────────────────────────
@@ -180,7 +266,18 @@ class TestMigrate:
     def test_halt_on_failure(self, tmp_path):
         """DI-2: Halt on failure."""
         plan = create_migration_plan(tmp_path)
-        # This should work (tmp_path has no git repo, but waves are safe)
         plan = execute_migration(plan, tmp_path, dry_run=True)
-        # In dry_run mode, all waves should complete
         assert all(w.status == WaveStatus.DONE for w in plan.waves)
+
+    def test_plan_dry_run_markdown(self, minimal_project):
+        plan = create_migration_plan(minimal_project)
+        plan.dry_run = True
+        md = plan.to_markdown()
+        assert "DRY RUN" in md
+
+    def test_empty_waves(self, tmp_path):
+        """Edge case: plan with specific wave that doesn't exist."""
+        plan = create_migration_plan(tmp_path)
+        plan = execute_migration(plan, tmp_path, waves=[99], dry_run=True)
+        # Wave 99 doesn't exist, all should be skipped
+        assert all(w.status == WaveStatus.SKIPPED for w in plan.waves)

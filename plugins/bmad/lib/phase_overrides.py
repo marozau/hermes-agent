@@ -67,4 +67,4 @@ def load_phase_overrides(project_dir: Path) -> dict[str, str]:
 
 def is_phase_overridden(overrides: dict[str, str], phase: str) -> bool:
     """Check if a phase is explicitly overridden (skipped/not_needed/deferred)."""
-    return phase.lower() in overrides
+    return phase.lower() in {k.lower(): v for k, v in overrides.items()}
