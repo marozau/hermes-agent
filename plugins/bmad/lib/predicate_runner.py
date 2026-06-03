@@ -39,7 +39,7 @@ def run_predicates(
             })
             continue
 
-        passed, reason = _call_predicate(item, project_dir, ctx)
+        passed, reason = _call_predicate(item, project_dir, ctx, spec.predicate_module)
         results.append({
             "description": item.description,
             "passed": passed,
@@ -53,15 +53,21 @@ def _call_predicate(
     item: VerificationItem,
     project_dir: Path,
     ctx: Any = None,
+    predicate_module: str | None = None,
 ) -> tuple[bool | None, str]:
     """Import and call a single predicate function.
 
     Supports dotted paths like "predicates.dev_story.tests_pass" or
     "plugins.bmad.predicates.dev_story.tests_pass".
+    Bare names (e.g. "tests_pass") resolve against predicate_module.
     """
     predicate_path = item.predicate
     if not predicate_path:
         return None, "no predicate"
+
+    # F-12: Resolve bare names against spec.predicate_module
+    if "." not in predicate_path and predicate_module:
+        predicate_path = f"{predicate_module}.{predicate_path}"
 
     # Split into module path and function name
     parts = predicate_path.rsplit(".", 1)
@@ -78,6 +84,10 @@ def _call_predicate(
             break
         except ImportError:
             continue
+        except (SyntaxError, Exception) as e:
+            # F-9: Don't mask inner failures — surface them directly
+            logger.warning("[predicate_runner] import error for %s: %s", prefix + module_path, e)
+            return None, f"import error: {e}"
 
     if module is None:
         return None, f"module not found: {module_path}"
@@ -87,7 +97,16 @@ def _call_predicate(
         return None, f"function not found: {func_name} in {module_path}"
 
     try:
-        return func(project_dir=project_dir, ctx=ctx)
+        result = func(project_dir=project_dir, ctx=ctx)
+        # F-15: Validate return shape
+        if not isinstance(result, tuple) or len(result) != 2:
+            return False, f"predicate contract violation: expected (bool|None, str), got {type(result).__name__}"
+        passed, reason = result
+        if passed not in (True, False, None):
+            return False, f"predicate contract violation: first element must be bool|None, got {type(passed).__name__}"
+        if not isinstance(reason, str):
+            return False, f"predicate contract violation: second element must be str, got {type(reason).__name__}"
+        return passed, reason
     except Exception as e:
         logger.warning("[predicate_runner] %s failed: %s", predicate_path, e)
-        return None, f"predicate error: {e}"
+        return False, f"predicate error: {e}"

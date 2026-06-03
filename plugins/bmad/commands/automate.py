@@ -11,10 +11,10 @@ def handler(ctx, args: str) -> str:
     """Return the .md body for automate."""
     raw_dir = getattr(ctx, "working_directory", None) or getattr(ctx, "project_dir", "")
     body_path = Path(raw_dir)
-    return _read_body(body_path, COMMAND)
+    return _read_body(body_path, COMMAND, args, ctx)
 
 
-def _read_body(project_dir: Path, command: str) -> str:
+def _read_body(project_dir: Path, command: str, args: str = "", ctx=None) -> str:
     """Read slash command body from commands/<name>.md."""
     from plugins.bmad.commands import __file__ as _cmd_file
     cmd_dir = Path(_cmd_file).parent

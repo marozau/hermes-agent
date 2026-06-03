@@ -735,5 +735,7 @@ def _legacy_body(project_dir: Path) -> str:
     """Return the original prompt body — for users who prefer host-LLM orchestration."""
     body_path = Path(__file__).with_name(f"{COMMAND}.md")
     if body_path.exists():
-        return body_path.read_text(encoding="utf-8")
+        from plugins.bmad.lib.spec_parser import parse_command_body
+        spec, body = parse_command_body(body_path.read_text(encoding="utf-8"))
+        return body
     return f"# {COMMAND}\n\nBody file not found."

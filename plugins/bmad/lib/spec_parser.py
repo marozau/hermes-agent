@@ -11,12 +11,15 @@ Pure stdlib + yaml — no Pydantic.
 
 from __future__ import annotations
 
+import logging
 import re
 from typing import Any
 
 import yaml
 
 from plugins.bmad.lib.spec_schema import CommandSpec, VerificationItem
+
+logger = logging.getLogger(__name__)
 
 # ── Frontmatter extraction ──────────────────────────────────────────────────
 
@@ -39,7 +42,8 @@ def parse_command_body(content: str) -> tuple[CommandSpec | None, str]:
 
     try:
         fm = yaml.safe_load(frontmatter_str)
-    except yaml.YAMLError:
+    except yaml.YAMLError as e:
+        logger.warning("[bmad:spec_parser] malformed YAML frontmatter: %s", e)
         return None, content
 
     if not isinstance(fm, dict) or "spec" not in fm:
@@ -92,9 +96,9 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
     return CommandSpec(
         persona=str(persona),
         phase=str(phase),
-        verification=verification,
+        verification=tuple(verification),
         imperative_preamble=bool(raw.get("imperative_preamble", True)),
         predicate_module=raw.get("predicate_module"),
-        output_artifacts=list(raw.get("output_artifacts", [])),
-        metadata=dict(raw.get("metadata", {})),
+        output_artifacts=tuple(str(a) for a in raw.get("output_artifacts") or []),
+        metadata=dict(raw.get("metadata") or {}),
     )

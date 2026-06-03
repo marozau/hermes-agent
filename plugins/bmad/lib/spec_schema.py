@@ -52,8 +52,8 @@ class CommandSpec:
     """
     persona: str
     phase: str
-    verification: list[VerificationItem]
+    verification: tuple[VerificationItem, ...]
     imperative_preamble: bool = True
     predicate_module: str | None = None
-    output_artifacts: list[str] = field(default_factory=list)
+    output_artifacts: tuple[str, ...] = ()
     metadata: dict[str, Any] = field(default_factory=dict)

@@ -32,7 +32,7 @@ class TestCommandSpec:
             verification=[VerificationItem(description="Tests pass")],
         )
         assert s.imperative_preamble is True
-        assert s.output_artifacts == []
+        assert s.output_artifacts == ()
         assert s.metadata == {}
 
     def test_frozen(self):
@@ -105,7 +105,7 @@ class TestParseCommandBody:
         assert spec is not None
         assert spec.imperative_preamble is False
         assert spec.predicate_module == "plugins.bmad.predicates.sm"
-        assert spec.output_artifacts == ["planning-artifacts/epics.md"]
+        assert spec.output_artifacts == ("planning-artifacts/epics.md",)
         assert spec.metadata == {"level": 2}
 
     def test_missing_persona_returns_none(self):

@@ -5,6 +5,10 @@ stop condition.  Pure function: render_command(spec, body, args, ctx) -> str.
 
 For commands without a spec: block (legacy), returns body unchanged.
 
+Body IS a Jinja2 template — {{args}}, {{ctx.foo}}, etc. are substituted.
+{% ... %} control flow in bodies is safe because PreservingUndefined
+handles missing variables gracefully.
+
 ≤150 LOC target.  No DSPy, no external dependencies beyond jinja2.
 """
 
@@ -37,6 +41,22 @@ class PreservingUndefined(Undefined):
 
     def __bool__(self) -> bool:
         return False
+
+    def __getattr__(self, name: str) -> "PreservingUndefined":
+        return PreservingUndefined(
+            hint=self._undefined_hint,
+            obj=self._undefined_obj,
+            name=self._undefined_name + "." + name,
+            exc=self._undefined_exception,
+        )
+
+    def __getitem__(self, name: str) -> "PreservingUndefined":
+        return PreservingUndefined(
+            hint=self._undefined_hint,
+            obj=self._undefined_obj,
+            name=self._undefined_name + "[" + str(name) + "]",
+            exc=self._undefined_exception,
+        )
 
 
 # ── Templates ───────────────────────────────────────────────────────────────
@@ -106,16 +126,18 @@ def render_command(
 
     # 1. Preamble (skip if imperative_preamble is False)
     sections = []
+    # F-7: Render body as a template so {{args}} etc. are substituted
+    rendered_body = env.from_string(body).render(**variables)
     if spec.imperative_preamble:
         preamble = env.from_string(_PREAMBLE_TPL).render(
             persona=spec.persona,
             phase=spec.phase,
-            body=body,
+            body=rendered_body,
             **variables,
         )
         sections.append(preamble)
     else:
-        sections.append(body)
+        sections.append(rendered_body)
 
     # 2. Verification checklist
     verification = env.from_string(_VERIFICATION_TPL).render(

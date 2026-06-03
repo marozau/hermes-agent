@@ -57,7 +57,8 @@ def _inline(topic: str) -> str:
     body_file = Path(__file__).with_name(f"{COMMAND}.md")
     if not body_file.exists():
         return f"# {COMMAND}\n\nBody file not found at {body_file}."
-    body = body_file.read_text(encoding="utf-8")
+    from plugins.bmad.lib.spec_parser import parse_command_body
+    _, body = parse_command_body(body_file.read_text(encoding="utf-8"))
     return body.replace("{args}", topic)
 
 
