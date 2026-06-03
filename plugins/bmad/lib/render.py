@@ -13,7 +13,7 @@ evaluate to False — avoid Jinja control flow in command bodies.
 Set template_body=False for user-supplied content (epic-doc anchor
 sections) that may contain {{var}} examples in prose.
 
-≤150 LOC target.  No DSPy, no external dependencies beyond jinja2.
+~200 LOC (target was ≤150; grew with filter wrappers).  No DSPy, no external dependencies beyond jinja2.
 """
 
 from __future__ import annotations
@@ -145,7 +145,6 @@ def render_command(
     # R5-1/R5-2: Override Jinja filters to preserve PreservingUndefined literals.
     # Don't wrap `default` — Jinja's do_default handles Undefined natively.
     # For context-aware filters (jinja_pass_arg), check args[0] for Undefined.
-    from jinja2 import Undefined
 
     _SKIP_WRAPPING = {"default"}  # Jinja handles these correctly on Undefined
 

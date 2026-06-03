@@ -3,7 +3,6 @@
 Tests for the 4 findings the reviewer said to fix in R5.
 """
 
-import pytest
 from plugins.bmad.lib.spec_schema import CommandSpec, VerificationItem
 from plugins.bmad.lib.render import render_command
 from plugins.bmad.lib.spec_parser import parse_command_body, _freeze_value
@@ -95,7 +94,6 @@ class TestT6_CodeReviewLegacyRenders:
 
     def test_legacy_body_has_no_frontmatter(self):
         from plugins.bmad.commands.code_review import _legacy_body
-        from pathlib import Path
-        body = _legacy_body(Path("."))
+        body = _legacy_body()
         assert "---" not in body[:20]  # no raw YAML
         assert "spec:" not in body[:50]

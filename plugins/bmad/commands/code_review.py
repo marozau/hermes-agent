@@ -119,7 +119,7 @@ def handler(ctx, args: str) -> str:
     if parsed.get("_error"):
         return f"⚠️  {parsed['_error']}"
     if parsed["no_fanout"]:
-        return _legacy_body(project_dir)
+        return _legacy_body()
 
     # Gather diff
     diff_text, diff_meta = _capture_diff(project_dir, parsed["diff_rev"])
@@ -731,7 +731,7 @@ def _resolve_project_dir(ctx) -> Path:
     return Path(raw).resolve()
 
 
-def _legacy_body(project_dir: Path) -> str:
+def _legacy_body() -> str:
     """Return the original prompt body — for users who prefer host-LLM orchestration."""
     body_path = Path(__file__).with_name(f"{COMMAND}.md")
     if body_path.exists():

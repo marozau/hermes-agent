@@ -18,73 +18,7 @@ from ._datetime import _now_iso, _today_iso
 # Preserving undefined — render unknowns as literal mustache tags
 # ---------------------------------------------------------------------------
 
-class PreservingUndefined(Undefined):
-    """Render unknown ``{{var_name}}`` as the literal string ``{{var_name}}``.
-
-    Never raises :exc:`jinja2.UndefinedError` or silently blanks out —
-    either of those would destroy content the LLM is meant to fill.
-
-    Overrides every magic method the default :class:`jinja2.Undefined`
-    raises on, so filters and attribute access on unknown vars still
-    yield the literal placeholder (e.g. ``{{ x | upper }}`` renders as
-    ``{{x}}`` rather than crashing inside ``str.upper`` on Undefined).
-    """
-
-    def _literal(self) -> str:
-        return f"{{{{{self._undefined_name}}}}}"
-
-    def __str__(self) -> str:
-        return self._literal()
-
-    def __html__(self) -> str:
-        return self._literal()
-
-    def __repr__(self) -> str:
-        return self._literal()
-
-    # Attribute / item access → return self so chains like {{ x.y }} and
-    # {{ x[0] }} render as the placeholder for the *root* var.
-    def __getattr__(self, name: str):
-        # Don't intercept dunders or _jinja-internal names
-        if name.startswith("_"):
-            raise AttributeError(name)
-        return self
-
-    def __getitem__(self, item):
-        return self
-
-    # Truthiness / iteration / length — neutral defaults
-    def __bool__(self) -> bool:
-        return False
-
-    def __iter__(self):
-        return iter([])
-
-    def __len__(self) -> int:
-        return 0
-
-    def __eq__(self, other) -> bool:
-        return False
-
-    def __ne__(self, other) -> bool:
-        return True
-
-    def __hash__(self) -> int:
-        return hash(self._undefined_name)
-
-    # Arithmetic / concatenation → preserve literal
-    def __add__(self, other):
-        return self._literal() + (str(other) if other is not None else "")
-
-    def __radd__(self, other):
-        return (str(other) if other is not None else "") + self._literal()
-
-    def __mul__(self, other):
-        return self._literal()
-
-    def __rmul__(self, other):
-        return self._literal()
-
+from plugins.bmad.lib.render import PreservingUndefined
 
 # ---------------------------------------------------------------------------
 # Jinja2 environment (singleton)

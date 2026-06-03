@@ -29,22 +29,19 @@ class TestR5_4_LegacyBody:
     def test_legacy_body_no_preamble(self):
         """--no-fanout must NOT include 'EXECUTE NOW' preamble."""
         from plugins.bmad.commands.code_review import _legacy_body
-        from pathlib import Path
-        body = _legacy_body(Path("."))
+        body = _legacy_body()
         assert "EXECUTE NOW" not in body
 
     def test_legacy_body_no_stop_condition(self):
         """--no-fanout must NOT include stop condition."""
         from plugins.bmad.commands.code_review import _legacy_body
-        from pathlib import Path
-        body = _legacy_body(Path("."))
+        body = _legacy_body()
         assert "## Stop Condition" not in body
 
     def test_legacy_body_has_no_frontmatter(self):
         """--no-fanout must strip YAML frontmatter."""
         from plugins.bmad.commands.code_review import _legacy_body
-        from pathlib import Path
-        body = _legacy_body(Path("."))
+        body = _legacy_body()
         assert not body.startswith("---")
 
 
