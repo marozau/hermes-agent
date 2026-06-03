@@ -82,21 +82,19 @@ def register(ctx) -> None:
     from plugins.bmad.hooks.subagent_stop import subagent_stop
 
     # ── Hooks ──────────────────────────────────────────
-    # 5 hooks declare ctx as their first positional arg → wrap with _bind_hook_ctx.
-    # 3 hooks (on_session_end, pre_llm_call, post_llm_call) already use the
-    # canonical kwarg-only signature → no binding needed.
+    # 8 hooks declare ctx as their first positional arg → all wrap with _bind_hook_ctx.
     ctx.register_hook("on_session_start",
         _catch_all("on_session_start")(_bind_hook_ctx(on_session_start)))
     ctx.register_hook("on_session_end",
-        _catch_all("on_session_end")(on_session_end))
+        _catch_all("on_session_end")(_bind_hook_ctx(on_session_end)))
     ctx.register_hook("pre_tool_call",
         _catch_all("pre_tool_call")(_bind_hook_ctx(pre_tool_call)))
     ctx.register_hook("post_tool_call",
         _catch_all("post_tool_call")(_bind_hook_ctx(post_tool_call)))
     ctx.register_hook("pre_llm_call",
-        _catch_all("pre_llm_call")(pre_llm_call))
+        _catch_all("pre_llm_call")(_bind_hook_ctx(pre_llm_call)))
     ctx.register_hook("post_llm_call",
-        _catch_all("post_llm_call")(post_llm_call))
+        _catch_all("post_llm_call")(_bind_hook_ctx(post_llm_call)))
     ctx.register_hook("transform_terminal_output",
         _catch_all("transform_terminal_output")(_bind_hook_ctx(transform_terminal_output)))
     ctx.register_hook("subagent_stop",
