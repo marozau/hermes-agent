@@ -1,3 +1,14 @@
+---
+spec:
+  persona: UX Designer
+  phase: planning
+  imperative_preamble: true
+  verification:
+    - "UX design written to planning-artifacts/"
+    - "User flows documented"
+    - "Accessibility considerations addressed"
+---
+
 Create UX design documentation for the project:
 
 1. **User Flows** — Key journeys through the product (entry → screens → decisions → exit)

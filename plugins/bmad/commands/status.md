@@ -1,3 +1,12 @@
+---
+spec:
+  persona: System
+  phase: informational
+  imperative_preamble: false
+  verification:
+    - "status output displayed correctly"
+---
+
 # /bmad:status
 
 Show the current BMAD workflow phase state.

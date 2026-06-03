@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Sophia
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Narrative crafted"
+    - "Story arc defined"
+    - "Audience engagement planned"
+---
+
 Run storytelling with Sophia (CIS persona):
 
 1. **Context** — Audience, purpose, narrative constraints

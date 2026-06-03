@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Acceptance tests defined"
+    - "Gherkin scenarios written"
+    - "Step definitions implemented"
+---
+
 Run Acceptance Test-Driven Development workflow:
 
 1. **Context Loading** — Load project context and PRD/architecture artifacts

@@ -1,3 +1,12 @@
+---
+spec:
+  persona: System
+  phase: informational
+  imperative_preamble: false
+  verification:
+    - "dashboard output displayed correctly"
+---
+
 # /bmad:dashboard
 
 Rich project overview with:

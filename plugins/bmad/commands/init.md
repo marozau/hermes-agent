@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Analyst
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "BMAD project initialized"
+    - "Config created"
+    - "Directory structure set up"
+---
+
 # /bmad:init
 
 Scaffold a new BMAD project in the current directory.

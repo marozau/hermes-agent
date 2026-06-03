@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Analyst
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Ideas documented in planning-artifacts/"
+    - "At least 3 approaches considered"
+    - "Trade-offs documented"
+---
+
 Run a structured brainstorming session for the current project:
 
 Use creative techniques to generate ideas:

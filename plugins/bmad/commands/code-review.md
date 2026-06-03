@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Code review completed"
+    - "Findings categorized by severity"
+    - "Actionable recommendations provided"
+---
+
 Review the implementation against acceptance criteria and quality standards:
 
 1. **Functional Correctness** — Does the code match the story's acceptance criteria?

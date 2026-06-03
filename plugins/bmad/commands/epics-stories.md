@@ -1,3 +1,14 @@
+---
+spec:
+  persona: SM
+  phase: solutioning
+  imperative_preamble: true
+  verification:
+    - "Epics decomposed into stories"
+    - "Each story has acceptance criteria"
+    - "Dependencies identified"
+---
+
 Decompose the project into epics and user stories:
 
 1. **Epics** — Major workstreams (3-5 per project depending on scope)

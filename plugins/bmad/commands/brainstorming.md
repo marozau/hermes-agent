@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Carson
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Ideas generated"
+    - "Possibilities explored"
+    - "Creative directions documented"
+---
+
 Run creative brainstorming with Carson (CIS persona):
 
 1. **Method Selection** — Choose a brainstorming technique (brain-methods.csv)

@@ -1,3 +1,12 @@
+---
+spec:
+  persona: System
+  phase: informational
+  imperative_preamble: false
+  verification:
+    - "party-mode output displayed correctly"
+---
+
 # Party Mode — BMAD Multi-Persona Round Table
 
 You are facilitating **PARTY MODE** — a round-table discussion among BMAD personas.

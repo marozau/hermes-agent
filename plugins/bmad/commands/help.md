@@ -1,3 +1,12 @@
+---
+spec:
+  persona: System
+  phase: informational
+  imperative_preamble: false
+  verification:
+    - "help output displayed correctly"
+---
+
 # /bmad:help
 
 List all BMAD slash commands. **Every BMAD command is namespaced under

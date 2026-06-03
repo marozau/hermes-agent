@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Architect
+  phase: solutioning
+  imperative_preamble: true
+  verification:
+    - "PRD to Architecture alignment verified"
+    - "Architecture to Epics alignment verified"
+    - "No blocking gaps identified"
+---
+
 Run the solutioning gate check before proceeding to implementation:
 
 Verify alignment across all planning artifacts:

@@ -20,5 +20,9 @@ def _read_body(project_dir: Path, command: str) -> str:
     cmd_dir = Path(_cmd_file).parent
     body_file = cmd_dir / f"{command}.md"
     if body_file.exists():
-        return body_file.read_text()
+        body = body_file.read_text()
+        from plugins.bmad.lib.spec_parser import parse_command_body
+        from plugins.bmad.lib.render import render_command
+        spec, body_text = parse_command_body(body)
+        return render_command(spec, body_text, args=args.strip() if args else "", ctx=ctx)
     return "# {command}\n\nBody file not found."

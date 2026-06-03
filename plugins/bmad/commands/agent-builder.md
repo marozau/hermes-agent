@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Builder
+  phase: solutioning
+  imperative_preamble: true
+  verification:
+    - "Agent configuration created"
+    - "Skills composed"
+    - "Quality checks pass"
+---
+
 Build and refine BMAD agents:
 
 1. **Agent Design** — Requirements, persona, skill composition

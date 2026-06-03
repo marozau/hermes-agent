@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Test architecture defined"
+    - "Risk areas identified"
+    - "Test cases specified"
+---
+
 Run test design workflow:
 
 1. **Load Context** — Review project architecture, requirements, and existing tests

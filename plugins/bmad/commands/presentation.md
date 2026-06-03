@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Caravaggio
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Presentation structure defined"
+    - "Key messages clear"
+    - "Visual design planned"
+---
+
 Run presentation design with Caravaggio (CIS persona):
 
 1. **Purpose** — Define presentation goals, audience, tone

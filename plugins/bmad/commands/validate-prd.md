@@ -1,3 +1,14 @@
+---
+spec:
+  persona: PM
+  phase: planning
+  imperative_preamble: true
+  verification:
+    - "PRD validation report generated"
+    - "All sections present and complete"
+    - "No contradictions found"
+---
+
 Validate the existing PRD for completeness and quality:
 
 1. **Completeness Check** — Are all required sections present?
