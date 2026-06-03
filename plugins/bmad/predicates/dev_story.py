@@ -76,7 +76,7 @@ def diff_minimal(project_dir: Path, **kwargs) -> tuple[bool | None, str]:
             capture_output=True,
             text=True,
             timeout=10,
-            env={"PATH": "/usr/bin:/usr/local/bin", "LC_ALL": "C"},
+            env={**__import__("os").environ, "LC_ALL": "C"},
         )
         if result.returncode != 0:
             return None, "Not a git repo or no diff"

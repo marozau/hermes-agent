@@ -56,7 +56,7 @@ class PreservingUndefined(Undefined):
 
     def __getattr__(self, name: str) -> "PreservingUndefined":
         # G-8: Filter dunder names to prevent Jinja2/MarkupSafe probe issues
-        if name.startswith("_"):
+        if name.startswith("__") and name.endswith("__"):
             raise AttributeError(name)
         return PreservingUndefined(
             hint=self._undefined_hint,
@@ -142,6 +142,18 @@ def render_command(
     safe_ctx = ctx if ctx is not None else PreservingUndefined(
         hint=None, obj=None, name="ctx", exc=None
     )
+    # G-12: Override Jinja filters to preserve PreservingUndefined literals
+    def _preserve_filter(value, filter_func):
+        """Wrap a Jinja filter to no-op on PreservingUndefined."""
+        if isinstance(value, PreservingUndefined):
+            return value
+        return filter_func(value)
+
+    _original_filters = dict(env.filters)
+    for name, func in _original_filters.items():
+        if callable(func):
+            env.filters[name] = lambda v, f=func: _preserve_filter(v, f)
+
     variables = {
         "args": args,
         "ctx": safe_ctx,

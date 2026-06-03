@@ -84,17 +84,18 @@ def _call_predicate(
             break
         except ImportError:
             continue
-        except (SyntaxError, Exception) as e:
-            # F-9/P0-3: Don't mask inner failures — surface them directly
+        except (SyntaxError, NameError, AttributeError, TypeError) as e:
+            # T-8: Narrow catch — only module-load-time errors, not all exceptions
             logger.warning("[predicate_runner] import error for %s: %s", prefix + module_path, e)
             return False, f"import error: {e}"
 
     if module is None:
-        # G-10: Try predicate_module + leaf_func as final fallback
-        if predicate_module and "." in predicate_path:
+        # T-7: Try predicate_module + module_path + func_name as final fallback
+        if predicate_module:
             leaf_func = parts[-1]
+            full_module = f"{predicate_module}.{module_path}"
             try:
-                module = importlib.import_module(predicate_module)
+                module = importlib.import_module(full_module)
                 func_name = leaf_func
             except ImportError:
                 pass

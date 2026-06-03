@@ -144,3 +144,19 @@ class TestParseCommandBody:
         spec, body = parse_command_body(content)
         assert spec is not None
         assert body == "Line 1\nLine 2\n"
+
+    def test_no_spec_frontmatter_stripped(self):
+        """T-12: Non-spec frontmatter is stripped from body."""
+        content = "---\ntitle: Foo\nversion: 1\n---\n# Body text\n"
+        spec, body = parse_command_body(content)
+        assert spec is None
+        assert body == "# Body text\n"
+        assert "---" not in body
+        assert "title" not in body
+
+    def test_no_frontmatter_at_all(self):
+        """T-12: Content without frontmatter passes through unchanged."""
+        content = "# Just a body\n\nNo frontmatter here.\n"
+        spec, body = parse_command_body(content)
+        assert spec is None
+        assert body == content

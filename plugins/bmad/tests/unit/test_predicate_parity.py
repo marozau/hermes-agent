@@ -108,20 +108,26 @@ class TestPredicateRunner:
         assert results[1]["passed"] is None  # deferred
 
     def test_predicate_exception_returns_false(self, tmp_path):
-        """G-14: Exception during predicate execution returns False, not None."""
-        spec = CommandSpec(
-            persona="Dev",
-            phase="implementation",
-            verification=[
-                VerificationItem(
-                    description="Broken predicate",
-                    predicate="predicates.dev_story.tests_pass",
-                ),
-            ],
-        )
-        # tests_pass tries to run pytest which may fail, but should return bool
-        results = run_predicates(spec, tmp_path)
-        assert results[0]["passed"] in (True, False, None)
+        """T-6: Exception during predicate execution returns False, not None."""
+        import plugins.bmad.predicates.dev_story as ds
+        original = ds.ac_verified
+        try:
+            ds.ac_verified = lambda project_dir, **kwargs: (_ for _ in ()).throw(RuntimeError("boom"))
+            spec = CommandSpec(
+                persona="Dev",
+                phase="implementation",
+                verification=[
+                    VerificationItem(
+                        description="Broken predicate",
+                        predicate="predicates.dev_story.ac_verified",
+                    ),
+                ],
+            )
+            results = run_predicates(spec, tmp_path)
+            assert results[0]["passed"] is False
+            assert "predicate error" in results[0]["reason"]
+        finally:
+            ds.ac_verified = original
 
     def test_predicate_contract_violation_returns_false(self, tmp_path):
         """G-14: Contract violation (wrong return shape) returns False."""

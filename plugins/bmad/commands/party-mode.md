@@ -12,9 +12,9 @@ spec:
 You are facilitating **PARTY MODE** — a round-table discussion among BMAD personas.
 
 ## Topic
-{args}
+{{args}}
 
-If `{args}` is empty or `(no topic specified)`, ask the user what they want to
+If `{{args}}` is empty or `(no topic specified)`, ask the user what they want to
 discuss and halt until they reply.
 
 ## Protocol

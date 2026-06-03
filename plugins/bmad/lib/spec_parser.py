@@ -99,7 +99,7 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
     if not verification:
         return None
 
-    # G-6: Guard against YAML scalar strings (common typo: missing list-dash)
+    # G-6/T-9: Guard against YAML scalar strings + recursive freeze for hashability
     oa_raw = raw.get("output_artifacts") or []
     if isinstance(oa_raw, str):
         logger.warning("[bmad:spec_parser] output_artifacts should be a list, got string — wrapping")
@@ -119,5 +119,14 @@ def _build_spec(raw: dict[str, Any]) -> CommandSpec | None:
         imperative_preamble=bool(raw.get("imperative_preamble", True)),
         predicate_module=raw.get("predicate_module"),
         output_artifacts=tuple(str(a) for a in oa_raw),
-        metadata=tuple((k, v) for k, v in meta_raw.items()),
+        metadata=tuple(sorted(_freeze_value((k, v)) for k, v in meta_raw.items())),
     )
+
+
+def _freeze_value(value):
+    """Recursively freeze nested structures for hashability (T-9)."""
+    if isinstance(value, dict):
+        return tuple(sorted((_freeze_value(k), _freeze_value(v)) for k, v in value.items()))
+    if isinstance(value, list):
+        return tuple(_freeze_value(v) for v in value)
+    return value
