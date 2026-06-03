@@ -11,6 +11,7 @@ DI-4: Conservative reconciliation. Ambiguous evidence → don't promote silently
 from __future__ import annotations
 
 import logging
+import re
 import subprocess
 from dataclasses import dataclass
 from enum import Enum
@@ -27,6 +28,10 @@ class EvidenceState(str, Enum):
     PROBABLE = "probable"        # 2/3 sources agree
     UNCERTAIN = "uncertain"      # 1/3 or conflicting
     NOT_STARTED = "not_started"  # No evidence
+
+
+# Canonical status vocabulary (kebab-case per project convention)
+VALID_STATUSES = {"pending", "in-progress", "done", "blocked", "deferred"}
 
 
 @dataclass(frozen=True)
@@ -73,6 +78,11 @@ def reconcile_project(project_dir: Path) -> list[StoryEvidence]:
     return results
 
 
+def _normalize_status(raw: str) -> str:
+    """Normalize status to canonical kebab-case form."""
+    return raw.replace("_", "-").lower().strip()
+
+
 def _gather_evidence(project_dir: Path, story_id: str,
                      story_data: dict) -> StoryEvidence:
     """Gather 3-source evidence for a single story."""
@@ -80,7 +90,7 @@ def _gather_evidence(project_dir: Path, story_id: str,
     dev_notes = project_dir / "implementation-artifacts" / f"{story_id}-dev-notes.md"
     file_exists = dev_notes.exists()
 
-    # Source 2: Git commits
+    # Source 2: Git commits (word-boundary match to avoid substring false positives)
     has_commits = _check_git_commits(project_dir, story_id)
 
     # Source 3: Predicates (stub — checks if tests directory exists)
@@ -90,21 +100,32 @@ def _gather_evidence(project_dir: Path, story_id: str,
     sources = [file_exists, has_commits, predicates_pass]
     true_count = sum(sources)
 
-    current = story_data.get("status", "")
+    current = _normalize_status(story_data.get("status", ""))
 
     if true_count == 3:
         state = EvidenceState.CONFIRMED
         recommended = "done"
     elif true_count == 2:
         state = EvidenceState.PROBABLE
-        # DI-4: Don't promote silently — only recommend if current is empty
-        recommended = "in_progress" if current in ("", "pending") else current
+        # DI-4: Don't promote silently — only recommend if current is empty/pending
+        if current in ("", "pending"):
+            recommended = "in-progress"
+        else:
+            recommended = current
     elif true_count == 1:
         state = EvidenceState.UNCERTAIN
-        recommended = current  # Don't change
+        # DI-4: If marked done but only 1 source, flag for review
+        if current == "done":
+            recommended = "in-progress"  # Suggest demotion
+        else:
+            recommended = current  # Don't change
     else:
         state = EvidenceState.NOT_STARTED
-        recommended = "pending" if current != "done" else current
+        # DI-4: If marked done with ZERO evidence, flag for demotion
+        if current == "done":
+            recommended = "pending"  # Clearly stale
+        else:
+            recommended = "pending" if current == "" else current
 
     details = (
         f"files={'✓' if file_exists else '✗'} "
@@ -125,10 +146,15 @@ def _gather_evidence(project_dir: Path, story_id: str,
 
 
 def _check_git_commits(project_dir: Path, story_id: str) -> bool:
-    """Check if git history has commits mentioning this story."""
+    """Check if git history has commits mentioning this story.
+
+    Uses word-boundary regex to avoid substring matches (e.g. '9.1' matching 'v9.1.0').
+    """
     try:
+        # Use regex with word boundaries for precise matching
+        pattern = rf"\b{re.escape(story_id)}\b"
         result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", story_id, "-1"],
+            ["git", "log", "--oneline", "--grep", pattern, "-1"],
             cwd=project_dir,
             capture_output=True,
             text=True,
@@ -141,7 +167,6 @@ def _check_git_commits(project_dir: Path, story_id: str) -> bool:
 
 def _check_predicates(project_dir: Path, story_id: str) -> bool:
     """Check if test artifacts exist for this story."""
-    # Look for test files mentioning the story
     test_dir = project_dir / "tests"
     if not test_dir.exists():
         return False

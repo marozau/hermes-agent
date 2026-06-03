@@ -4,7 +4,7 @@ Scans a BMAD project and produces structured findings across 10 categories:
 1. Workspace pattern check
 2. Config schema validation
 3. Phase overrides check
-4. Status drift detection
+4. Status drift detection (uses 3-source reconciliation)
 5. Missing artifacts
 6. Schema mismatch (old vs current)
 7. Runtime drift (live vs worktree)
@@ -24,6 +24,7 @@ import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
+from typing import Any
 
 import yaml
 
@@ -95,22 +96,43 @@ class DoctorReport:
 
 
 def run_doctor(project_dir: Path) -> DoctorReport:
-    """Run all 10 diagnostic categories. DI-1: read-only."""
+    """Run all 10 diagnostic categories. DI-1: read-only.
+
+    Each check is isolated — if one raises, the others still run.
+    """
     report = DoctorReport(project_dir=str(project_dir))
     overrides = load_phase_overrides(project_dir)
 
-    _check_workspace_pattern(project_dir, report, overrides)
-    _check_config_schema(project_dir, report)
-    _check_status_drift(project_dir, report)
-    _check_missing_artifacts(project_dir, report, overrides)
-    _check_epic_structure(project_dir, report)
-    _check_schema_version(project_dir, report)
-    _check_runtime_drift(project_dir, report)
-    _check_story_consolidation(project_dir, report)
-    _check_ocr_integration(project_dir, report)
-    _check_spec_blocks(project_dir, report)
+    checks = [
+        ("Workspace Pattern", lambda: _check_workspace_pattern(project_dir, report, overrides)),
+        ("Config Schema", lambda: _check_config_schema(project_dir, report)),
+        ("Status Drift", lambda: _check_status_drift(project_dir, report)),
+        ("Missing Artifacts", lambda: _check_missing_artifacts(project_dir, report, overrides)),
+        ("Epic Structure", lambda: _check_epic_structure(project_dir, report, overrides)),
+        ("Schema Version", lambda: _check_schema_version(project_dir, report)),
+        ("Runtime Drift", lambda: _check_runtime_drift(project_dir, report)),
+        ("Story Consolidation", lambda: _check_story_consolidation(project_dir, report)),
+        ("OCR Integration", lambda: _check_ocr_integration(project_dir, report)),
+        ("Spec Blocks", lambda: _check_spec_blocks(project_dir, report)),
+    ]
 
-    report.categories_checked = 10
+    actual_checked = 0
+    for name, check_fn in checks:
+        try:
+            check_fn()
+            actual_checked += 1
+        except Exception as e:
+            logger.warning("[doctor] check '%s' failed: %s", name, e)
+            report.findings.append(DoctorFinding(
+                category=name,
+                severity=Severity.LOW,
+                title=f"Check failed: {name}",
+                detail=f"Diagnostic check raised an exception: {e}",
+                remediation="Report this as a bug in the doctor tool."
+            ))
+            actual_checked += 1  # Count as checked (with error finding)
+
+    report.categories_checked = actual_checked
     return report
 
 
@@ -118,7 +140,10 @@ def run_doctor(project_dir: Path) -> DoctorReport:
 
 def _check_workspace_pattern(project_dir: Path, report: DoctorReport,
                               overrides: dict[str, str]):
-    """Cat 1: workspace pattern validation."""
+    """Cat 1: workspace pattern validation. DI-3: honors overrides."""
+    if is_phase_overridden(overrides, "solutioning"):
+        return  # Workspace pattern is part of solutioning
+
     config_path = project_dir / "bmad" / "config.yaml"
     if not config_path.exists():
         report.findings.append(DoctorFinding(
@@ -151,7 +176,6 @@ def _check_workspace_pattern(project_dir: Path, report: DoctorReport,
             remediation="Add worktrees to bmad/config.yaml or disable workspace_mode."
         ))
 
-    # Check for worktree directories
     if worktrees:
         for wt in worktrees:
             if isinstance(wt, dict):
@@ -196,7 +220,6 @@ def _check_config_schema(project_dir: Path, report: DoctorReport):
         ))
         return
 
-    # Check for known required fields
     if "version" not in config:
         report.findings.append(DoctorFinding(
             category="Config Schema",
@@ -208,7 +231,7 @@ def _check_config_schema(project_dir: Path, report: DoctorReport):
 
 
 def _check_status_drift(project_dir: Path, report: DoctorReport):
-    """Cat 3: sprint-status.yaml drift detection."""
+    """Cat 3: status drift detection using 3-source reconciliation."""
     status_path = project_dir / "planning-artifacts" / "sprint-status.yaml"
     if not status_path.exists():
         report.findings.append(DoctorFinding(
@@ -221,35 +244,30 @@ def _check_status_drift(project_dir: Path, report: DoctorReport):
         return
 
     try:
-        with open(status_path, encoding="utf-8") as f:
-            status = yaml.safe_load(f)
-    except (yaml.YAMLError, OSError):
+        from plugins.bmad.lib.status_reconciliation import reconcile_project, EvidenceState
+        results = reconcile_project(project_dir)
+    except Exception as e:
+        logger.warning("[doctor] reconciliation failed: %s", e)
         return
 
-    if not isinstance(status, dict):
-        return
-
-    stories = status.get("stories", {})
-    if not isinstance(stories, dict):
-        return
-
-    # Check for stories marked done without artifacts
-    for story_id, story_data in stories.items():
-        if not isinstance(story_data, dict):
-            continue
-        story_id_str = str(story_id)  # YAML may parse "9.1" as float
-        state = story_data.get("status", "")
-        if state == "done":
-            # Check if dev notes exist
-            dev_notes = project_dir / "implementation-artifacts" / f"{story_id_str}-dev-notes.md"
-            if not dev_notes.exists():
-                report.findings.append(DoctorFinding(
-                    category="Status Drift",
-                    severity=Severity.LOW,
-                    title=f"Story {story_id_str} marked done but no dev notes",
-                    detail=f"Story has status 'done' but implementation-artifacts/{story_id_str}-dev-notes.md is missing.",
-                    remediation="Create dev notes or update status."
-                ))
+    for evidence in results:
+        # DI-4: flag stories with no evidence but marked done
+        if evidence.current_status == "done" and evidence.evidence_state == EvidenceState.NOT_STARTED:
+            report.findings.append(DoctorFinding(
+                category="Status Drift",
+                severity=Severity.HIGH,
+                title=f"Story {evidence.story_id} marked done with no evidence",
+                detail=f"No dev notes, no git commits, no tests found. {evidence.details}",
+                remediation="Verify completion or update status to 'pending'."
+            ))
+        elif evidence.current_status == "done" and evidence.evidence_state == EvidenceState.UNCERTAIN:
+            report.findings.append(DoctorFinding(
+                category="Status Drift",
+                severity=Severity.MEDIUM,
+                title=f"Story {evidence.story_id} has weak evidence for 'done'",
+                detail=evidence.details,
+                remediation="Add dev notes or verify completion."
+            ))
 
 
 def _check_missing_artifacts(project_dir: Path, report: DoctorReport,
@@ -268,7 +286,6 @@ def _check_missing_artifacts(project_dir: Path, report: DoctorReport,
         ],
     }
 
-    import glob
     for phase, artifacts in expected.items():
         if is_phase_overridden(overrides, phase):
             continue
@@ -284,8 +301,12 @@ def _check_missing_artifacts(project_dir: Path, report: DoctorReport,
                 ))
 
 
-def _check_epic_structure(project_dir: Path, report: DoctorReport):
-    """Cat 5: epic structure validation."""
+def _check_epic_structure(project_dir: Path, report: DoctorReport,
+                           overrides: dict[str, str]):
+    """Cat 5: epic structure validation. DI-3: honors overrides."""
+    if is_phase_overridden(overrides, "solutioning"):
+        return
+
     epics_dir = project_dir / "planning-artifacts"
     if not epics_dir.exists():
         return
@@ -328,28 +349,48 @@ def _check_schema_version(project_dir: Path, report: DoctorReport):
 
 
 def _check_runtime_drift(project_dir: Path, report: DoctorReport):
-    """Cat 7: runtime drift (live vs worktree plugin files)."""
-    # Check if this is a plugin development project
+    """Cat 7: runtime drift detection.
+
+    Checks if plugin files exist and are properly structured.
+    Does NOT check for literal strings that don't exist in the API.
+    """
     plugin_dir = project_dir / "plugins" / "bmad"
     if not plugin_dir.exists():
         return
 
-    # Check for common runtime drift indicators
+    lib_dir = plugin_dir / "lib"
+    if not lib_dir.exists():
+        report.findings.append(DoctorFinding(
+            category="Runtime Drift",
+            severity=Severity.MEDIUM,
+            title="Plugin lib/ directory missing",
+            detail="plugins/bmad/lib/ should contain shared modules.",
+            remediation="Check if the plugin was properly structured."
+        ))
+
     init_path = plugin_dir / "__init__.py"
     if init_path.exists():
-        content = init_path.read_text(encoding="utf-8", errors="replace")
-        if "register_hook" not in content:
-            report.findings.append(DoctorFinding(
-                category="Runtime Drift",
-                severity=Severity.HIGH,
-                title="Plugin __init__.py missing hook registration",
-                detail="The plugin's __init__.py doesn't register any hooks.",
-                remediation="Check if the plugin was properly initialized."
-            ))
+        try:
+            content = init_path.read_text(encoding="utf-8", errors="replace")
+            # Check for hook registration (actual API methods)
+            has_hooks = any(kw in content for kw in [
+                "register_hook", "register_pre_tool_call",
+                "register_post_tool_call", "register_command"
+            ])
+            if not has_hooks:
+                report.findings.append(DoctorFinding(
+                    category="Runtime Drift",
+                    severity=Severity.LOW,
+                    title="Plugin has no hook/command registrations",
+                    detail="__init__.py doesn't register any hooks or commands.",
+                    remediation="Verify plugin initialization is correct."
+                ))
+        except OSError as e:
+            logger.debug("[doctor] can't read __init__.py: %s", e)
 
 
 def _check_story_consolidation(project_dir: Path, report: DoctorReport):
-    """Cat 8: story consolidation status (Epic 7 pattern)."""
+    """Cat 8: story consolidation status."""
     status_path = project_dir / "planning-artifacts" / "sprint-status.yaml"
     if not status_path.exists():
         return
@@ -367,14 +408,14 @@ def _check_story_consolidation(project_dir: Path, report: DoctorReport):
     if not isinstance(stories, dict):
         return
 
-    # Check for stories with old-format IDs (e.g., "1.1" vs "7.1")
-    old_format = [sid for sid in stories if "." in str(sid) and not str(sid)[0].isdigit()]
+    old_format = [str(sid) for sid in stories
+                  if "." in str(sid) and not str(sid)[0].isdigit()]
     if old_format:
         report.findings.append(DoctorFinding(
             category="Story Consolidation",
             severity=Severity.LOW,
             title=f"{len(old_format)} stories with non-standard IDs",
-            detail=f"Stories: {', '.join(old_format[:5])}...",
+            detail=f"Stories: {', '.join(old_format[:5])}",
             remediation="Consider running `/bmad:migrate-stories-to-epic`."
         ))
 
@@ -383,7 +424,6 @@ def _check_ocr_integration(project_dir: Path, report: DoctorReport):
     """Cat 9: OCR integration status."""
     ocr_runner = project_dir / "plugins" / "bmad" / "lib" / "ocr_runner.py"
     if ocr_runner.exists():
-        # Check if OCR CLI is available
         try:
             result = subprocess.run(
                 ["which", "ocr"], capture_output=True, text=True, timeout=5

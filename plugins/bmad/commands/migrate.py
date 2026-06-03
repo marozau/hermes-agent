@@ -49,7 +49,7 @@ def handler(ctx, args: str) -> str:
     spec, body = parse_command_body(body_path.read_text(encoding="utf-8"))
     rendered = render_command(spec, body, args=args, ctx=ctx)
 
-    from plugins.bmad.lib.migrate import create_migration_plan, execute_migration
+    from plugins.bmad.lib.migrate import create_migration_plan, execute_migration, WaveStatus
 
     plan = create_migration_plan(project_dir)
 
@@ -58,7 +58,21 @@ def handler(ctx, args: str) -> str:
 
     if flags["apply"] or flags["dry_run"]:
         waves = [flags["wave"]] if flags["wave"] else None
-        plan = execute_migration(plan, project_dir, waves=waves, dry_run=flags["dry_run"])
+
+        # --resume: find last successful wave and start from next
+        if flags["resume"] and not flags["wave"]:
+            # Run dry-run to detect state, then find resume point
+            plan = execute_migration(plan, project_dir, dry_run=True)
+            last_done = 0
+            for w in plan.waves:
+                if w.status == WaveStatus.DONE:
+                    last_done = w.wave
+            if last_done > 0 and last_done < 5:
+                waves = list(range(last_done + 1, 6))
+                plan = create_migration_plan(project_dir)  # Fresh plan
+
+        plan = execute_migration(plan, project_dir, waves=waves,
+                                 dry_run=flags["dry_run"])
         return f"{rendered}\n\n---\n\n{plan.to_markdown()}"
 
     return f"{rendered}\n\nUse `--plan` to see the plan, or `--apply` to execute."
