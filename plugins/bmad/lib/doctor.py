@@ -18,16 +18,16 @@ DI-1: Doctor NEVER mutates. Read-only file/git introspection only.
 
 from __future__ import annotations
 
+import glob
 import logging
 import subprocess
 from dataclasses import dataclass, field
 from enum import Enum
 from pathlib import Path
-from typing import Any
 
 import yaml
 
-from plugins.bmad.lib.phase_overrides import load_phase_overrides
+from plugins.bmad.lib.phase_overrides import load_phase_overrides, is_phase_overridden
 
 logger = logging.getLogger(__name__)
 
@@ -255,8 +255,6 @@ def _check_status_drift(project_dir: Path, report: DoctorReport):
 def _check_missing_artifacts(project_dir: Path, report: DoctorReport,
                               overrides: dict[str, str]):
     """Cat 4: missing planning/implementation artifacts."""
-    from plugins.bmad.lib.phase_overrides import is_phase_overridden
-
     expected = {
         "analysis": [
             ("planning-artifacts/product-brief.md", "Product brief"),
@@ -292,7 +290,6 @@ def _check_epic_structure(project_dir: Path, report: DoctorReport):
     if not epics_dir.exists():
         return
 
-    import glob
     epic_files = glob.glob(str(epics_dir / "epics-stories-*.md"))
     if not epic_files:
         report.findings.append(DoctorFinding(
@@ -399,8 +396,8 @@ def _check_ocr_integration(project_dir: Path, report: DoctorReport):
                     detail="lib/ocr_runner.py found but `ocr` CLI not in PATH.",
                     remediation="Install OCR CLI or ignore if not needed."
                 ))
-        except (subprocess.TimeoutExpired, FileNotFoundError):
-            pass
+        except (subprocess.TimeoutExpired, FileNotFoundError) as e:
+            logger.debug("[doctor] OCR check skipped: %s", e)
 
 
 def _check_spec_blocks(project_dir: Path, report: DoctorReport):
@@ -409,7 +406,6 @@ def _check_spec_blocks(project_dir: Path, report: DoctorReport):
     if not commands_dir.exists():
         return
 
-    import glob
     md_files = glob.glob(str(commands_dir / "*.md"))
     if not md_files:
         return

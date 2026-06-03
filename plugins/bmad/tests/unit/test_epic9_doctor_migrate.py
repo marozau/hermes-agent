@@ -281,3 +281,57 @@ class TestMigrate:
         plan = execute_migration(plan, tmp_path, waves=[99], dry_run=True)
         # Wave 99 doesn't exist, all should be skipped
         assert all(w.status == WaveStatus.SKIPPED for w in plan.waves)
+
+
+
+# ── Handler Integration ─────────────────────────────────────────────────
+
+class TestDoctorHandler:
+    def test_handler_returns_string(self):
+        """Handler returns rendered markdown."""
+        from plugins.bmad.commands.doctor import handler
+        result = handler(None, "")
+        assert isinstance(result, str)
+        assert "BMAD Doctor Report" in result
+
+    def test_handler_with_project_dir(self, minimal_project):
+        """Handler accepts project dir argument."""
+        from plugins.bmad.commands.doctor import handler
+        result = handler(None, str(minimal_project))
+        assert isinstance(result, str)
+        assert "Findings:" in result
+
+    def test_handler_no_bmad_project(self, tmp_path):
+        """Handler handles non-BMAD project gracefully."""
+        from plugins.bmad.commands.doctor import handler
+        result = handler(None, str(tmp_path))
+        assert isinstance(result, str)
+
+
+class TestMigrateHandler:
+    def test_handler_plan_flag(self, minimal_project):
+        """Handler --plan shows migration plan."""
+        from plugins.bmad.commands.migrate import handler
+        result = handler(None, f"--plan {minimal_project}")
+        assert isinstance(result, str)
+        assert "Migration Plan" in result
+
+    def test_handler_dry_run_flag(self, minimal_project):
+        """Handler --dry-run simulates execution."""
+        from plugins.bmad.commands.migrate import handler
+        result = handler(None, f"--dry-run {minimal_project}")
+        assert isinstance(result, str)
+        assert "DRY RUN" in result
+
+    def test_handler_no_flags(self, minimal_project):
+        """Handler without flags shows usage hint."""
+        from plugins.bmad.commands.migrate import handler
+        result = handler(None, str(minimal_project))
+        assert isinstance(result, str)
+        assert "--plan" in result
+
+    def test_handler_wave_flag(self, minimal_project):
+        """Handler --wave N selects single wave."""
+        from plugins.bmad.commands.migrate import handler
+        result = handler(None, f"--dry-run --wave 1 {minimal_project}")
+        assert isinstance(result, str)
