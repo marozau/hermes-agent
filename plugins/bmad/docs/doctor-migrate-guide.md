@@ -20,8 +20,8 @@ Read-only diagnostic for BMAD projects. Checks 10 categories and produces a seve
 5. **Epic Structure** — epics-stories documents
 6. **Schema Version** — config version field
 7. **Runtime Drift** — plugin __init__.py hooks
-8. **Story Consolidation** — story ID format
-9. **OCR Integration** — OCR CLI availability
+8. **Story Audit (diagnostic)** — story ID format
+9. **OCR Status Check (diagnostic)** — OCR CLI availability
 10. **Spec Blocks** — Epic 12 adoption
 
 ### Severity Levels
@@ -51,8 +51,8 @@ Per-wave BMAD project migration with atomic git commits.
 1. **Workspace Pattern Fix** — ensure bmad/config.yaml exists
 2. **Config Schema Upgrade** — add version field
 3. **Epic Structure Repair** — ensure planning-artifacts/
-4. **Story Consolidation** — standardize story IDs
-5. **OCR Integration** — check OCR CLI (optional)
+4. **Story Audit (diagnostic)** — standardize story IDs
+5. **OCR Status Check (diagnostic)** — check OCR CLI (optional)
 
 ### Rollback
 

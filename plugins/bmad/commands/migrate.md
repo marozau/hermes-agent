@@ -24,7 +24,7 @@ Migrate this BMAD project to the current schema version.
 1. Workspace Pattern Fix
 2. Config Schema Upgrade
 3. Epic Structure Repair
-4. Story Consolidation
-5. OCR Integration (optional)
+4. Story Audit (diagnostic)
+5. OCR Status Check (diagnostic)
 
 Each wave produces one atomic git commit. Use `git revert <SHA>` to rollback.

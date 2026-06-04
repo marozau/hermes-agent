@@ -178,9 +178,13 @@ def execute_migration(plan: MigrationPlan, project_dir: Path,
                     wave.message = "Not a git repository — run `git init` first" if is_not_repo else "Dirty worktree — commit or stash changes first"
             return plan
 
+    # Get SHAs for any waves that were already completed
+    wave_shas = _get_wave_shas_from_git(project_dir) if not dry_run else {}
+
     for wave in plan.waves:
         if wave.wave not in target_waves:
             wave.status = WaveStatus.SKIPPED
+            wave.commit_sha = wave_shas.get(wave.wave, "")
             continue
 
         wave.status = WaveStatus.RUNNING

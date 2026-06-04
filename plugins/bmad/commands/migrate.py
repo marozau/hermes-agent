@@ -57,8 +57,7 @@ def handler(ctx, args: str) -> str:
 
     if flags["apply"] or flags["dry_run"]:
         waves = [flags["wave"]] if flags["wave"] else None
-        if flags["resume"] and flags["wave"]:
-            return f"{rendered}\n\n⚠️ `--resume` and `--wave` are mutually exclusive. Using `--wave {flags['wave']}` only."
+        # --resume with --wave: honor --wave, drop resume (wave takes precedence)
 
         plan = create_migration_plan(project_dir)
         plan = execute_migration(

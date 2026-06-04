@@ -161,10 +161,10 @@ def _check_git_commits(project_dir: Path, story_id: str) -> bool:
         )
         if not result.stdout.strip():
             return False
-        # Post-filter: reject matches that are version strings (v9.1.0)
+        # Post-filter: reject version-like matches (v9.1.0, 9.1.0, bump to 9.1.0)
         for line in result.stdout.strip().split("\n"):
             # Skip lines where the story ID appears only as part of a version
-            if re.search(rf"v\d*{re.escape(story_id)}\.\d", line):
+            if re.search(rf"{re.escape(story_id)}\.\d", line):
                 continue
             return True
         return False
@@ -187,10 +187,10 @@ def _check_predicates(project_dir: Path, story_id: str) -> bool:
         )
         if not result.stdout.strip():
             return False
-        # Post-filter: reject matches that are version strings (v9.1.0)
+        # Post-filter: reject version-like matches (v9.1.0, 9.1.0, bump to 9.1.0)
         for line in result.stdout.strip().split("\n"):
             # Skip lines where the story ID appears only as part of a version
-            if re.search(rf"v\d*{re.escape(story_id)}\.\d", line):
+            if re.search(rf"{re.escape(story_id)}\.\d", line):
                 continue
             return True
         return False
