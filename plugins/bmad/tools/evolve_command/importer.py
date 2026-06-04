@@ -25,25 +25,15 @@ from typing import Optional
 import yaml
 
 # Re-export from vendored module for convenience.
-# Support both package-relative and standalone imports.
-try:
-    from ._vendor.external_importers import (  # type: ignore[no-redef]
-        SECRET_PATTERNS,
-        _contains_secret,
-        _is_relevant_to_skill,
-        ClaudeCodeImporter,
-        CopilotImporter,
-        HermesSessionImporter,
-    )
-except ImportError:
-    from evolve_command._vendor.external_importers import (  # type: ignore[no-redef]
-        SECRET_PATTERNS,
-        _contains_secret,
-        _is_relevant_to_skill,
-        ClaudeCodeImporter,
-        CopilotImporter,
-        HermesSessionImporter,
-    )
+# Import from fork package (Epic 14 migration — _vendor/ deleted)
+from evolution.core.external_importers import (  # type: ignore[no-redef]
+    SECRET_PATTERNS,
+    _contains_secret,
+    _is_relevant_to_skill,
+    ClaudeCodeImporter,
+    CopilotImporter,
+    HermesSessionImporter,
+)
 
 
 @dataclass(frozen=True)
