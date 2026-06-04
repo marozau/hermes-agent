@@ -111,8 +111,8 @@ def run_doctor(project_dir: Path) -> DoctorReport:
         ("Epic Structure", lambda: _check_epic_structure(project_dir, report)),
         ("Schema Version", lambda: _check_schema_version(project_dir, report)),
         ("Runtime Drift", lambda: _check_runtime_drift(project_dir, report)),
-        ("Story Consolidation", lambda: _check_story_consolidation(project_dir, report)),
-        ("OCR Integration", lambda: _check_ocr_integration(project_dir, report)),
+        ("Story Audit", lambda: _check_story_consolidation(project_dir, report)),
+        ("OCR Status Check", lambda: _check_ocr_integration(project_dir, report)),
         ("Spec Blocks", lambda: _check_spec_blocks(project_dir, report)),
     ]
 
@@ -410,7 +410,7 @@ def _check_story_consolidation(project_dir: Path, report: DoctorReport):
                   if "." in str(sid) and not str(sid)[0].isdigit()]
     if old_format:
         report.findings.append(DoctorFinding(
-            category="Story Consolidation",
+            category="Story Audit",
             severity=Severity.LOW,
             title=f"{len(old_format)} stories with non-standard IDs",
             detail=f"Stories: {', '.join(old_format[:5])}",
@@ -428,7 +428,7 @@ def _check_ocr_integration(project_dir: Path, report: DoctorReport):
             )
             if result.returncode != 0:
                 report.findings.append(DoctorFinding(
-                    category="OCR Integration",
+                    category="OCR Status Check",
                     severity=Severity.INFO,
                     title="OCR runner exists but CLI not installed",
                     detail="lib/ocr_runner.py found but `ocr` CLI not in PATH.",

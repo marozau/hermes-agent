@@ -108,7 +108,7 @@ def _get_last_wave_from_git(project_dir: Path) -> int:
     """Find last completed migration wave from git log."""
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]"],
+            ["git", "log", "--format=%H %s", "--grep", "\\[bmad-migrate\\]"],
             cwd=project_dir, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
@@ -128,7 +128,7 @@ def _get_wave_shas_from_git(project_dir: Path) -> dict[int, str]:
     shas: dict[int, str] = {}
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]"],
+            ["git", "log", "--format=%H %s", "--grep", "\\[bmad-migrate\\]"],
             cwd=project_dir, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
@@ -136,7 +136,7 @@ def _get_wave_shas_from_git(project_dir: Path) -> dict[int, str]:
         for line in result.stdout.strip().split("\n"):
             if not line.strip():
                 continue
-            sha = line.split()[0]
+            sha = line.split()[0]  # Full 40-char SHA from --format=%H
             for w in range(1, 6):
                 if f"wave {w}:" in line.lower() and w not in shas:
                     shas[w] = sha

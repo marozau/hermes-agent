@@ -39,9 +39,9 @@ class TestFalseGreenFixes:
         subprocess.run(["git", "commit", "-m", "[bmad-migrate] wave 2: config schema upgrade"],
                        cwd=tmp_path, capture_output=True)
         # Get expected SHA for wave 1
-        result = subprocess.run(["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\] wave 1"],
+        result = subprocess.run(["git", "log", "--format=%H", "--grep", "\\[bmad-migrate\\] wave 1", "-1"],
                                 cwd=tmp_path, capture_output=True, text=True)
-        expected_sha = result.stdout.strip().split()[0]
+        expected_sha = result.stdout.strip()
         # Resume — waves 1-2 should have SHAs, wave 3+ should run
         plan = create_migration_plan(tmp_path)
         plan = execute_migration(plan, tmp_path, resume=True)
@@ -50,6 +50,31 @@ class TestFalseGreenFixes:
             f"Wave 1 SHA should be {expected_sha}, got '{plan.waves[0].commit_sha}'"
         assert plan.waves[1].status == WaveStatus.SKIPPED
         assert plan.waves[1].commit_sha != "", "Wave 2 SHA should be preserved"
+
+
+
+    def test_resume_preserves_shas_when_all_done(self, tmp_path):
+        """All-done resume (early-exit branch) must preserve SHAs."""
+        subprocess.run(["git", "init"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.email", "t@t"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "config", "user.name", "T"], cwd=tmp_path, capture_output=True)
+        (tmp_path / "init.txt").write_text("init")
+        subprocess.run(["git", "add", "init.txt"], cwd=tmp_path, capture_output=True)
+        subprocess.run(["git", "commit", "-m", "init"], cwd=tmp_path, capture_output=True)
+        # Simulate all 5 waves completed
+        for w in range(1, 6):
+            (tmp_path / f"w{w}.txt").write_text(f"w{w}")
+            subprocess.run(["git", "add", f"w{w}.txt"], cwd=tmp_path, capture_output=True)
+            subprocess.run(["git", "commit", "-m", f"[bmad-migrate] wave {w}: test wave"],
+                           cwd=tmp_path, capture_output=True)
+        # Get expected SHA for wave 1
+        r = subprocess.run(["git", "log", "--format=%H", "--grep", "\[bmad-migrate\] wave 1", "-1"],
+                           cwd=tmp_path, capture_output=True, text=True)
+        expected_sha = r.stdout.strip()
+        plan = create_migration_plan(tmp_path)
+        plan = execute_migration(plan, tmp_path, resume=True)
+        assert plan.waves[0].status == WaveStatus.DONE
+        assert plan.waves[0].commit_sha == expected_sha
 
     def test_promotion_check_asserts_recommended(self, tmp_path):
         """ER3-5: not-started with 2/3 evidence should recommend in-progress."""
@@ -91,9 +116,8 @@ class TestFalseGreenFixes:
         # Details must not contain 'unknown' or '?'
         details = plan.waves[3].details or ""
         message = plan.waves[3].message or ""
-        combined = details + message
-        assert "unknown" not in combined.lower(), f"Found 'unknown' in: {combined}"
-        assert "?" not in combined or "Found" in message, f"Found '?' in: {combined}"
+        assert "unknown" not in details.lower(), f"Found 'unknown' in details: {details}"
+        assert "?" not in details, f"Dict key mismatch — got '?' in: {details}"
 
 
 class TestRegexFix:

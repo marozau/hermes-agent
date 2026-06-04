@@ -1,6 +1,9 @@
 """Handler for /bmad:migrate — per-wave BMAD project migration."""
 
 from __future__ import annotations
+import logging
+
+logger = logging.getLogger(__name__)
 
 from pathlib import Path
 
@@ -58,6 +61,8 @@ def handler(ctx, args: str) -> str:
     if flags["apply"] or flags["dry_run"]:
         waves = [flags["wave"]] if flags["wave"] else None
         # --resume with --wave: honor --wave, drop resume (wave takes precedence)
+        if flags["resume"] and flags["wave"]:
+            logger.info("[migrate] --resume ignored because --wave %d is set", flags["wave"])
 
         plan = create_migration_plan(project_dir)
         plan = execute_migration(

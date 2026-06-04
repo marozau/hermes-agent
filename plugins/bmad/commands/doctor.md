@@ -20,8 +20,8 @@ Run a read-only diagnostic on this BMAD project.
 5. **Epic Structure** — epics-stories documents
 6. **Schema Version** — config version field
 7. **Runtime Drift** — plugin __init__.py hooks
-8. **Story Consolidation** — story ID format
-9. **OCR Integration** — OCR CLI availability
+8. **Story Audit (diagnostic)** — story ID format
+9. **OCR Status Check (diagnostic)** — OCR CLI availability
 10. **Spec Blocks** — Epic 12 adoption
 
 ## Output
