@@ -96,11 +96,11 @@ def _check_dirty_worktree(project_dir: Path) -> str | None:
             cwd=project_dir, capture_output=True, text=True, timeout=10
         )
         if result.returncode != 0:
-            return None  # Not a git repo — not "dirty" in the git sense
+            return "NOT_A_GIT_REPO"  # Distinct from "dirty" — must halt
         if result.stdout.strip():
             return result.stdout.strip()
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
-        pass
+        return "NOT_A_GIT_REPO"  # Can't determine — halt
     return None
 
 
@@ -108,8 +108,8 @@ def _get_last_wave_from_git(project_dir: Path) -> int:
     """Find last completed migration wave from git log."""
     try:
         result = subprocess.run(
-            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]", "-10"],
-            cwd=project_dir, capture_output=True, text=True, timeout=10
+            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]"],
+            cwd=project_dir, capture_output=True, text=True, timeout=30
         )
         if result.returncode != 0:
             return 0
@@ -121,6 +121,28 @@ def _get_last_wave_from_git(project_dir: Path) -> int:
         return last_wave
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return 0
+
+
+def _get_wave_shas_from_git(project_dir: Path) -> dict[int, str]:
+    """Get commit SHAs for each completed migration wave."""
+    shas: dict[int, str] = {}
+    try:
+        result = subprocess.run(
+            ["git", "log", "--oneline", "--grep", "\\[bmad-migrate\\]"],
+            cwd=project_dir, capture_output=True, text=True, timeout=30
+        )
+        if result.returncode != 0:
+            return shas
+        for line in result.stdout.strip().split("\n"):
+            if not line.strip():
+                continue
+            sha = line.split()[0]
+            for w in range(1, 6):
+                if f"wave {w}:" in line.lower() and w not in shas:
+                    shas[w] = sha
+    except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
+        pass
+    return shas
 
 
 def execute_migration(plan: MigrationPlan, project_dir: Path,
@@ -135,10 +157,13 @@ def execute_migration(plan: MigrationPlan, project_dir: Path,
     if resume and not waves:
         last_done = _get_last_wave_from_git(project_dir)
         if last_done > 0:
+            # Get actual SHAs from git log for completed waves
+            wave_shas = _get_wave_shas_from_git(project_dir)
             target_waves = [w for w in target_waves if w > last_done]
             if not target_waves:
                 for wave in plan.waves:
                     wave.status = WaveStatus.DONE
+                    wave.commit_sha = wave_shas.get(wave.wave, "")
                     wave.message = f"Already completed (found wave {last_done} in git)"
                 return plan
 
@@ -146,10 +171,11 @@ def execute_migration(plan: MigrationPlan, project_dir: Path,
     if not dry_run:
         dirty = _check_dirty_worktree(project_dir)
         if dirty:
+            is_not_repo = dirty == "NOT_A_GIT_REPO"
             for wave in plan.waves:
                 if wave.wave in target_waves:
                     wave.status = WaveStatus.FAILED
-                    wave.message = "Dirty worktree — commit or stash changes first"
+                    wave.message = "Not a git repository — run `git init` first" if is_not_repo else "Dirty worktree — commit or stash changes first"
             return plan
 
     for wave in plan.waves:
@@ -218,7 +244,7 @@ def _preview_wave4(wave: WaveResult, project_dir: Path):
             if legacy:
                 wave.would_change.append(f"Found {len(legacy)} legacy story files to consolidate")
                 for s in legacy[:5]:
-                    wave.would_change.append(f"  - {s.get('file', 'unknown')}")
+                    wave.would_change.append(f"  - {s.get('id', s.get('title', 'unknown'))}")
             else:
                 wave.would_change.append("No legacy story files found")
         except ImportError:
@@ -308,11 +334,17 @@ def _wave_config_bootstrap(project_dir: Path, wave: WaveResult):
             force=False,
             interactive=False,
         )
-        created_files.append("bmad/config.yaml")
-        # bootstrap creates multiple files
-        for p in ["planning-artifacts/workflow-status.yaml"]:
-            if (project_dir / p).exists():
-                created_files.append(p)
+        # Stage all files created by bootstrap (don't hardcode list)
+        result = subprocess.run(
+            ["git", "status", "--porcelain"], cwd=project_dir,
+            capture_output=True, text=True, timeout=10
+        )
+        for line in result.stdout.strip().split("\n"):
+            if line.strip():
+                # Extract filename from porcelain status (XY filename)
+                parts = line.strip().split(None, 1)
+                if len(parts) == 2:
+                    created_files.append(parts[1])
         wave.message = f"Bootstrapped BMAD project: {config.get('project_name', project_dir.name)}"
     except RuntimeError as e:
         wave.message = f"Bootstrap failed: {e}"
@@ -338,7 +370,7 @@ def _wave_config_upgrade(project_dir: Path, wave: WaveResult):
 
     try:
         with open(config_path, encoding="utf-8") as f:
-            config = yaml.safe_load(f)
+            config = yaml.safe_load(f) or {}
     except (yaml.YAMLError, OSError) as e:
         wave.message = f"Cannot read config: {e}"
         wave.status = WaveStatus.FAILED
@@ -404,7 +436,7 @@ def _wave_story_consolidation(project_dir: Path, wave: WaveResult):
         wave.commit_sha = _git_commit(project_dir, "wave 4: story consolidation (clean)", [])
     else:
         wave.message = f"Found {len(legacy)} legacy story files"
-        wave.details = "\n".join(f"- {s.get('file', '?')}" for s in legacy[:10])
+        wave.details = "\n".join(f"- {s.get('id', s.get('title', '?'))}" for s in legacy[:10])
         # Report only — actual consolidation requires user review
         wave.commit_sha = _git_commit(project_dir, f"wave 4: story scan ({len(legacy)} legacy)", [])
 

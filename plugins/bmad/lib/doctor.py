@@ -259,7 +259,7 @@ def _check_status_drift(project_dir: Path, report: DoctorReport):
                 severity=Severity.HIGH,
                 title=f"Story {evidence.story_id} marked done with no evidence",
                 detail=f"No dev notes, no git commits, no tests found. {evidence.details}",
-                remediation="Verify completion or update status to 'pending'."
+                remediation="Verify completion or update status to 'not-started'."
             ))
         elif evidence.current_status == "done" and evidence.evidence_state == EvidenceState.UNCERTAIN:
             report.findings.append(DoctorFinding(

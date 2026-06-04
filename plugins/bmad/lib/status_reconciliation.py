@@ -27,7 +27,7 @@ class EvidenceState(str, Enum):
     CONFIRMED = "confirmed"      # All sources agree: done
     PROBABLE = "probable"        # 2/3 sources agree
     UNCERTAIN = "uncertain"      # 1/3 or conflicting
-    NOT_STARTED = "not_started"  # No evidence
+    NOT_STARTED = "not-started"  # No evidence
 
 
 # Canonical status vocabulary (kebab-case per project convention)
@@ -108,7 +108,7 @@ def _gather_evidence(project_dir: Path, story_id: str,
     elif true_count == 2:
         state = EvidenceState.PROBABLE
         # DI-4: Don't promote silently — only recommend if current is empty/pending
-        if current in ("", "pending"):
+        if current in ("", "not-started"):
             recommended = "in-progress"
         else:
             recommended = current
@@ -151,16 +151,24 @@ def _check_git_commits(project_dir: Path, story_id: str) -> bool:
     Uses extended-regexp with negative lookahead to avoid substring matches.
     """
     try:
-        # Negative lookahead: match story ID not followed by .digit (avoids v9.1.0)
-        pattern = rf"(?<!\d){re.escape(story_id)}(?!\.\d)"
+        # Use basic grep, then post-filter to avoid version-string false positives
         result = subprocess.run(
-            ["git", "log", "--oneline", "--extended-regexp", "--grep", pattern, "-1"],
+            ["git", "log", "--oneline", "--grep", story_id, "-10"],
             cwd=project_dir,
             capture_output=True,
             text=True,
             timeout=10,
         )
-        return bool(result.stdout.strip())
+        if not result.stdout.strip():
+            return False
+        # Post-filter: reject matches that are version strings (v9.1.0)
+        for line in result.stdout.strip().split("\n"):
+            # Skip lines where the story ID appears only as part of a version
+            import re as _re
+            if _re.search(rf"v\d*{_re.escape(story_id)}\.\d", line):
+                continue
+            return True
+        return False
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False
 
@@ -178,6 +186,15 @@ def _check_predicates(project_dir: Path, story_id: str) -> bool:
             text=True,
             timeout=10,
         )
-        return bool(result.stdout.strip())
+        if not result.stdout.strip():
+            return False
+        # Post-filter: reject matches that are version strings (v9.1.0)
+        for line in result.stdout.strip().split("\n"):
+            # Skip lines where the story ID appears only as part of a version
+            import re as _re
+            if _re.search(rf"v\d*{_re.escape(story_id)}\.\d", line):
+                continue
+            return True
+        return False
     except (subprocess.TimeoutExpired, FileNotFoundError, OSError):
         return False

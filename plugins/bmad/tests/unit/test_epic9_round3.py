@@ -117,8 +117,8 @@ class TestDirtyWorktree:
         (tmp_path / "dirty.txt").write_text("dirty")
         assert _check_dirty_worktree(tmp_path) is not None
 
-    def test_non_git_repo_returns_none(self, tmp_path):
-        assert _check_dirty_worktree(tmp_path) is None
+    def test_non_git_repo_returns_not_repo(self, tmp_path):
+        assert _check_dirty_worktree(tmp_path) == "NOT_A_GIT_REPO"
 
 
 class TestResume:
