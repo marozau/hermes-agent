@@ -1,0 +1,4 @@
+# Ignore all report files except .gitkeep
+*
+!.gitignore
+!.gitkeep

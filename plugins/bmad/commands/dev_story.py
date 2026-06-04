@@ -3,14 +3,17 @@
 Story 7.2: Accepts epic-doc anchor format <path>#story-X.Y to extract
 a specific story section from an epic document.
 Story 12.3: Uses spec: frontmatter + render_command for structured output.
+Story 13.8: Wire predicate_runner.run_predicates to dev-story handler (T-11).
 """
 
 from __future__ import annotations
 
+import logging
 import re
 from pathlib import Path
 
 COMMAND = "dev-story"
+logger = logging.getLogger(__name__)
 
 
 def _extract_story_section(epic_path: Path, story_id: str) -> str | None:
@@ -38,6 +41,61 @@ def _extract_story_section(epic_path: Path, story_id: str) -> str | None:
     return text[start:end].strip()
 
 
+def _write_predicate_results(
+    project_dir: Path, story_id: str, results: list[dict],
+) -> None:
+    """T-11: Write predicate results to sprint-status.yaml.
+
+    Stores under predicate_results.<story_id>.<predicate_name>.
+    Creates the file if it doesn't exist.
+    """
+    import yaml
+
+    status_path = project_dir / "planning-artifacts" / "sprint-status.yaml"
+    try:
+        if status_path.exists():
+            data = yaml.safe_load(status_path.read_text(encoding="utf-8"))
+            if not isinstance(data, dict):
+                data = {}
+        else:
+            data = {}
+    except (yaml.YAMLError, OSError, PermissionError, UnicodeDecodeError) as e:
+        logger.warning("[dev_story] Failed to load sprint-status.yaml: %s", e)
+        data = {}
+
+    pred_results = data.setdefault("predicate_results", {})
+    story_results = pred_results.setdefault(story_id, {})
+    for r in results:
+        desc = r.get("description", "unknown")
+        # Use a sanitized key from the description
+        key = re.sub(r"[^a-z0-9]+", "_", desc.lower()).strip("_")
+        story_results[key] = {
+            "passed": r.get("passed"),
+            "reason": r.get("reason", ""),
+        }
+
+    try:
+        import tempfile, os
+        status_path.parent.mkdir(parents=True, exist_ok=True)
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(status_path.parent), suffix=".tmp"
+        )
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_f:
+                tmp_f.write(yaml.safe_dump(data, sort_keys=False))
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            os.replace(tmp_path, str(status_path))
+        except (OSError, yaml.YAMLError):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
+            raise
+    except (yaml.YAMLError, OSError, PermissionError) as e:
+        logger.warning("[dev_story] Failed to write predicate results: %s", e)
+
+
 def handler(ctx, args: str) -> str:
     raw_dir = getattr(ctx, "working_directory", None) or "."
     project_dir = Path(raw_dir).resolve()
@@ -58,6 +116,9 @@ def handler(ctx, args: str) -> str:
     # Story 7.2: Epic-doc anchor support — <path>#story-X.Y
     args_stripped = args.strip()
     body_path = Path(__file__).with_name("dev-story.md")
+    story_id = None
+    spec = None
+
     if "#story-" in args_stripped:
         parts = args_stripped.split("#story-", 1)
         epic_path_str = parts[0].strip()
@@ -72,7 +133,11 @@ def handler(ctx, args: str) -> str:
                     from plugins.bmad.lib.spec_parser import parse_command_body
                     from plugins.bmad.lib.render import render_command
                     spec, _ = parse_command_body(body_path.read_text(encoding="utf-8"))
-                    return render_command(spec, section, args=args_stripped, ctx=ctx, template_body=False)
+                    result = render_command(spec, section, args=args_stripped, ctx=ctx, template_body=False)
+                    # T-11: Run predicates after rendering
+                    if spec and spec.predicate_module:
+                        _run_and_record_predicates(project_dir, spec, story_id, ctx)
+                    return result
                 return f"⚠️  Story {story_id} not found in {epic_path}"
             return f"⚠️  Epic document not found: {epic_path}"
 
@@ -83,4 +148,40 @@ def handler(ctx, args: str) -> str:
     from plugins.bmad.lib.render import render_command
 
     spec, body = parse_command_body(raw_content)
-    return render_command(spec, body, args=args_stripped, ctx=ctx)
+    result = render_command(spec, body, args=args_stripped, ctx=ctx)
+
+    # T-11: Run predicates after rendering (non-anchor path)
+    if spec and spec.predicate_module:
+        # Use a fallback story_id derived from args or "default"
+        fallback_id = story_id if story_id else (args_stripped.split()[0] if args_stripped.strip() else "default")
+        _run_and_record_predicates(project_dir, spec, fallback_id, ctx)
+
+    return result
+
+
+def _run_and_record_predicates(
+    project_dir: Path, spec, story_id: str, ctx=None,
+) -> None:
+    """T-11: Run predicates and record results to sprint-status.yaml.
+
+    Backward-compat: skipped if spec has no predicate_module.
+    """
+    from plugins.bmad.lib.predicate_runner import run_predicates
+
+    # T-11: Backward-compat guard — skip if no predicate_module
+    if not getattr(spec, "predicate_module", None):
+        return
+
+    try:
+        results = run_predicates(spec, project_dir, ctx)
+        if results:
+            _write_predicate_results(project_dir, story_id, results)
+            logger.info(
+                "[dev_story] T-11: Recorded %d predicate results for story %s",
+                len(results), story_id,
+            )
+    except Exception:
+        logger.warning(
+            "[dev_story] T-11: Predicate run failed for story %s",
+            story_id, exc_info=True,
+        )
