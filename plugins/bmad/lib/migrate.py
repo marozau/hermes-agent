@@ -83,8 +83,8 @@ def create_migration_plan(project_dir: Path) -> MigrationPlan:
     plan.waves.append(WaveResult(wave=1, name="Config Bootstrap"))
     plan.waves.append(WaveResult(wave=2, name="Config Schema Upgrade"))
     plan.waves.append(WaveResult(wave=3, name="Epic Structure Repair"))
-    plan.waves.append(WaveResult(wave=4, name="Story Consolidation"))
-    plan.waves.append(WaveResult(wave=5, name="OCR Status Check"))
+    plan.waves.append(WaveResult(wave=4, name="Story Audit (diagnostic)"))
+    plan.waves.append(WaveResult(wave=5, name="OCR Status Check (diagnostic)"))
     return plan
 
 

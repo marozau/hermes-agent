@@ -182,15 +182,16 @@ class TestDoctorPerCheckIsolation:
         report = run_doctor(tmp_path)
         assert report.categories_checked == 10
 
-    def test_crashing_check_reports_high_severity(self):
-        """A crashing check should be HIGH severity, not LOW."""
-        # This is tested by the per-check wrapper — if a check raises,
-        # the finding should be HIGH
-        from plugins.bmad.lib.doctor import DoctorFinding
-        finding = DoctorFinding(
-            category="test", severity=Severity.HIGH,
-            title="Diagnostic check crashed: test",
-            detail="Exception: RuntimeError: boom",
-            remediation="This is a doctor bug — report it."
-        )
-        assert finding.severity == Severity.HIGH
+    def test_crashing_check_reports_high_severity(self, tmp_path):
+        """A crashing check should emit HIGH severity finding via run_doctor."""
+        from unittest.mock import patch
+        # Create a project that triggers doctor
+        (tmp_path / "bmad").mkdir()
+        (tmp_path / "bmad" / "config.yaml").write_text("version: 1\n")
+        # Patch one check to raise
+        with patch("plugins.bmad.lib.doctor._check_status_drift", side_effect=RuntimeError("boom")):
+            report = run_doctor(tmp_path)
+        crash_findings = [f for f in report.findings if "crashed" in f.title.lower()]
+        assert len(crash_findings) == 1
+        assert crash_findings[0].severity == Severity.HIGH
+        assert "boom" in crash_findings[0].detail
