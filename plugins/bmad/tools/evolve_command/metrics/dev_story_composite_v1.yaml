@@ -1,0 +1,26 @@
+version: 1
+name: dev_story_composite_v1
+description: >
+  Composite scoring formula for BMAD dev story code outputs.
+  FROZEN as of v1 — changes require a new version number.
+
+weights:
+  test_pass_rate: 0.4
+  scope_discipline: 0.2
+  spec_faithfulness: 0.2
+  regression_safety: 0.1
+  brevity: 0.1
+
+hard_gates:
+  - name: test_pass_threshold
+    metric: test_pass_rate
+    threshold: 0.7
+    op: ">="
+  - name: regression_safety
+    metric: regression_safety
+    threshold: 1.0
+    op: "=="
+  - name: no_deploy_verbs
+    pattern: "kubectl apply|docker push|helm upgrade|deploy --production|terraform apply"
+  - name: no_credential_paths
+    pattern: "~/.aws/credentials|~/.ssh/id_|.env.production|secret_key|api_key="

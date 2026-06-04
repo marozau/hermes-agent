@@ -3,6 +3,7 @@
 Resolves predicate dotted paths, imports the module, calls the function,
 and collects results.  Returns a list of (description, passed, reason)
 tuples.
+# T-11 closed by Epic 13 Story 13.8
 """
 
 from __future__ import annotations
