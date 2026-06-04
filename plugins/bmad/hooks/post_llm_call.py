@@ -17,7 +17,6 @@ logger = logging.getLogger(__name__)
 
 
 def post_llm_call(
-    ctx,
     session_id: str = "",
     user_message: str = "",
     assistant_response: str = "",
@@ -29,8 +28,8 @@ def post_llm_call(
     """Capture a post-LLM lifecycle event.
 
     Args match the ``invoke_hook("post_llm_call", ...)`` call site in
-    ``agent/conversation_loop.py`` (line ~4499). *ctx* is injected by
-    ``_bind_hook_ctx`` in ``__init__.py``.
+    ``agent/conversation_loop.py`` (line ~4499). Called directly (no
+    ``_bind_hook_ctx``) — receives only what Hermes passes as kwargs.
     """
     from plugins.bmad.lib.lifecycle_events import capture_event
 

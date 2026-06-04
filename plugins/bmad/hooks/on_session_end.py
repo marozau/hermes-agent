@@ -16,7 +16,6 @@ logger = logging.getLogger(__name__)
 
 
 def on_session_end(
-    ctx,
     session_id: str = "",
     completed: bool = False,
     interrupted: bool = False,
@@ -27,8 +26,8 @@ def on_session_end(
     """Capture a session-end lifecycle event.
 
     Args match the ``invoke_hook("on_session_end", ...)`` call site in
-    ``agent/conversation_loop.py`` (line ~4618). *ctx* is injected by
-    ``_bind_hook_ctx`` in ``__init__.py``.
+    ``agent/conversation_loop.py`` (line ~4618). Called directly (no
+    ``_bind_hook_ctx``) — receives only what Hermes passes as kwargs.
     """
     from plugins.bmad.lib.lifecycle_events import capture_event
 
