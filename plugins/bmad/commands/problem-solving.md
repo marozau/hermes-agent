@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Dr. Quinn
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Root cause identified"
+    - "Solution options evaluated"
+    - "Recommendation provided"
+---
+
 Run creative problem-solving with Dr. Quinn (CIS persona):
 
 1. **Frame** — Define the problem scope and constraints

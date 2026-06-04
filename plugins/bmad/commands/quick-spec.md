@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Dev
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Spec written"
+    - "Requirements clear"
+    - "Implementation approach defined"
+---
+
 Create a lightweight technical specification for a small feature (level 0-1):
 
 1. **Problem Statement** — What and why, context

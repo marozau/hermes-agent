@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Test automation scripts created"
+    - "CI integration configured"
+    - "Tests run successfully"
+---
+
 Run test automation workflow:
 
 1. **Load Context** — Review existing tests, framework, and coverage gaps

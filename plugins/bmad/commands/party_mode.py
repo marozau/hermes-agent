@@ -57,8 +57,10 @@ def _inline(topic: str) -> str:
     body_file = Path(__file__).with_name(f"{COMMAND}.md")
     if not body_file.exists():
         return f"# {COMMAND}\n\nBody file not found at {body_file}."
-    body = body_file.read_text(encoding="utf-8")
-    return body.replace("{args}", topic)
+    from plugins.bmad.lib.spec_parser import parse_command_body
+    from plugins.bmad.lib.render import render_command
+    spec, body = parse_command_body(body_file.read_text(encoding="utf-8"))
+    return render_command(spec, body, args=topic, template_body=True)
 
 
 # ── Fan-out mode ──────────────────────────────────────────────────────────

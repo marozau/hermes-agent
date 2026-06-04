@@ -1,3 +1,15 @@
+---
+spec:
+  persona: Architect
+  phase: solutioning
+  imperative_preamble: true
+  verification:
+    - "Architecture document written"
+    - "Component model defined"
+    - "API contracts specified"
+    - "Data model documented"
+---
+
 Design system architecture with key design decisions:
 
 1. **System Overview** — Purpose, scope, key stakeholders

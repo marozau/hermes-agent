@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Analyst
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Research findings written to planning-artifacts/"
+    - "Sources cited and verified"
+    - "Recommendations provided"
+---
+
 Conduct structured research for the current project:
 
 1. **Market Research** — Industry size, trends, growth rates, key players

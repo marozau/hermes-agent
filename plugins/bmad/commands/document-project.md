@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Analyst
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Project documentation complete"
+    - "Architecture patterns identified"
+    - "Tech stack catalogued"
+---
+
 Generate comprehensive project documentation:
 
 1. **Brownfield Analysis** — Analyze existing codebase structure, patterns, conventions

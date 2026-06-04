@@ -1,3 +1,15 @@
+---
+spec:
+  persona: SM
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Sprint backlog defined"
+    - "Story points estimated"
+    - "Capacity plan created"
+    - "Dependencies mapped"
+---
+
 Create a sprint plan from the epics and stories:
 
 1. **Sprint Goal** — What the sprint aims to deliver

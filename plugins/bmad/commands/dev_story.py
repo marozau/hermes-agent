@@ -2,6 +2,7 @@
 
 Story 7.2: Accepts epic-doc anchor format <path>#story-X.Y to extract
 a specific story section from an epic document.
+Story 12.3: Uses spec: frontmatter + render_command for structured output.
 """
 
 from __future__ import annotations
@@ -56,6 +57,7 @@ def handler(ctx, args: str) -> str:
 
     # Story 7.2: Epic-doc anchor support — <path>#story-X.Y
     args_stripped = args.strip()
+    body_path = Path(__file__).with_name("dev-story.md")
     if "#story-" in args_stripped:
         parts = args_stripped.split("#story-", 1)
         epic_path_str = parts[0].strip()
@@ -67,10 +69,18 @@ def handler(ctx, args: str) -> str:
             if epic_path.exists():
                 section = _extract_story_section(epic_path, story_id)
                 if section:
-                    return section
+                    from plugins.bmad.lib.spec_parser import parse_command_body
+                    from plugins.bmad.lib.render import render_command
+                    spec, _ = parse_command_body(body_path.read_text(encoding="utf-8"))
+                    return render_command(spec, section, args=args_stripped, ctx=ctx, template_body=False)
                 return f"⚠️  Story {story_id} not found in {epic_path}"
             return f"⚠️  Epic document not found: {epic_path}"
 
-    body_path = Path(__file__).with_name("dev-story.md")
-    body = body_path.read_text(encoding="utf-8")
-    return body
+    raw_content = body_path.read_text(encoding="utf-8")
+
+    # Story 12.3: Parse spec and render
+    from plugins.bmad.lib.spec_parser import parse_command_body
+    from plugins.bmad.lib.render import render_command
+
+    spec, body = parse_command_body(raw_content)
+    return render_command(spec, body, args=args_stripped, ctx=ctx)

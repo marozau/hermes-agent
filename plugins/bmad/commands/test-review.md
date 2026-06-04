@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Test quality assessed"
+    - "Coverage gaps identified"
+    - "Recommendations provided"
+---
+
 Run test quality review:
 
 1. **Load Context** — Review test suite, project requirements

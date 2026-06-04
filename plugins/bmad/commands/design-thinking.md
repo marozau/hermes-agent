@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Maya
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "User research synthesized"
+    - "Empathy map created"
+    - "Prototypes defined"
+---
+
 Run design thinking with Maya (CIS persona):
 
 1. **Empathize** — User research, personas, journey mapping

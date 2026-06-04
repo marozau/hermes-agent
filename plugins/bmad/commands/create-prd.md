@@ -1,3 +1,15 @@
+---
+spec:
+  persona: PM
+  phase: planning
+  imperative_preamble: true
+  verification:
+    - "PRD written to planning-artifacts/"
+    - "Functional requirements complete"
+    - "Non-functional requirements defined"
+    - "Epics and stories decomposed"
+---
+
 Create a Product Requirements Document (PRD) for the project:
 
 1. **Executive Summary** — Problem statement, solution overview, success criteria

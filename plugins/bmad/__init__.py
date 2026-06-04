@@ -82,21 +82,19 @@ def register(ctx) -> None:
     from plugins.bmad.hooks.subagent_stop import subagent_stop
 
     # ── Hooks ──────────────────────────────────────────
-    # 5 hooks declare ctx as their first positional arg → wrap with _bind_hook_ctx.
-    # 3 hooks (on_session_end, pre_llm_call, post_llm_call) already use the
-    # canonical kwarg-only signature → no binding needed.
+    # 8 hooks declare ctx as their first positional arg → all wrap with _bind_hook_ctx.
     ctx.register_hook("on_session_start",
         _catch_all("on_session_start")(_bind_hook_ctx(on_session_start)))
     ctx.register_hook("on_session_end",
-        _catch_all("on_session_end")(on_session_end))
+        _catch_all("on_session_end")(_bind_hook_ctx(on_session_end)))
     ctx.register_hook("pre_tool_call",
         _catch_all("pre_tool_call")(_bind_hook_ctx(pre_tool_call)))
     ctx.register_hook("post_tool_call",
         _catch_all("post_tool_call")(_bind_hook_ctx(post_tool_call)))
     ctx.register_hook("pre_llm_call",
-        _catch_all("pre_llm_call")(pre_llm_call))
+        _catch_all("pre_llm_call")(_bind_hook_ctx(pre_llm_call)))
     ctx.register_hook("post_llm_call",
-        _catch_all("post_llm_call")(post_llm_call))
+        _catch_all("post_llm_call")(_bind_hook_ctx(post_llm_call)))
     ctx.register_hook("transform_terminal_output",
         _catch_all("transform_terminal_output")(_bind_hook_ctx(transform_terminal_output)))
     ctx.register_hook("subagent_stop",
@@ -291,6 +289,10 @@ def register(ctx) -> None:
 
     # Meta — multi-persona round table (ungated)
     from plugins.bmad.commands.party_mode import handler as _party_mode_handler
+
+    # Epic 9 — Doctor + Migrate
+    from plugins.bmad.commands.doctor import handler as _doctor_handler
+    from plugins.bmad.commands.migrate import handler as _migrate_handler
 
     ctx.register_command(
         name="bmad:init",
@@ -507,6 +509,18 @@ def register(ctx) -> None:
         name="bmad:party-mode",
         handler=_bind_ctx(_party_mode_handler),
         args_hint="[--fan-out] <topic>",
+    )
+
+    # Epic 9: doctor + migrate
+    ctx.register_command(
+        name="bmad:doctor",
+        handler=_bind_ctx(_doctor_handler),
+        args_hint="[project_dir]",
+    )
+    ctx.register_command(
+        name="bmad:migrate",
+        handler=_bind_ctx(_migrate_handler),
+        args_hint="[--plan|--apply|--dry-run] [--wave N]",
     )
 
     # Epic 7: orchestrate + migration

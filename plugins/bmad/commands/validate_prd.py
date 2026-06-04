@@ -26,4 +26,10 @@ def handler(ctx, args: str) -> str:
 
     body_path = Path(__file__).with_name(f"{COMMAND}.md")
     body = body_path.read_text(encoding="utf-8")
-    return body
+
+    # Story 12.9: Parse spec and render
+    from plugins.bmad.lib.spec_parser import parse_command_body
+    from plugins.bmad.lib.render import render_command
+
+    spec, body_text = parse_command_body(body)
+    return render_command(spec, body_text, args=args.strip() if args else "", ctx=ctx)

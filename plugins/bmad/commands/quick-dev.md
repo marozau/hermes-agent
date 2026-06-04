@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Dev
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Feature implemented"
+    - "Tests pass"
+    - "Code follows conventions"
+---
+
 Quick development workflow for small features (level 0-1):
 
 1. **Clarify Intent** — Understand what needs to be built (one round of questions max)

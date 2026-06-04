@@ -119,7 +119,7 @@ def handler(ctx, args: str) -> str:
     if parsed.get("_error"):
         return f"⚠️  {parsed['_error']}"
     if parsed["no_fanout"]:
-        return _legacy_body(project_dir)
+        return _legacy_body()
 
     # Gather diff
     diff_text, diff_meta = _capture_diff(project_dir, parsed["diff_rev"])
@@ -731,9 +731,13 @@ def _resolve_project_dir(ctx) -> Path:
     return Path(raw).resolve()
 
 
-def _legacy_body(project_dir: Path) -> str:
+def _legacy_body() -> str:
     """Return the original prompt body — for users who prefer host-LLM orchestration."""
     body_path = Path(__file__).with_name(f"{COMMAND}.md")
     if body_path.exists():
-        return body_path.read_text(encoding="utf-8")
+        from plugins.bmad.lib.spec_parser import parse_command_body
+        spec, body = parse_command_body(body_path.read_text(encoding="utf-8"))
+        # R5-4: Strip frontmatter only — don't render through spec pipeline.
+        # Legacy mode returns raw body for host-LLM orchestration (Claude Code Task tool).
+        return body
     return f"# {COMMAND}\n\nBody file not found."

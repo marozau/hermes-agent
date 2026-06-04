@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Dev
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Issues identified and prioritized"
+    - "Fixes implemented"
+    - "Tests updated"
+---
+
 Fix implementation issues found during code review:
 
 1. **Analyze Findings** — Review the code review report and prioritize fixes

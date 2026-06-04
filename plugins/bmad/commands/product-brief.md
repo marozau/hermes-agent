@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Analyst
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Product brief written to planning-artifacts/"
+    - "Problem statement is clear and specific"
+    - "Success metrics are measurable"
+---
+
 Create a product brief document capturing the opportunity:
 
 1. **Problem Statement** — What problem exists, who experiences it, why it matters

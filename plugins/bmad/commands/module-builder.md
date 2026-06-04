@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Builder
+  phase: solutioning
+  imperative_preamble: true
+  verification:
+    - "Module scaffolded"
+    - "Setup skill generated"
+    - "Validation passes"
+---
+
 Create and scaffold BMAD modules:
 
 1. **Ideate** — Module requirements, module plan

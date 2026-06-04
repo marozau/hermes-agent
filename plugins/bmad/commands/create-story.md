@@ -1,3 +1,14 @@
+---
+spec:
+  persona: SM
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "Story spec written"
+    - "Acceptance criteria defined"
+    - "Implementation notes provided"
+---
+
 Generate a rich story specification for implementation:
 
 1. **Story Context** — What epic/phase this belongs to, subsystem

@@ -1,3 +1,14 @@
+---
+spec:
+  persona: QA
+  phase: implementation
+  imperative_preamble: true
+  verification:
+    - "NFR assessment complete"
+    - "Security review done"
+    - "Performance benchmarks defined"
+---
+
 Run Non-Functional Requirements testing:
 
 1. **Load Context** — Review NFR criteria from PRD and architecture

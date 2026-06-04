@@ -1,3 +1,14 @@
+---
+spec:
+  persona: Victor
+  phase: analysis
+  imperative_preamble: true
+  verification:
+    - "Innovation opportunities mapped"
+    - "Market disruption vectors identified"
+    - "Strategic recommendations provided"
+---
+
 Run innovation strategy with Victor (CIS persona):
 
 1. **Scan** — Market signals, trends, disruption vectors

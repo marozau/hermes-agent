@@ -1,3 +1,14 @@
+---
+spec:
+  persona: PM
+  phase: planning
+  imperative_preamble: true
+  verification:
+    - "PRD updated in planning-artifacts/"
+    - "Changes are traceable"
+    - "No conflicting requirements introduced"
+---
+
 Edit and refine the existing PRD based on user feedback:
 
 1. Read the current PRD from `planning-artifacts/` (find the latest `prd-*.md`)
