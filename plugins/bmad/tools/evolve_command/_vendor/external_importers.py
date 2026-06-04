@@ -349,7 +349,7 @@ class HermesSessionImporter:
 
         messages: list[dict[str, object]] = []
         session_files = sorted(
-            HermesSessionImporter.SESSION_DIR.glob("*.json"),
+            HermesSessionImporter.SESSION_DIR.glob("*.jsonl"),
             key=lambda p: p.stat().st_mtime,
             reverse=True,  # newest first
         )

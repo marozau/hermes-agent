@@ -59,7 +59,8 @@ def _write_predicate_results(
                 data = {}
         else:
             data = {}
-    except Exception:
+    except (yaml.YAMLError, OSError, PermissionError, UnicodeDecodeError) as e:
+        logger.warning("[dev_story] Failed to load sprint-status.yaml: %s", e)
         data = {}
 
     pred_results = data.setdefault("predicate_results", {})
@@ -74,13 +75,22 @@ def _write_predicate_results(
         }
 
     try:
-        # Ensure parent dir exists
+        import tempfile, os
         status_path.parent.mkdir(parents=True, exist_ok=True)
-        status_path.write_text(
-            yaml.safe_dump(data, sort_keys=False), encoding="utf-8"
+        tmp_fd, tmp_path = tempfile.mkstemp(
+            dir=str(status_path.parent), suffix=".tmp"
         )
-    except Exception:
-        logger.warning("[dev_story] Failed to write predicate results", exc_info=True)
+        try:
+            with os.fdopen(tmp_fd, "w", encoding="utf-8") as tmp_f:
+                tmp_f.write(yaml.safe_dump(data, sort_keys=False))
+                tmp_f.flush()
+                os.fsync(tmp_f.fileno())
+            os.replace(tmp_path, str(status_path))
+        except Exception:
+            os.unlink(tmp_path)
+            raise
+    except (yaml.YAMLError, OSError, PermissionError) as e:
+        logger.warning("[dev_story] Failed to write predicate results: %s", e)
 
 
 def handler(ctx, args: str) -> str:

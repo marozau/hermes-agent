@@ -7,86 +7,62 @@
 `evolve-command` is an offline tuner that uses DSPy, GEPA, LLM-as-Judge, and
 constraint validation to optimise BMAD command bodies (e.g. `dev-story`).
 
-It runs **offline** — no DSPy code executes at runtime. All tuning happens
-inside `plugins/bmad/tools/evolve_command/` and the results are reviewed
-before merging into the plugin.
+It runs **offline** — no DSPy code executes at runtime (TI-1/TI-2).
 
 ## Quick Start
 
 ```bash
-cd worktree/hermes-epic-13
-
-# 1. Install evolve-command deps (isolated from runtime plugin)
+# Install (isolated from plugin runtime)
 cd plugins/bmad/tools/evolve_command
 pip install -e ".[dev]"
 
-# 2. Run the tuner on dev-story
-python -m evolve_command.cli tune \
-  --command dev-story \
-  --metric dev_story_composite_v1 \
-  --metric-config ../metrics/dev_story_composite_v1.yaml \
-  --rounds 3 \
-  --output reports/dev-story-tuning-$(date +%Y%m%d).json
+# Import traces from Hermes sessions
+bmad-evolve-command import-traces --source hermes --output dataset/ --limit 50
 
-# 3. Review the report
-cat reports/dev-story-tuning-*.json | python -m json.tool
+# Optimize (GEPA loop — Story 13.7 carry-forward)
+bmad-evolve-command optimize --command dev-story --dataset dataset/ --budget 200 --cap 50
+
+# Dry-run (validate inputs only)
+bmad-evolve-command optimize --command dev-story --dataset dataset/ --dry-run
 ```
 
-## CI Gates (run on every PR)
+## CI Gates
 
-| Script | What it checks | Fail = |
-|--------|---------------|--------|
-| `check_no_dspy_in_runtime.sh` | No `import dspy` in `plugins/bmad/{lib,commands,hooks,scripts}/` | Runtime isolation breach (TI-2) |
-| `check_vendor_attribution.py` | All vendored files under `_vendor/` have attribution headers | Missing license notice |
-| `check_metric_frozen.py` | `metrics/dev_story_composite_v1.yaml` unchanged after freeze date | Metric drift (TI-3) |
+| Gate | Script | What it checks |
+|------|--------|----------------|
+| TI-2 | `check_no_dspy_in_runtime.sh` | No `import dspy` in runtime plugin code |
+| TI-3 | `check_metric_frozen.py` | Metric YAML unchanged after `freeze_date` |
+| TI-4 | `check_vendor_attribution.py` | Vendored files have attribution headers |
 
-Run all gates:
+## Metric Spec
 
-```bash
-bash plugins/bmad/tools/evolve_command/scripts/check_no_dspy_in_runtime.sh
-python plugins/bmad/tools/evolve_command/scripts/check_vendor_attribution.py
-python plugins/bmad/tools/evolve_command/scripts/check_metric_frozen.py
+`dev_story_composite_v1.yaml` is FROZEN as of 2026-06-04. Formula:
+
+```
+0.4 × test_pass_rate
++ 0.2 × scope_discipline
++ 0.2 × spec_faithfulness
++ 0.1 × regression_safety
++ 0.1 × brevity
 ```
 
-## Metric: `dev_story_composite_v1`
-
-**Frozen:** 2026-06-04 (TI-3)
-
-Formula (weights):
-
-| Component | Weight | Gate |
-|-----------|--------|------|
-| `test_pass_rate` | 0.4 | ≥ 0.7 |
-| `scope_discipline` | 0.2 | — |
-| `spec_faithfulness` | 0.2 | — |
-| `regression_safety` | 0.1 | == 1.0 |
-| `brevity` | 0.1 | — |
-
-**Hard gates (ConstraintValidator):**
-- `test_pass_rate >= 0.7`
+Hard gates (fire BEFORE LLM judge):
+- `test_pass_rate ≥ 0.7`
 - `regression_safety == 1.0`
-- No deploy verbs (`terraform apply`, `kubectl apply`, etc.)
-- No credential paths (`~/.ssh`, `~/.aws`, etc.)
+- No deploy verbs (OI-4)
+- No credential paths (OI-5)
 
 ## TI Invariants
 
-| ID | Invariant | Enforcement |
-|----|-----------|-------------|
-| TI-1 | `dspy` declared only in `tools/evolve_command/pyproject.toml` | CI grep |
-| TI-2 | No `import dspy` in `plugins/bmad/{lib,commands,hooks,scripts}/` | `check_no_dspy_in_runtime.sh` |
-| TI-3 | Metric formula frozen after first run | `check_metric_frozen.py` |
+- **TI-1**: dspy declared only in `tools/evolve_command/pyproject.toml`
+- **TI-2**: CI grep catches `import dspy`, `from dspy`, lazy imports
+- **TI-3**: Metric formula frozen; `_v2` for future revisions
+- **TI-4**: Vendor attribution headers + LICENSE + CHANGES.md
+- **TI-5**: Hard gates fire before LLM judge (saves tokens)
+- **TI-6**: Tuned bodies land as PRs, never auto-applied
 
-## Reports
+## Carry-forward (Epic 13.1)
 
-All tuning reports land in `reports/` (gitignored except `.gitkeep`).
-Reports are JSON with schema: `{command, metric, rounds, results[], timestamp}`.
-
-## Troubleshooting
-
-**"DSPy import found in runtime"** — A PR added `import dspy` to a runtime
-file. DSPy must only be imported inside `tools/evolve_command/`. Fix: move
-the import behind a lazy/conditional gate or remove it.
-
-**"Metric file modified after freeze"** — Someone changed the metric weights
-or gates after the freeze date. This requires an explicit unfreeze decision
-and a new freeze date. Document in the metric YAML's `freeze_date` field.
+- Full dataset builder (Story 13.6)
+- GEPA optimizer loop (Story 13.7)
+- G3 acceptance gate (Story 13.9)
