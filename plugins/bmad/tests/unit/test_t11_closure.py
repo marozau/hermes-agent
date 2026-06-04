@@ -198,6 +198,7 @@ class TestRunAndRecordPredicates:
 
     def test_run_predicates_error_is_graceful(self, project_dir_no_sprint_status):
         """T-11: Errors in run_predicates don't crash the handler."""
+        from unittest.mock import patch
         from plugins.bmad.commands.dev_story import _run_and_record_predicates
 
         spec = CommandSpec(
@@ -212,8 +213,16 @@ class TestRunAndRecordPredicates:
             predicate_module="nonexistent",
         )
 
-        # Should not raise
-        _run_and_record_predicates(project_dir_no_sprint_status, spec, "13.8")
+        # Mock run_predicates to raise — handler must catch and NOT propagate
+        with patch(
+            "plugins.bmad.lib.predicate_runner.run_predicates",
+            side_effect=RuntimeError("boom"),
+        ):
+            _run_and_record_predicates(project_dir_no_sprint_status, spec, "13.8")
+
+        # Verify: no sprint-status.yaml written (error was caught, not written)
+        status_path = project_dir_no_sprint_status / "planning-artifacts" / "sprint-status.yaml"
+        assert not status_path.exists(), "Broken predicate must not write sprint-status.yaml"
 
 
 # ── predicate_runner.run_predicates integration ─────────────────────────────

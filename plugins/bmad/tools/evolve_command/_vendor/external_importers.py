@@ -356,15 +356,25 @@ class HermesSessionImporter:
 
         for session_file in session_files:
             try:
-                data = json.loads(session_file.read_text())
+                raw = session_file.read_text()
+                # JSONL: one JSON object per line
+                lines = [json.loads(line) for line in raw.splitlines() if line.strip()]
+                if not lines:
+                    continue
+                # Each line is a message; wrap in session-like structure
+                if isinstance(lines[0], dict) and "role" in lines[0]:
+                    msg_list = lines
+                    session_id = session_file.stem
+                else:
+                    # Legacy format: single JSON with "messages" key
+                    data = lines[0] if len(lines) == 1 else {"messages": lines}
+                    msg_list = data.get("messages", [])
+                    session_id = data.get("session_id", session_file.stem)
             except (json.JSONDecodeError, OSError):
                 continue
 
-            msg_list = data.get("messages", [])
             if not msg_list:
                 continue
-
-            session_id = data.get("session_id", session_file.stem)
 
             # Walk messages: pair each user message with the next assistant
             # response (skipping tool messages in between).

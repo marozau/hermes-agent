@@ -81,7 +81,7 @@ def main() -> int:
         print(f"SKIP: Cannot determine last git commit date for {METRIC_REL_PATH}")
         return 0
 
-    if last_modified > freeze_date:
+    if last_modified >= freeze_date:
         print(
             f"METRIC FREEZE VIOLATION: {METRIC_REL_PATH}\n"
             f"  last modified: {last_modified}\n"

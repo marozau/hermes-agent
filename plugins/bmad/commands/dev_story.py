@@ -86,8 +86,11 @@ def _write_predicate_results(
                 tmp_f.flush()
                 os.fsync(tmp_f.fileno())
             os.replace(tmp_path, str(status_path))
-        except Exception:
-            os.unlink(tmp_path)
+        except (OSError, yaml.YAMLError):
+            try:
+                os.unlink(tmp_path)
+            except OSError:
+                pass
             raise
     except (yaml.YAMLError, OSError, PermissionError) as e:
         logger.warning("[dev_story] Failed to write predicate results: %s", e)
@@ -150,7 +153,7 @@ def handler(ctx, args: str) -> str:
     # T-11: Run predicates after rendering (non-anchor path)
     if spec and spec.predicate_module:
         # Use a fallback story_id derived from args or "default"
-        fallback_id = story_id or args_stripped.split()[0] if args_stripped.strip() else "default"
+        fallback_id = story_id if story_id else (args_stripped.split()[0] if args_stripped.strip() else "default")
         _run_and_record_predicates(project_dir, spec, fallback_id, ctx)
 
     return result

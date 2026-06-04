@@ -32,8 +32,6 @@ def optimize(command: str, dataset: str, budget: int, cap: int, seed: int, dry_r
     Loads traces from DATASET, optimizes the COMMAND body against
     the dev_story_composite_v1 metric, and produces a report directory.
     """
-    from .judge import CodeOutputJudge, check_hard_gates
-
     dataset_path = Path(dataset)
     if not dataset_path.is_dir():
         click.echo(f"Error: {dataset} is not a directory", err=True)
@@ -59,6 +57,9 @@ def optimize(command: str, dataset: str, budget: int, cap: int, seed: int, dry_r
     if dry_run:
         click.echo("\n[dry-run] Validation complete. No optimization performed.")
         return
+
+    # Lazy import: dspy only needed for actual optimization, not dry-run
+    from .judge import CodeOutputJudge, check_hard_gates
 
     click.echo("\n[optimize] GEPA optimization not yet implemented — Story 13.7 carry-forward to Epic 13.1")
     click.echo("  Foundation (Stories 13.1-13.5) is complete.")

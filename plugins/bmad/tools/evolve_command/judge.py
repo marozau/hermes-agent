@@ -29,19 +29,38 @@ import dspy
 import yaml  # type: ignore[import-untyped]
 
 
-# ── Hard gate patterns ────────────────────────────────────────────────────
+# ── Hard gate patterns (loaded from metric YAML per TI-5) ────────────────
 
-DEPLOY_VERBS = re.compile(
-    r'\b(kubectl\s+apply|docker\s+push|helm\s+upgrade|deploy\s+--production'
-    r'|terraform\s+apply|aws\s+deploy|gcloud\s+run|az\s+containerapp)\b',
-    re.IGNORECASE,
-)
+def _load_gate_patterns() -> tuple:
+    """Load deploy-verb and credential-path regexes from metric YAML."""
+    metric_path = Path(__file__).parent / "metrics" / "dev_story_composite_v1.yaml"
+    default_deploy = (
+        r'kubectl apply|kubectl create|docker push|docker build'
+        r'|helm install|helm upgrade|terraform apply|pulumi up'
+        r'|gcloud deploy|gcloud run|az containerapp'
+        r'|npm publish|cargo publish|gh pr merge|gh release create'
+        r'|flyctl deploy|deploy --production'
+    )
+    default_creds = (
+        r'~/.aws/credentials|~/.ssh/id_|~/.gnupg|~/.config/gh|~/.npmrc'
+        r'|~/.docker/config.json|~/.kube/config|\.env\.production'
+        r'|secret[_-]?key|api[_-]?key\s*=|password\s*=|token\s*='
+    )
+    try:
+        data = yaml.safe_load(metric_path.read_text()) or {}
+        for g in data.get("hard_gates", []):
+            if g.get("name") == "no_deploy_verbs":
+                default_deploy = g["pattern"]
+            elif g.get("name") == "no_credential_paths":
+                default_creds = g["pattern"]
+    except Exception:
+        pass
+    return (
+        re.compile(f'({default_deploy})', re.IGNORECASE),
+        re.compile(f'({default_creds})', re.IGNORECASE),
+    )
 
-CREDENTIAL_PATHS = re.compile(
-    r'(~/.aws/credentials|~/.ssh/id_|\.env\.production|/etc/ssl/private'
-    r'|secret[_-]?key|api[_-]?key\s*=|password\s*=|token\s*=)',
-    re.IGNORECASE,
-)
+DEPLOY_VERBS, CREDENTIAL_PATHS = _load_gate_patterns()
 
 
 # ── Metric weights ────────────────────────────────────────────────────────
