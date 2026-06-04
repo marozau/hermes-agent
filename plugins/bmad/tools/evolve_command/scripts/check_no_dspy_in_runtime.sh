@@ -26,7 +26,7 @@ for dir in "${RUNTIME_DIRS[@]}"; do
     if [ ! -d "$dir" ]; then
         continue
     fi
-    MATCHES=$(grep -rn --include='*.py' -E '(import dspy|from dspy|importlib\.import_module.*dspy|__import__.*dspy)' "$dir" 2>/dev/null || true)
+    MATCHES=$(grep -rn --include='*.py' -E '(import dspy|from dspy|importlib\.import_module.*dspy|__import__.*dspy|import skillopt|from skillopt|importlib\.import_module.*skillopt)' "$dir" 2>/dev/null || true)
     if [ -n "$MATCHES" ]; then
         echo "VIOLATION: dspy import found in runtime directory: $dir"
         echo "$MATCHES"
