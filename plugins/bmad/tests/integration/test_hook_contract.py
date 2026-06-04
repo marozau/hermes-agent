@@ -207,19 +207,18 @@ class TestBindHookCtxCorrectness:
             if hook_name in hooks_with_ctx:
                 assert takes_ctx, f"{hook_name} should have ctx as first param"
 
-    def test_hooks_without_ctx_dont_use_bind(self):
-        """3 hooks match Hermes kwargs directly → must NOT take ctx."""
-        hooks_without_ctx = {"on_session_end", "pre_llm_call", "post_llm_call"}
+    def test_all_eight_hooks_take_ctx(self):
+        """All 8 BMAD hooks declare ctx as first param — _bind_hook_ctx injects it."""
         for hook_name, kwargs, fn in _get_hooks_under_test():
             import inspect
             sig = inspect.signature(fn)
             params = list(sig.parameters.keys())
             takes_ctx = bool(params) and params[0] == "ctx"
-            if hook_name in hooks_without_ctx:
-                assert not takes_ctx, (
-                    f"{hook_name} should NOT have ctx as first param "
-                    f"(it matches Hermes kwargs directly)"
-                )
+            assert takes_ctx, (
+                f"{hook_name} must have ctx as first param — "
+                f"__init__.py wraps ALL hooks with _bind_hook_ctx. "
+                f"Got signature: {sig}"
+            )
 
 
 class TestTransformTerminalOutput:
