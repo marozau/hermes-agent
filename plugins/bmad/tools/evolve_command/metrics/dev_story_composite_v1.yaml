@@ -3,7 +3,7 @@ name: dev_story_composite_v1
 description: >
   Composite scoring formula for BMAD dev story code outputs.
   FROZEN as of v1 — changes require a new version number.
-freeze_date: "2026-06-04"
+freeze_date: "2026-06-05"
 
 weights:
   test_pass_rate: 0.4

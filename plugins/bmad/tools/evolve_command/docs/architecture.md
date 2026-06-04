@@ -63,9 +63,10 @@ After `/bmad:dev-story` completes, predicates fire and results land in
 
 ## Locked Prompts (UQ §2.4)
 
-Judge prompts are locked on disk at `prompts/scope_discipline_v1.md` and
-`prompts/spec_faithfulness_v1.md`. The DSPy Signature docstrings in `judge.py`
-reference these prompts. Changes require a new version file (e.g., `_v2.md`).
+Judge prompts are documented on disk at `prompts/scope_discipline_v1.md` and
+`prompts/spec_faithfulness_v1.md` for audit trail. The actual prompts used at
+runtime are the DSPy Signature docstrings in `judge.py`. Changes to the prompt
+require updating BOTH the disk file (versioned) AND the code (for reproducibility).
 
 ## Carry-forward (Epic 14)
 

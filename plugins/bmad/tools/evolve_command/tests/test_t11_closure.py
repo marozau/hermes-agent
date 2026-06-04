@@ -25,14 +25,20 @@ class TestT11Closure:
         assert callable(run_predicates)
 
     def test_dev_story_references_predicate_runner(self) -> None:
-        """dev-story handler source must reference predicate_runner."""
+        """dev-story handler must have _run_and_record_predicates function that calls run_predicates."""
         plugin_root = str(Path(__file__).parents[4])
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
 
         from plugins.bmad.commands import dev_story
-        source = Path(dev_story.__file__).read_text()
-        assert "predicate_runner" in source or "run_predicates" in source
+        assert hasattr(dev_story, '_run_and_record_predicates'), (
+            "dev_story must expose _run_and_record_predicates"
+        )
+        import inspect
+        src = inspect.getsource(dev_story._run_and_record_predicates)
+        assert 'run_predicates(' in src, (
+            "_run_and_record_predicates must call run_predicates"
+        )
 
     def test_predicate_runner_signature(self) -> None:
         """run_predicates must accept (spec, project_dir, ctx)."""

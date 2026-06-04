@@ -21,6 +21,10 @@ Hard gates:
 from __future__ import annotations
 
 import re
+try:
+    import dspy
+except ImportError:
+    dspy = None  # Hard gates work without dspy; LLM judge requires it
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Optional
@@ -181,27 +185,28 @@ def compute_composite(score: JudgeScore, weights: Optional[dict[str, float]] = N
     )
 
 
-class CodeOutputJudgeSignature(dspy.Signature):
-    """Score a code output on 5 metrics for a BMAD story.
+if dspy is not None:
+    class CodeOutputJudgeSignature(dspy.Signature):
+        """Score a code output on 5 metrics for a BMAD story.
 
-    Evaluate the diff against the story spec and project context.
-    Score each metric 0.0-1.0:
-    1. test_pass_rate: fraction of tests that pass
-    2. scope_discipline: does the diff stay within story scope?
-    3. spec_faithfulness: does the implementation match the spec?
-    4. regression_safety: no regressions introduced?
-    5. brevity: is the diff appropriately concise?
-    """
-    story_spec: str = dspy.InputField(desc="Story specification with acceptance criteria")
-    diff: str = dspy.InputField(desc="Unified diff patch")
-    test_results: str = dspy.InputField(desc="Test execution results")
-    project_context: str = dspy.InputField(desc="YAML project context")
-    test_pass_rate: float = dspy.OutputField(desc="0.0-1.0: fraction of tests passing")
-    scope_discipline: float = dspy.OutputField(desc="0.0-1.0: stays within story scope")
-    spec_faithfulness: float = dspy.OutputField(desc="0.0-1.0: matches spec requirements")
-    regression_safety: float = dspy.OutputField(desc="0.0-1.0: no regressions")
-    brevity: float = dspy.OutputField(desc="0.0-1.0: appropriately concise")
-    feedback: str = dspy.OutputField(desc="Specific, actionable feedback")
+        Evaluate the diff against the story spec and project context.
+        Score each metric 0.0-1.0:
+        1. test_pass_rate: fraction of tests that pass
+        2. scope_discipline: does the diff stay within story scope?
+        3. spec_faithfulness: does the implementation match the spec?
+        4. regression_safety: no regressions introduced?
+        5. brevity: is the diff appropriately concise?
+        """
+        story_spec: str = dspy.InputField(desc="Story specification with acceptance criteria")
+        diff: str = dspy.InputField(desc="Unified diff patch")
+        test_results: str = dspy.InputField(desc="Test execution results")
+        project_context: str = dspy.InputField(desc="YAML project context")
+        test_pass_rate: float = dspy.OutputField(desc="0.0-1.0: fraction of tests passing")
+        scope_discipline: float = dspy.OutputField(desc="0.0-1.0: stays within story scope")
+        spec_faithfulness: float = dspy.OutputField(desc="0.0-1.0: matches spec requirements")
+        regression_safety: float = dspy.OutputField(desc="0.0-1.0: no regressions")
+        brevity: float = dspy.OutputField(desc="0.0-1.0: appropriately concise")
+        feedback: str = dspy.OutputField(desc="Specific, actionable feedback")
 
 
 class CodeOutputJudge:
@@ -228,6 +233,8 @@ class CodeOutputJudge:
         """
         self.eval_model = eval_model
         self.weights = load_metric_formula(metrics_yaml)
+        if dspy is None:
+            raise RuntimeError("dspy is required for CodeOutputJudge (install with: pip install dspy)")
         self.judge = dspy.ChainOfThought(CodeOutputJudgeSignature)
 
     def score(
