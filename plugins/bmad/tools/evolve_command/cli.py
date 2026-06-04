@@ -61,7 +61,7 @@ def optimize(command: str, dataset: str, budget: int, cap: int, seed: int, dry_r
     # Lazy import: dspy only needed for actual optimization, not dry-run
     from .judge import CodeOutputJudge, check_hard_gates
 
-    click.echo("\n[optimize] GEPA optimization not yet implemented — Story 13.7 carry-forward to Epic 13.1")
+    click.echo("\n[optimize] GEPA optimization not yet implemented — Story 13.7 deferred to Epic 14 (TBD)")
     click.echo("  Foundation (Stories 13.1-13.5) is complete.")
     click.echo("  See reports/ for future output.")
 
@@ -100,7 +100,7 @@ def import_traces(source: str, output: str, limit: int) -> None:
             except (json.JSONDecodeError, OSError) as e:
                 click.echo(f"    Skipped: {e}")
 
-        click.echo(f"\n[import] Dataset builder not yet fully implemented — Story 13.6 carry-forward to Epic 13.1")
+        click.echo(f"\n[import] Dataset builder not yet fully implemented — Story 13.6 deferred to Epic 14 (TBD)")
     else:
         click.echo(f"[import] Source '{source}' not yet implemented")
 

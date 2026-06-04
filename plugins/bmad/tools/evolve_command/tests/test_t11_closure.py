@@ -17,7 +17,7 @@ class TestT11Closure:
     def test_predicate_runner_importable(self) -> None:
         """predicate_runner must be importable."""
         # Add plugin root to sys.path for imports
-        plugin_root = str(Path(__file__).parents[3])
+        plugin_root = str(Path(__file__).parents[4])
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
 
@@ -26,7 +26,7 @@ class TestT11Closure:
 
     def test_dev_story_references_predicate_runner(self) -> None:
         """dev-story handler source must reference predicate_runner."""
-        plugin_root = str(Path(__file__).parents[3])
+        plugin_root = str(Path(__file__).parents[4])
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
 
@@ -36,7 +36,7 @@ class TestT11Closure:
 
     def test_predicate_runner_signature(self) -> None:
         """run_predicates must accept (spec, project_dir, ctx)."""
-        plugin_root = str(Path(__file__).parents[3])
+        plugin_root = str(Path(__file__).parents[4])
         if plugin_root not in sys.path:
             sys.path.insert(0, plugin_root)
 

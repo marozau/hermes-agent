@@ -19,6 +19,9 @@ plugins/bmad/tools/evolve_command/
 ├── importer.py                 # BMADTrace + build_trace
 ├── metrics/
 │   └── dev_story_composite_v1.yaml  # FROZEN metric (TI-3)
+├── prompts/
+│   ├── scope_discipline_v1.md       # LOCKED judge prompt (UQ §2.4)
+│   └── spec_faithfulness_v1.md      # LOCKED judge prompt (UQ §2.4)
 ├── reports/                    # Tuning run outputs (gitignored)
 ├── scripts/
 │   ├── check_no_dspy_in_runtime.sh   # TI-2 CI gate
@@ -58,7 +61,13 @@ Story 13.8 wired `predicate_runner.run_predicates` to the dev-story handler.
 After `/bmad:dev-story` completes, predicates fire and results land in
 `sprint-status.yaml` under `predicate_results.<story_id>`.
 
-## Carry-forward (Epic 13.1)
+## Locked Prompts (UQ §2.4)
+
+Judge prompts are locked on disk at `prompts/scope_discipline_v1.md` and
+`prompts/spec_faithfulness_v1.md`. The DSPy Signature docstrings in `judge.py`
+reference these prompts. Changes require a new version file (e.g., `_v2.md`).
+
+## Carry-forward (Epic 14)
 
 - Story 13.6: Full dataset builder (currently stub)
 - Story 13.7: GEPA optimizer loop (currently stub)
