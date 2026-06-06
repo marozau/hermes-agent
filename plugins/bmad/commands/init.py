@@ -2,12 +2,9 @@
 
 Registered in ``plugins.bmad/__init__.py`` as ``bmad:init``.
 
-Supports two modes:
-1. Standard: ``/bmad:init [--force]`` — single-repo project
-2. Workspace: ``/bmad:init --workspace --worktree NAME:UPSTREAM:BRANCH ...``
-
-The LLM reads the spec (init.md) and constructs the args from the user's
-natural language description. This handler only parses structured args.
+Option B pattern: runs mechanical bootstrap FIRST, then returns the
+rendered spec body so the LLM continues planning with the user's
+natural-language args.
 """
 
 from __future__ import annotations
@@ -20,26 +17,15 @@ from plugins.bmad.scripts.bmad_init import bootstrap, bootstrap_workspace
 def handler(ctx, args: str) -> str:
     """Handle the /bmad:init slash command.
 
-    Parameters
-    ----------
-    ctx:
-        Hermes command context — provides access to ``working_directory``
-        (or similar) to determine the project root.
-    args:
-        Structured arguments.  Supports ``--force``, ``--workspace``,
-        and ``--worktree NAME:UPSTREAM:BRANCH`` (repeatable).
-
-    Returns
-    -------
-    str
-        Human-readable result message (success or error) displayed to the user.
+    1. Parse structured args (--force, --workspace, --worktree)
+    2. Run mechanical bootstrap (standard or workspace)
+    3. Return bootstrap result + rendered spec body for LLM continuation
     """
     # ── Parse args ──────────────────────────────────────────────────
     args_list = args.strip().split() if args else []
     force = "--force" in args_list
     workspace_mode = "--workspace" in args_list
 
-    # Parse --worktree NAME:UPSTREAM:BRANCH specs
     worktree_specs: list[str] = []
     i = 0
     while i < len(args_list):
@@ -56,110 +42,125 @@ def handler(ctx, args: str) -> str:
     # ── Gather project info ─────────────────────────────────────────
     project_name = getattr(ctx, "project_name", None) or project_dir.name
     user_name = getattr(ctx, "user_name", None) or ""
-
     project_level = int(getattr(ctx, "project_level", 1))
     project_type = getattr(ctx, "project_type", "other")
 
-    # ── Workspace mode ──────────────────────────────────────────────
+    # ── Phase 1: Mechanical bootstrap ───────────────────────────────
+    bootstrap_result = ""
+
     if workspace_mode:
         if not worktree_specs:
-            return (
+            bootstrap_result = (
                 "❌ `--workspace` requires at least one `--worktree NAME:UPSTREAM:BRANCH`.\n\n"
                 "Example: `/bmad:init --workspace --worktree hermes-agent:~/usr-local/hermes:main`"
             )
+        else:
+            worktrees: list[dict[str, str]] = []
+            parse_error = None
+            for spec in worktree_specs:
+                parts = spec.split(":")
+                if len(parts) != 3:
+                    parse_error = (
+                        f"❌ Invalid `--worktree` format: `{spec}`\n\n"
+                        "Expected: `NAME:UPSTREAM:BRANCH` (e.g. `hermes-agent:~/usr-local/hermes:main`)"
+                    )
+                    break
+                worktrees.append({
+                    "name": parts[0],
+                    "upstream": parts[1],
+                    "branch": parts[2],
+                })
 
-        worktrees: list[dict[str, str]] = []
-        for spec in worktree_specs:
-            parts = spec.split(":")
-            if len(parts) != 3:
-                return (
-                    f"❌ Invalid `--worktree` format: `{spec}`\n\n"
-                    "Expected: `NAME:UPSTREAM:BRANCH` (e.g. `hermes-agent:~/usr-local/hermes:main`)"
-                )
-            worktrees.append({
-                "name": parts[0],
-                "upstream": parts[1],
-                "branch": parts[2],
-            })
-
+            if parse_error:
+                bootstrap_result = parse_error
+            else:
+                try:
+                    config = bootstrap_workspace(
+                        project_dir,
+                        project_name=project_name,
+                        worktrees=worktrees,
+                        project_type=project_type,
+                        project_level=project_level,
+                        user_name=user_name,
+                    )
+                    lines = [
+                        f"✅ **BMAD workspace initialized** at `{project_dir}`",
+                        "",
+                        f"  - **Name:** {config['project_name']}",
+                        f"  - **Type:** {config['project_type']}",
+                        f"  - **Level:** {config['project_level']}",
+                        f"  - **User:** {config.get('user_name') or '(not set)'}",
+                        f"  - **Workspace mode:** enabled",
+                        "",
+                        "**Worktrees:**",
+                    ]
+                    for wt in config.get("worktrees", []):
+                        lines.append(f"  - `{wt['name']}` → `{wt['upstream']}` @ `{wt['branch']}`")
+                    lines.extend([
+                        "",
+                        "**Created:**",
+                        "  - `bmad/config.yaml` — workspace configuration",
+                        "  - `planning-artifacts/` — canonical plan (workspace root)",
+                        "  - `worktree/<name>/` — git worktrees",
+                        "  - `AGENTS.md` — agent orientation",
+                        "  - `CLAUDE.md` — symlink to AGENTS.md",
+                        "  - `WORKTREES.md` — session manifest",
+                    ])
+                    bootstrap_result = "\n".join(lines)
+                except RuntimeError as exc:
+                    bootstrap_result = f"⚠️  {exc}\n\nUse `/bmad:init --force --workspace ...` to reinitialize."
+                except ValueError as exc:
+                    bootstrap_result = f"❌ {exc}"
+                except Exception as exc:
+                    bootstrap_result = f"❌ Failed to initialize workspace: {exc}"
+    else:
         try:
-            config = bootstrap_workspace(
+            config = bootstrap(
                 project_dir,
                 project_name=project_name,
-                worktrees=worktrees,
                 project_type=project_type,
                 project_level=project_level,
                 user_name=user_name,
+                force=force,
+                interactive=False,
             )
-        except RuntimeError as exc:
-            return f"⚠️  {exc}\n\nUse `/bmad:init --force --workspace ...` to reinitialize."
-        except ValueError as exc:
-            return f"❌ {exc}"
+            bootstrap_result = "\n".join([
+                f"✅ **BMAD project initialized** at `{project_dir}`",
+                "",
+                f"  - **Name:** {config['project_name']}",
+                f"  - **Type:** {config['project_type']}",
+                f"  - **Level:** {config['project_level']}",
+                f"  - **User:** {config['user_name'] or '(not set)'}",
+                "",
+                "**Created:**",
+                "  - `bmad/config.yaml` — project configuration",
+                "  - `planning-artifacts/workflow-status.yaml` — state ledger",
+                "  - `planning-artifacts/research/`",
+                "  - `implementation-artifacts/stories/`",
+            ])
+        except RuntimeError:
+            bootstrap_result = (
+                "⚠️  **bmad/config.yaml** already exists in this directory.\n\n"
+                "Use `/bmad:init --force` to overwrite the existing configuration."
+            )
         except Exception as exc:
-            return f"❌ Failed to initialize workspace: {exc}"
+            bootstrap_result = f"❌ Failed to initialize BMAD project: {exc}"
 
-        # ── Workspace success ───────────────────────────────────────
-        lines = [
-            f"✅ **BMAD workspace initialized** at `{project_dir}`",
-            "",
-            f"  - **Name:** {config['project_name']}",
-            f"  - **Type:** {config['project_type']}",
-            f"  - **Level:** {config['project_level']}",
-            f"  - **User:** {config.get('user_name') or '(not set)'}",
-            f"  - **Workspace mode:** enabled",
-            "",
-            "**Worktrees:**",
-        ]
-        for wt in config.get("worktrees", []):
-            lines.append(f"  - `{wt['name']}` → `{wt['upstream']}` @ `{wt['branch']}`")
-        lines.extend([
-            "",
-            "**Created:**",
-            "  - `bmad/config.yaml` — workspace configuration",
-            "  - `planning-artifacts/` — canonical plan (workspace root)",
-            "  - `worktree/<name>/` — git worktrees",
-            "  - `AGENTS.md` — agent orientation",
-            "  - `CLAUDE.md` — symlink to AGENTS.md",
-            "  - `WORKTREES.md` — session manifest",
-            "",
-            "Use `/bmad:help` to see available commands.",
-        ])
-        return "\n".join(lines)
-
-    # ── Standard (non-workspace) mode ───────────────────────────────
+    # ── Phase 2: Render spec body for LLM continuation ──────────────
+    # Read init.md and render so the LLM continues planning
     try:
-        config = bootstrap(
-            project_dir,
-            project_name=project_name,
-            project_type=project_type,
-            project_level=project_level,
-            user_name=user_name,
-            force=force,
-            interactive=False,
-        )
-    except RuntimeError:
-        return (
-            "⚠️  **bmad/config.yaml** already exists in this directory.\n\n"
-            "Use `/bmad:init --force` to overwrite the existing configuration."
-        )
-    except Exception as exc:
-        return f"❌ Failed to initialize BMAD project: {exc}"
+        from plugins.bmad.lib.spec_parser import parse_command_body
+        from plugins.bmad.lib.render import render_command
 
-    # ── Success ─────────────────────────────────────────────────────
-    lines = [
-        f"✅ **BMAD project initialized** at `{project_dir}`",
-        "",
-        f"  - **Name:** {config['project_name']}",
-        f"  - **Type:** {config['project_type']}",
-        f"  - **Level:** {config['project_level']}",
-        f"  - **User:** {config['user_name'] or '(not set)'}",
-        "",
-        "**Created:**",
-        "  - `bmad/config.yaml` — project configuration",
-        "  - `planning-artifacts/workflow-status.yaml` — state ledger",
-        "  - `planning-artifacts/research/`",
-        "  - `implementation-artifacts/stories/`",
-        "",
-        "Use `/bmad:help` to see available commands.",
-    ]
-    return "\n".join(lines)
+        spec_path = Path(__file__).with_name("init.md")
+        body = spec_path.read_text()
+        spec, body_text = parse_command_body(body)
+        rendered = render_command(spec, body_text, args=args.strip() if args else "", ctx=ctx)
+    except Exception:
+        # If rendering fails, just return the bootstrap result
+        rendered = ""
+
+    # ── Combine: bootstrap confirmation + LLM continuation ──────────
+    if rendered:
+        return f"{bootstrap_result}\n\n---\n\n{rendered}"
+    return bootstrap_result
