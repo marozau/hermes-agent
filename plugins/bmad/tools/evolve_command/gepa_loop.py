@@ -100,7 +100,7 @@ class GEPAResult:
 
 def _cap_steps(max_steps: int, cost_cap: float = _COST_CAP_USD) -> int:
     """Return max_steps (actual enforcement via _check_cost mid-loop)."""
-    return min(max_steps, max_steps)
+    return max_steps
 
 
 def _build_dspy_examples(dataset: EvalDataset, split: str) -> list[dspy.Example]:

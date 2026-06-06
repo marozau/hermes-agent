@@ -225,7 +225,10 @@ def validate_oi2_disjoint(
         messages.append(f"Phase 2 violated lane: {{{names}}}")
 
     if passed:
-        message = "OI-2 disjoint-region check passed: no overlap between phases"
+        if not phase1_mutated and not phase2_mutated:
+            message = "OI-2 NOT APPLICABLE: no recognized phase regions in body"
+        else:
+            message = "OI-2 disjoint-region check passed: no overlap between phases"
     else:
         message = "OI-2 disjoint-region check FAILED: " + "; ".join(messages)
 
