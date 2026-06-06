@@ -24,7 +24,7 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from adapters.command_body_module import (
+from .adapters.command_body_module import (
     parse_command,
     reassemble_command,
 )
@@ -114,7 +114,8 @@ def extract_sections(body: str) -> list[BodySection]:
     """
     matches = list(_SECTION_RE.finditer(body))
     if not matches:
-        return []
+        # Return entire body as one unnamed section so OI-2 still tracks it (P1-5 fix)
+        return [BodySection(header="<body>", content=body, region=None)]
 
     sections: list[BodySection] = []
     for i, m in enumerate(matches):
@@ -165,6 +166,26 @@ class OI2ValidationResult:
     phase2_regions: frozenset[PhaseRegion]
     overlap: frozenset[PhaseRegion]
     message: str
+
+
+def compute_empirical_mutations(
+    original_body: str,
+    evolved_body: str,
+) -> set[PhaseRegion]:
+    """Compute which PhaseRegions actually changed by diffing section content (OI-2 enforcement)."""
+    original_sections = extract_sections(original_body)
+    evolved_sections = extract_sections(evolved_body)
+    original_map = {(s.region, s.header): s.content for s in original_sections}
+    evolved_map = {(s.region, s.header): s.content for s in evolved_sections}
+    mutated: set[PhaseRegion] = set()
+    for key, evo_content in evolved_map.items():
+        region, _header = key
+        if region is None:
+            continue
+        orig_content = original_map.get(key, "")
+        if evo_content.strip() != orig_content.strip():
+            mutated.add(region)
+    return mutated
 
 
 def validate_oi2_disjoint(

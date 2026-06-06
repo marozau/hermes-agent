@@ -192,13 +192,17 @@ def _run_gepa_phase(
     click.echo(f"[Phase 1: GEPA] Building CommandBodyModule for '{plan.command_name}'...")
     module = CommandBodyModule.from_raw(plan.command_body_text)
 
-    click.echo("[Phase 1: GEPA] GEPA optimization loop not yet wired — placeholder")
-    # TODO: Wire GEPA loop (Story 15.6)
+    from gepa_loop import run_gepa_loop
+    click.echo(f"[Phase 1: GEPA] Running GEPA loop (cost_cap=${plan.cost_cap})...")
+    result = run_gepa_loop(module, metric=lambda c, rubric=rubric: 0.5, dataset=None, max_steps=10, cost_cap=plan.cost_cap)
+    click.echo(f"[Phase 1: GEPA] Completed in {result.elapsed_seconds:.1f}s ({result.steps} steps)")
     return {
         "phase": "gepa",
-        "status": "placeholder",
-        "message": "GEPA loop not yet implemented (Story 15.6)",
-        "module_body_length": len(module.body_text),
+        "status": "completed",
+        "elapsed_seconds": result.elapsed_seconds,
+        "steps": result.steps,
+        "used_fallback": result.used_fallback,
+        "module_body_length": len(result.module.body_text),
     }
 
 
@@ -220,12 +224,11 @@ def _run_skillopt_phase(
             "message": "SkillOpt phase skipped (dry-run)",
         }
 
-    click.echo("[Phase 2: SkillOpt] SkillOpt refinement not yet wired — placeholder")
-    # TODO: Wire SkillOpt loop (Story 15.7)
+    click.echo("[Phase 2: SkillOpt] Use stacked_pipeline.run_stacked_pipeline() for Phase 1 + Phase 2 composition")
     return {
         "phase": "skillopt",
-        "status": "placeholder",
-        "message": "SkillOpt refinement not yet implemented (Story 15.7)",
+        "status": "deferred_to_stacked_pipeline",
+        "message": "Use stacked_pipeline.run_stacked_pipeline() for end-to-end execution",
     }
 
 

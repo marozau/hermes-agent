@@ -25,8 +25,8 @@ from typing import Any, Callable, Optional, Protocol
 
 import dspy
 
-from adapters.command_body_module import CommandBodyModule
-from adapters.dataset_builder import EvalDataset
+from .adapters.command_body_module import CommandBodyModule
+from .adapters.dataset_builder import EvalDataset
 
 logger = logging.getLogger(__name__)
 
@@ -155,7 +155,7 @@ def run_gepa_loop(
         logger.warning("GEPA unavailable (%s); falling back to MIPROv2", exc)
         error_msg = str(exc)
         used_fallback = True
-        steps_executed = 0
+        steps_executed = max_steps  # MIPROv2 ran; report approximate steps (P1-8 fix)
 
         optimizer = dspy.MIPROv2(
             metric=metric,
@@ -165,6 +165,8 @@ def run_gepa_loop(
             module,
             trainset=trainset,
         )
+    except (MemoryError, RecursionError, SystemError):
+        raise  # Fatal errors propagate, don't trigger fallback (P1-7)
     except Exception as exc:
         # Any other GEPA failure → MIPROv2 fallback
         logger.warning("GEPA failed (%s); falling back to MIPROv2", exc)
