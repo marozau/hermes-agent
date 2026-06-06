@@ -803,3 +803,56 @@ class TestInlineShellExpansion:
         # The command's intended stdout never made it through — only the
         # timeout marker (which echoes the command text) survives.
         assert "DYN_MARKER" not in msg.replace("sleep 5 && printf DYN_MARKER", "")
+
+
+class TestColonInSkillName:
+    """Skills with ':' in their name (e.g. bmad:init) must be discoverable."""
+
+    def test_colon_preserved_in_cmd_key(self, tmp_path):
+        """Skill named 'bmad:init' should register as /bmad:init."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = tmp_path / "bmad" / "init"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: bmad:init\ndescription: Init skill.\n---\n\nBody.\n"
+            )
+            result = scan_skill_commands()
+        assert "/bmad:init" in result
+        assert result["/bmad:init"]["name"] == "bmad:init"
+
+    def test_colon_in_category_skill(self, tmp_path):
+        """Skill in category dir with ':' in name should work."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = tmp_path / "bmad" / "create-story"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: bmad:create-story\ndescription: Create story.\n---\n\nBody.\n"
+            )
+            result = scan_skill_commands()
+        assert "/bmad:create-story" in result
+
+    def test_colon_with_other_special_chars(self, tmp_path):
+        """Skill with ':' and other special chars should preserve ':'."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = tmp_path / "test-skill"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: bmad:test+skill\ndescription: Test.\n---\n\nBody.\n"
+            )
+            result = scan_skill_commands()
+        # ':' preserved, '+' stripped
+        assert "/bmad:testskill" in result
+
+    def test_colon_skill_invocation_message(self, tmp_path):
+        """build_skill_invocation_message should work for ':' skills."""
+        with patch("tools.skills_tool.SKILLS_DIR", tmp_path):
+            skill_dir = tmp_path / "bmad" / "init"
+            skill_dir.mkdir(parents=True, exist_ok=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: bmad:init\ndescription: Init.\n---\n\nInitialize project.\n"
+            )
+            scan_skill_commands()
+            msg = build_skill_invocation_message("/bmad:init", "my-project")
+        assert msg is not None
+        assert "Initialize project" in msg
+        assert "my-project" in msg
