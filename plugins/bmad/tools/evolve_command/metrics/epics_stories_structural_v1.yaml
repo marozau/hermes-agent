@@ -4,7 +4,7 @@ description: >
   Structural scoring rubric for BMAD epics-stories skill outputs.
   Measures presence and quality of epic and user story decomposition.
   FROZEN as of v1 — changes require a new version number.
-freeze_date: "2026-06-06"
+freeze_date: "2026-06-07"
 
 weights:
   frontmatter_complete: 0.1

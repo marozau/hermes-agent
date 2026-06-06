@@ -49,14 +49,21 @@ def run_skill_via_cli(skill_name: str, topic: str, model: str) -> str:
         return result.stdout
 
     # Fallback: return skill body for inspection
-    skill_path = repo_root / "skills" / "bmad" / skill_name.replace("bmad:", "").replace("-", "_")
-    # Try common paths
-    for subdir in ["bmm", "bmb", "core", "tea", "cis"]:
-        p = repo_root / "skills" / "bmad" / subdir / skill_name.replace("bmad:", "") / "SKILL.md"
-        if p.exists():
-            return f"[FALLBACK: skill body from {p}]\n\n" + p.read_text()
+    # Skills are organized in subdirs (bmm/, core/, tea/, cis/, bmb/, _shared/)
+    skill_name_clean = skill_name.replace("bmad:", "").replace("-", "_")
+    skill_path = repo_root / "skills" / "bmad" / skill_name_clean / "SKILL.md"
+    if skill_path.exists():
+        return f"[FALLBACK: skill body from {skill_path}]\n\n" + skill_path.read_text()
 
-    return f"[ERROR: Could not invoke skill {skill_name}. TUI gateway may not be running.]"
+    # Search all subdirectories
+    skills_base = repo_root / "skills" / "bmad"
+    for subdir in skills_base.iterdir():
+        if subdir.is_dir():
+            p = subdir / skill_name_clean / "SKILL.md"
+            if p.exists():
+                return f"[FALLBACK: skill body from {p}]\n\n" + p.read_text()
+
+    return f"[ERROR: Could not find skill {skill_name}]"
 
 
 def score_output(metric_name: str, text: str) -> dict:

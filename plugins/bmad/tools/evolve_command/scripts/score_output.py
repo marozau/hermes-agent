@@ -145,15 +145,34 @@ def _matches_condition(condition: str, text: str) -> bool:
             if drivers >= min_count:
                 return True
 
-        # Count frontmatter fields
+        # Count frontmatter fields (key: value inside --- ... --- block at START of doc)
         if "fields" in condition:
-            fields = len(re.findall(r"^[\w_]+:", text, re.MULTILINE))
-            if fields >= min_count:
+            # Only count fields if document starts with frontmatter
+            if not text.lstrip().startswith('---'):
+                return False
+            lines = text.split('\n')
+            in_frontmatter = False
+            field_count = 0
+            for line in lines:
+                stripped = line.strip()
+                if stripped == '---':
+                    if not in_frontmatter:
+                        in_frontmatter = True
+                        continue
+                    else:
+                        break  # End of frontmatter
+                if in_frontmatter and ':' in stripped:
+                    # Must be key: value format, not a URL
+                    key = stripped.split(':')[0]
+                    if key and re.match(r'^[a-zA-Z_][a-zA-Z0-9_]*$', key):
+                        field_count += 1
+            if field_count >= min_count:
                 return True
 
     # Section presence heuristics
     if "frontmatter" in condition:
-        return "---" in text
+        # Frontmatter is --- at the very start of the document, not a horizontal rule
+        return text.lstrip().startswith("---")
     if "overview" in condition:
         return "overview" in text
     if "findings" in condition or "results" in condition:

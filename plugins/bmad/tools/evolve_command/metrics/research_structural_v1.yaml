@@ -4,7 +4,7 @@ description: >
   Structural scoring rubric for BMAD research skill outputs.
   Measures presence and quality of required report sections.
   FROZEN as of v1 — changes require a new version number.
-freeze_date: "2026-06-06"
+freeze_date: "2026-06-07"
 
 weights:
   frontmatter_complete: 0.2
