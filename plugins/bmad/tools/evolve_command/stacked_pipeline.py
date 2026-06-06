@@ -24,10 +24,10 @@ from dataclasses import dataclass, field
 from enum import Enum
 from typing import Any, Callable, Optional
 
-from .adapters.command_body_module import (
-    parse_command,
-    reassemble_command,
-)
+try:
+    from .adapters.command_body_module import parse_command, reassemble_command
+except ImportError:
+    from adapters.command_body_module import parse_command, reassemble_command
 
 logger = logging.getLogger(__name__)
 
@@ -115,7 +115,7 @@ def extract_sections(body: str) -> list[BodySection]:
     matches = list(_SECTION_RE.finditer(body))
     if not matches:
         # Return entire body as one unnamed section so OI-2 still tracks it (P1-5 fix)
-        return [BodySection(header="<body>", content=body, region=None)]
+        return [BodySection(header="<body>", content=body, region=None, start=0, end=len(body))]
 
     sections: list[BodySection] = []
     for i, m in enumerate(matches):

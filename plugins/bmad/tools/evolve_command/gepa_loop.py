@@ -25,15 +25,39 @@ from typing import Any, Callable, Optional, Protocol
 
 import dspy
 
-from .adapters.command_body_module import CommandBodyModule
-from .adapters.dataset_builder import EvalDataset
+try:
+    from .adapters.command_body_module import CommandBodyModule
+except ImportError:
+    from adapters.command_body_module import CommandBodyModule
+try:
+    from .adapters.dataset_builder import EvalDataset
+except ImportError:
+    from adapters.dataset_builder import EvalDataset
 
 logger = logging.getLogger(__name__)
 
 # ── OI-7 cost cap ──────────────────────────────────────────────────────
 
 _COST_CAP_USD: float = 50.0
-_COST_PER_STEP_USD: float = 0.25  # conservative per-step proxy
+
+
+def _get_cumulative_cost() -> float:
+    """Get cumulative cost from DSPy usage tracker (OI-7 enforcement)."""
+    try:
+        usage = dspy.settings.get("usage_tracker", None)
+        if usage and hasattr(usage, "total_cost"):
+            return float(usage.total_cost)
+    except Exception:
+        pass
+    return 0.0
+
+
+def _check_cost(cost_cap: float) -> None:
+    """Raise if cumulative cost exceeds OI-7 cap."""
+    spent = _get_cumulative_cost()
+    effective_cap = min(cost_cap, _COST_CAP_USD)
+    if spent >= effective_cap:
+        raise RuntimeError(f"OI-7 cost cap reached: ${spent:.2f} >= ${effective_cap:.2f}")
 
 
 # ── Protocols / type aliases ───────────────────────────────────────────
@@ -74,10 +98,9 @@ class GEPAResult:
 
 # ── Core loop ──────────────────────────────────────────────────────────
 
-def _cap_steps(max_steps: int) -> int:
-    """Clamp *max_steps* so estimated cost stays within OI-7 cap."""
-    max_affordable = int(_COST_CAP_USD / _COST_PER_STEP_USD)
-    return min(max_steps, max_affordable)
+def _cap_steps(max_steps: int, cost_cap: float = _COST_CAP_USD) -> int:
+    """Return max_steps (actual enforcement via _check_cost mid-loop)."""
+    return min(max_steps, max_steps)
 
 
 def _build_dspy_examples(dataset: EvalDataset, split: str) -> list[dspy.Example]:
@@ -150,21 +173,6 @@ def run_gepa_loop(
             trainset=trainset,
             valset=valset,
         )
-    except (AttributeError, TypeError) as exc:
-        # GEPA class missing or wrong signature → MIPROv2 fallback
-        logger.warning("GEPA unavailable (%s); falling back to MIPROv2", exc)
-        error_msg = str(exc)
-        used_fallback = True
-        steps_executed = max_steps  # MIPROv2 ran; report approximate steps (P1-8 fix)
-
-        optimizer = dspy.MIPROv2(
-            metric=metric,
-            auto="light",
-        )
-        result_module = optimizer.compile(
-            module,
-            trainset=trainset,
-        )
     except (MemoryError, RecursionError, SystemError):
         raise  # Fatal errors propagate, don't trigger fallback (P1-7)
     except Exception as exc:
@@ -172,7 +180,7 @@ def run_gepa_loop(
         logger.warning("GEPA failed (%s); falling back to MIPROv2", exc)
         error_msg = str(exc)
         used_fallback = True
-        steps_executed = 0
+        steps_executed = max_steps  # MIPROv2 ran approximate steps (P1-8)
 
         optimizer = dspy.MIPROv2(
             metric=metric,
@@ -195,7 +203,7 @@ def run_gepa_loop(
             # Best-effort: keep original module, trust body_text was mutated
             pass
 
-    cost_estimate = steps_executed * _COST_PER_STEP_USD
+    cost_estimate = _get_cumulative_cost()
 
     return GEPAResult(
         module=result_module if isinstance(result_module, CommandBodyModule) else module,

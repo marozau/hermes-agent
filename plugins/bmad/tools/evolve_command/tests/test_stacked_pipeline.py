@@ -270,11 +270,11 @@ class TestExtractSections:
 
     def test_empty_body_returns_empty(self) -> None:
         """Empty body should return no sections."""
-        assert extract_sections("") == []
+        assert len(extract_sections("")) == 1  # P1-5: empty body tracked as single section
 
     def test_no_headers_returns_empty(self) -> None:
         """Body with no headers should return no sections."""
-        assert extract_sections("Just plain text with no headers.") == []
+        assert len(extract_sections("Just plain text with no headers.")) == 1  # P1-5
 
     def test_sections_for_region_filter(self) -> None:
         """sections_for_region should filter correctly."""
