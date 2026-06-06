@@ -1,0 +1,6 @@
+# SkillOpt training configuration - smoke test (minimal values)
+model: gpt-4o-mini
+max_steps: 2
+batch_size: 1
+learning_rate: 0.01
+reward_threshold: 0.5
