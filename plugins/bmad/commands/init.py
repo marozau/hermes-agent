@@ -1,9 +1,7 @@
-"""Slash command handler for /bmad:init — scaffold a new BMAD project.
+"""CLI handler for hermes bmad-init — scaffold a new BMAD project.
 
-Registered in ``plugins.bmad/__init__.py`` as ``bmad:init``.
-
-Returns the rendered spec body (starts with "EXECUTE NOW") so the CLI
-dispatch injects it into the conversation for LLM continuation.
+This is the MECHANICAL bootstrap only. LLM engagement happens through
+the skill at ~/.hermes/skills/bmad/init/SKILL.md.
 """
 
 from __future__ import annotations
@@ -16,30 +14,12 @@ from plugins.bmad.scripts.bmad_init import bootstrap, bootstrap_workspace
 logger = logging.getLogger(__name__)
 
 
-def _strip_flags(args: str) -> str:
-    """Remove --force, --workspace, and --worktree specs from args for rendering."""
-    parts = args.strip().split() if args else []
-    cleaned: list[str] = []
-    skip_next = False
-    for part in parts:
-        if skip_next:
-            skip_next = False
-            continue
-        if part in ("--force", "--workspace"):
-            continue
-        if part == "--worktree":
-            skip_next = True
-            continue
-        cleaned.append(part)
-    return " ".join(cleaned)
-
-
 def handler(ctx, args: str) -> str:
-    """Handle the /bmad:init slash command.
+    """Handle hermes bmad-init CLI command.
 
     1. Parse structured args (--force, --workspace, --worktree)
     2. Run mechanical bootstrap (standard or workspace)
-    3. Return rendered spec body (CLI dispatch injects into conversation)
+    3. Return confirmation string
     """
     # ── Parse args ──────────────────────────────────────────────────
     args_list = args.strip().split() if args else []
@@ -65,12 +45,12 @@ def handler(ctx, args: str) -> str:
     project_level = int(getattr(ctx, "project_level", 1))
     project_type = getattr(ctx, "project_type", "other")
 
-    # ── Phase 1: Mechanical bootstrap ───────────────────────────────
+    # ── Bootstrap ───────────────────────────────────────────────────
     if workspace_mode:
         if not worktree_specs:
             return (
                 "❌ `--workspace` requires at least one `--worktree NAME:UPSTREAM:BRANCH`.\n\n"
-                "Example: `/bmad:init --workspace --worktree hermes-agent:~/usr-local/hermes:main`"
+                "Example: `hermes bmad-init --workspace --worktree hermes-agent:~/usr-local/hermes:main`"
             )
 
         worktrees: list[dict[str, str]] = []
@@ -102,7 +82,7 @@ def handler(ctx, args: str) -> str:
                 user_name=user_name,
             )
         except RuntimeError as exc:
-            return f"⚠️  {exc}\n\nUse `/bmad:init --force --workspace ...` to reinitialize."
+            return f"⚠️  {exc}\n\nUse `--force` to reinitialize."
         except ValueError as exc:
             return f"❌ {exc}"
         except Exception as exc:
@@ -121,23 +101,9 @@ def handler(ctx, args: str) -> str:
         except RuntimeError:
             return (
                 "⚠️  **bmad/config.yaml** already exists in this directory.\n\n"
-                "Use `/bmad:init --force` to overwrite the existing configuration."
+                "Use `--force` to overwrite the existing configuration."
             )
         except Exception as exc:
             return f"❌ Failed to initialize BMAD project: {exc}"
 
-    # ── Phase 2: Return rendered spec body ──────────────────────────
-    # Returns "EXECUTE NOW..." — the CLI dispatch detects this and injects
-    # into _pending_input so the LLM continues planning.
-    try:
-        from plugins.bmad.lib.spec_parser import parse_command_body
-        from plugins.bmad.lib.render import render_command
-
-        spec_path = Path(__file__).with_name("init.md")
-        body = spec_path.read_text()
-        spec, body_text = parse_command_body(body)
-        clean_args = _strip_flags(args)
-        return render_command(spec, body_text, args=clean_args, ctx=ctx)
-    except Exception as exc:
-        logger.warning("bmad:init: failed to render spec body: %s", exc)
-        return f"✅ BMAD project initialized at `{project_dir}`"
+    return f"✅ BMAD project initialized at `{project_dir}`"

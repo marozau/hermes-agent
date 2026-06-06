@@ -294,11 +294,8 @@ def register(ctx) -> None:
     from plugins.bmad.commands.doctor import handler as _doctor_handler
     from plugins.bmad.commands.migrate import handler as _migrate_handler
 
-    ctx.register_command(
-        name="bmad:init",
-        handler=_bind_ctx(_init_handler),
-        args_hint="[--force]",
-    )
+    # bmad:init is now a skill (~/.hermes/skills/bmad/init/SKILL.md)
+    # so the LLM continues planning after bootstrap.
     ctx.register_command(
         name="bmad:status",
         handler=_bind_ctx(_status_handler),
