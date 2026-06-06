@@ -42,6 +42,7 @@ self_report:
 3. **Category must be a known FAMA category:** `tool-misuse`, `context-overflow`, `hallucinated-api`, `incomplete-context`, `edit-error`, `requirement-drift`.
 4. **Place the block last.** After your normal response text, so users see the answer first.
 5. **Use ` ```yaml ` fence.** The parser expects this exact pattern.
+6. **match is REQUIRED when preflight_cited is non-empty.** If you list citation IDs, you MUST also state whether they helped (`hit`, `miss`, or `unrelated`). Omitting `match` when `preflight_cited` is set causes the citation to be silently ignored.
 
 ## Example — complete response
 

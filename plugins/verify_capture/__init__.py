@@ -102,7 +102,7 @@ def on_post_llm_call(
     **_kwargs: Any,
 ) -> None:
     """Parse the last assistant turn's self_report block; dispatch to writers."""
-    text = response or content or assistant_response or ""
+    text = assistant_response or response or content or ""
     if not isinstance(text, str) or not text:
         return
 

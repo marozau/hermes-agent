@@ -9,9 +9,18 @@ def _run_dispatch_inline():
     """F4 test helper: patch ThreadPoolExecutor.submit to run inline (synchronous)."""
     import lib.verify_dispatch as _vd
     _vd._SEEN_TRAJECTORY_HASHES.clear()
+
+    class _FakeFuture:
+        def add_done_callback(self, cb):
+            pass
+
+    def _inline_submit(fn, *args, **kwargs):
+        fn(*args, **kwargs)
+        return _FakeFuture()
+
     return mock.patch.object(
         _vd._DISPATCH_EXECUTOR, "submit",
-        side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs),
+        side_effect=_inline_submit,
     )
 
 
@@ -569,7 +578,7 @@ class TestDedupAndEdgeCases:
     """F9 dedup + defensive exception handlers."""
 
     def test_duplicate_trajectory_skipped(self):
-        """F9: Same body twice → second call skipped via hash dedup."""
+        """F9: Same body twice → second write skipped via hash dedup (classify still runs)."""
         from plugins.verify_capture import SelfReport, TrajectoryEntry
         from lib.verify_dispatch import dispatch_self_report
 
@@ -588,9 +597,9 @@ class TestDedupAndEdgeCases:
                 # Second dispatch with same body
                 dispatch_self_report(report, session_id="s1")
 
-        # classify should run once (second is dedup'd before classify)
-        assert mock_cls.call_count == 1
-        # add_entry should run once
+        # classify runs twice (hash dedup is after classify, before write)
+        assert mock_cls.call_count == 2
+        # add_entry runs once (second is dedup'd)
         assert mock_add.call_count == 1
 
     def test_file_lock_exception_handled(self):
@@ -662,3 +671,16 @@ class TestDedupAndEdgeCases:
             project, role = _derive_project_role()
 
         assert role == "default"
+
+    def test_windows_no_fcntl_path(self):
+        """F1: fcntl=None path (Windows) — _file_lock is a no-op."""
+        import lib.verify_dispatch as _vd
+        old_fcntl = _vd.fcntl
+        try:
+            _vd.fcntl = None  # type: ignore[assignment]
+            buf = open("/dev/null", "w")
+            _vd._file_lock(buf)
+            _vd._file_unlock(buf)
+            buf.close()
+        finally:
+            _vd.fcntl = old_fcntl
