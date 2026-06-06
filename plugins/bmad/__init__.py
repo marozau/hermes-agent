@@ -277,6 +277,22 @@ def register(ctx) -> None:
         ),
     )
 
+    # bmad-status CLI — used by /bmad:status skill
+    def _run_bmad_status(args):
+        from pathlib import Path
+        from plugins.bmad.commands.status import handler as _status_handler
+        # The handler needs ctx, but CLI doesn't have one. Create a minimal mock.
+        class _MinimalCtx:
+            working_directory = str(Path.cwd())
+        return _status_handler(_MinimalCtx(), "")
+
+    ctx.register_cli_command(
+        name="bmad-status",
+        help="Show current BMAD workflow status",
+        handler_fn=_run_bmad_status,
+        description="Display current BMAD workflow phase state and next recommended action.",
+    )
+
     # ── Slash commands ─────────────────────────────────
     from plugins.bmad.commands.init import handler as _init_handler
     from plugins.bmad.commands.status import handler as _status_handler
@@ -341,11 +357,8 @@ def register(ctx) -> None:
 
     # bmad:init is now a skill (~/.hermes/skills/bmad/init/SKILL.md)
     # so the LLM continues planning after bootstrap.
-    ctx.register_command(
-        name="bmad:status",
-        handler=_bind_ctx(_status_handler),
-        args_hint="",
-    )
+    # bmad:status is now a skill (~/.hermes/skills/bmad/status/SKILL.md)
+    # so the LLM can analyze status and suggest next steps.
     ctx.register_command(
         name="bmad:help",
         handler=_bind_ctx(_help_handler),
