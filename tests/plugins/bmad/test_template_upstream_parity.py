@@ -66,3 +66,27 @@ class TestTemplateUpstreamParity:
             f"{ours.name} differs from upstream. E4 violation: "
             f"templates must be byte-identical copies, not ad-hoc."
         )
+
+
+class TestRuntimeSkillParity:
+    """Runtime profile skills must match repo source of truth."""
+
+    def test_bmad_profile_critics_matches_repo(self):
+        """bmad:critics in bmad profile must match repo."""
+        repo = REPO_ROOT / "skills" / "bmad" / "critics" / "SKILL.md"
+        runtime = Path("/Users/im/.hermes/profiles/bmad/skills/bmad/critics/SKILL.md")
+        assert runtime.exists(), "bmad profile critics missing"
+        assert repo.read_bytes() == runtime.read_bytes(), (
+            "bmad profile critics diverged from repo. "
+            "Run: cp skills/bmad/critics/SKILL.md ~/.hermes/profiles/bmad/skills/bmad/critics/"
+        )
+
+    def test_bmad_profile_status_matches_repo(self):
+        """bmad:status in bmad profile must match repo."""
+        repo = REPO_ROOT / "skills" / "bmad" / "status" / "SKILL.md"
+        runtime = Path("/Users/im/.hermes/profiles/bmad/skills/bmad/status/SKILL.md")
+        assert runtime.exists(), "bmad profile status missing"
+        assert repo.read_bytes() == runtime.read_bytes(), (
+            "bmad profile status diverged from repo. "
+            "Run: cp skills/bmad/status/SKILL.md ~/.hermes/profiles/bmad/skills/bmad/status/"
+        )
