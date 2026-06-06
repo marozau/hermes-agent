@@ -63,8 +63,12 @@ def register(ctx) -> None:
     # TypeError("missing 1 required positional argument: 'ctx'") and the
     # _catch_all wrapper swallows it but floods errors.log.
     def _bind_hook_ctx(handler_fn):
+        import inspect as _inspect
+        _has_ctx = "ctx" in _inspect.signature(handler_fn).parameters
         def wrapped(*args, **kwargs):
-            return handler_fn(ctx, *args, **kwargs)
+            if _has_ctx:
+                return handler_fn(ctx, *args, **kwargs)
+            return handler_fn(*args, **kwargs)
         wrapped.__name__ = getattr(handler_fn, "__name__", "wrapped")
         wrapped.__qualname__ = getattr(handler_fn, "__qualname__", "wrapped")
         return wrapped
