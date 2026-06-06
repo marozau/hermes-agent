@@ -1,7 +1,7 @@
 """Test isolation gates (TI-1/TI-2).
 
 TI-1: No bare `dspy.configure` / `dspy.settings` calls outside module boundaries.
-TI-2: No direct imports of upstream `evolution.*` paths — must use vendored `_vendor.*`.
+TI-2: No direct imports of dspy/skillopt in runtime plugin — must use tooling subtree only.
 """
 
 from __future__ import annotations
@@ -59,25 +59,26 @@ class TestTI1NoBareDspyConfigure:
             )
 
 
-# ── TI-2: No direct upstream imports ──────────────────────────────────────
+# ── SM-1: No _vendor imports remaining (post Epic-14 migration) ───────────
 
-class TestTI2NoUpstreamImports:
-    """TI-2: No direct imports of upstream evolution.* paths."""
+class TestSM1NoVendorImports:
+    """SM-1: No _vendor imports remain after fork migration."""
 
     FORBIDDEN_PATTERNS = [
-        re.compile(r'from\s+evolution\.'),
-        re.compile(r'import\s+evolution\.'),
+        re.compile(r'from\s+\._vendor'),
+        re.compile(r'from\s+evolve_command\._vendor'),
+        re.compile(r'import\s+\._vendor'),
     ]
 
-    def test_no_upstream_imports(self) -> None:
-        """All code must use _vendor.* not upstream evolution.*."""
+    def test_no_vendor_imports(self) -> None:
+        """All _vendor imports must be replaced with fork package imports."""
         for f in _collect_all_python_files():
             content = f.read_text()
             for pattern in self.FORBIDDEN_PATTERNS:
                 matches = pattern.findall(content)
                 assert not matches, (
-                    f"TI-2 violation in {f.relative_to(PACKAGE_DIR)}: "
-                    f"upstream import found: {matches}"
+                    f"SM-1 violation in {f.relative_to(PACKAGE_DIR)}: "
+                    f"_vendor import found: {matches}"
                 )
 
 

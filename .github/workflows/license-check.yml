@@ -1,0 +1,25 @@
+name: License Check
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'plugins/bmad/tools/evolve_command/**'
+  pull_request:
+    paths:
+      - 'plugins/bmad/tools/evolve_command/**'
+
+jobs:
+  license-check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - name: Install dependencies
+        run: |
+          pip install pip-licenses
+          pip install plugins/bmad/tools/evolve_command/
+      - name: Check licenses
+        run: |
+          pip-licenses --fail-on="GPL" --fail-on="AGPL" --fail-on="SSPL" --format=csv
