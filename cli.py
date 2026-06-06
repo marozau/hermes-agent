@@ -9314,15 +9314,12 @@ class HermesCLI:
                             # These need conversation injection (not overlay display)
                             # so the LLM continues planning.  Scoped to "bmad:"
                             # commands to avoid false positives on other plugins.
-                            import sys
-                            print(f"[DEBUG] base_cmd={base_cmd!r} starts_with_execute={result_str.startswith('EXECUTE NOW')} starts_with_bmad={base_cmd.startswith('bmad:')}", file=sys.stderr)
                             if (
                                 result_str.startswith("EXECUTE NOW")
                                 and base_cmd.startswith("bmad:")
                             ):
                                 if hasattr(self, '_pending_input'):
                                     self._pending_input.put(result_str)
-                                    print(f"[DEBUG] INJECTED into _pending_input", file=sys.stderr)
                             else:
                                 _cprint(result_str)
                     except Exception as e:
