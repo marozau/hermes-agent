@@ -25,7 +25,7 @@ class TestScoreOutputScript:
             text=True,
             cwd=str(REPO_ROOT),
         )
-        assert result.returncode == 0, f"stderr: {result.stderr}"
+        # Parse JSON regardless of exit code (exit 1 means gates failed)
         return json.loads(result.stdout)
 
     def test_research_metric_with_perfect_output(self):

@@ -46,12 +46,45 @@ def load_metric(metric_name: str) -> dict:
     raise FileNotFoundError(f"Metric '{metric_name}' not found in {metrics_dir}")
 
 
-def check_hard_gate(gate: dict, text: str) -> bool:
-    """Evaluate a single hard gate. Returns True if passed."""
-    pattern = gate.get("pattern", "")
-    if not pattern:
-        return True
-    return bool(re.search(pattern, text, re.IGNORECASE | re.MULTILINE))
+def check_hard_gate(gate: dict, text: str, dimension_scores: dict = None) -> bool:
+    """Evaluate a single hard gate. Returns True if passed.
+
+    Supports two formats:
+    1. Pattern-based: {name, pattern} → regex match in text
+       Negative gates (name starts with "no_"): pass when pattern NOT found
+       Positive gates: pass when pattern IS found
+    2. Metric-based: {name, metric, threshold, op} → compare dimension score
+    """
+    pattern = gate.get("pattern")
+    if pattern:
+        matched = bool(re.search(pattern, text, re.IGNORECASE | re.MULTILINE))
+        gate_name = gate.get("name", "")
+        # Negative gates (no_*): pass when pattern is NOT found
+        if gate_name.startswith("no_"):
+            return not matched
+        return matched
+
+    # Metric-based gate: compare dimension score against threshold
+    metric_name = gate.get("metric")
+    threshold = gate.get("threshold")
+    op = gate.get("op", ">=")
+    if metric_name is not None and threshold is not None and dimension_scores is not None:
+        score = dimension_scores.get(metric_name, 0.0)
+        if op == ">=":
+            return score >= threshold
+        elif op == ">":
+            return score > threshold
+        elif op == "<=":
+            return score <= threshold
+        elif op == "<":
+            return score < threshold
+        elif op == "==":
+            return abs(score - threshold) < 0.001
+        elif op == "!=":
+            return abs(score - threshold) >= 0.001
+
+    # Unknown gate format — fail closed (return False)
+    return False
 
 
 def score_dimension(dim_name: str, dim_spec: list, text: str) -> float:
@@ -231,20 +264,7 @@ def compute_score(metric: dict, text: str) -> dict:
         "hard_gates_all_pass": True,
     }
 
-    # Check hard gates
-    for gate in hard_gates:
-        passed = check_hard_gate(gate, text)
-        results["hard_gates"].append({
-            "name": gate.get("name"),
-            "pattern": gate.get("pattern"),
-            "passed": passed,
-        })
-        if passed:
-            results["hard_gates_passed"] += 1
-        else:
-            results["hard_gates_all_pass"] = False
-
-    # Score dimensions
+    # Score dimensions FIRST (metric-based gates need these)
     for dim_name, weight in weights.items():
         dim_spec = scoring.get(dim_name, [])
         dim_score = score_dimension(dim_name, dim_spec, text)
@@ -255,9 +275,29 @@ def compute_score(metric: dict, text: str) -> dict:
             "weighted": dim_score * weight,
         }
 
-    # Composite
-    composite = sum(d["weighted"] for d in results["dimensions"].values())
-    results["composite_score"] = round(composite, 3)
+    # Check hard gates (after dimensions are scored)
+    for gate in hard_gates:
+        passed = check_hard_gate(gate, text, results["dimension_scores"])
+        gate_info = {
+            "name": gate.get("name"),
+            "passed": passed,
+        }
+        if gate.get("pattern"):
+            gate_info["pattern"] = gate["pattern"]
+        if gate.get("metric") is not None:
+            gate_info["metric"] = gate["metric"]
+            gate_info["threshold"] = gate.get("threshold")
+            gate_info["op"] = gate.get("op", "")
+        results["hard_gates"].append(gate_info)
+        if passed:
+            results["hard_gates_passed"] += 1
+        else:
+            results["hard_gates_all_pass"] = False
+
+    # Composite: if no scoring block, skip (composite stays 0.0 for external metrics)
+    if scoring:
+        composite = sum(d["weighted"] for d in results["dimensions"].values())
+        results["composite_score"] = round(composite, 3)
 
     return results
 
@@ -288,7 +328,7 @@ def main() -> int:
     results = compute_score(metric, text)
     print(json.dumps(results, indent=2))
 
-    return 0 if results["hard_gates_all_pass"] else 0  # Still exit 0, score in JSON
+    return 0 if results["hard_gates_all_pass"] else 1  # Exit 1 if gates fail
 
 
 if __name__ == "__main__":
