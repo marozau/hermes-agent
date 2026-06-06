@@ -19,9 +19,15 @@ execute the remaining setup based on the user's intent.
 
 ## What's already done
 
-- `bmad/config.yaml` created (with `workspace_mode: true` if workspace)
+{% if '--workspace' in args %}
+- `bmad/config.yaml` created with `workspace_mode: true`
+- `planning-artifacts/` scaffolded at workspace root
+- `worktree/<name>/` git worktrees created for each repo
+{% else %}
+- `bmad/config.yaml` created
 - `planning-artifacts/` scaffolded
-- `worktree/<name>/` git worktrees created (if workspace mode)
+- `implementation-artifacts/` scaffolded
+{% endif %}
 
 ## What you need to do next
 
@@ -29,9 +35,10 @@ execute the remaining setup based on the user's intent.
 
 Read their original request (in `{{args}}`). Extract:
 - What projects/repos they're working on
-- What feature or goal they're pursuing (e.g. "improve hermes-swarm")
+- What feature or goal they're pursuing
 - Any specific branch or worktree preferences
 
+{% if '--workspace' in args %}
 ### 2. Author AGENTS.md
 
 Create `AGENTS.md` at the workspace root. It should contain:
@@ -60,10 +67,20 @@ After setup, verify:
 - `AGENTS.md` exists and covers the workspace layout
 - `CLAUDE.md` is a symlink to `AGENTS.md`
 - `WORKTREES.md` exists with worktree manifest
+{% else %}
+### 2. Verify
 
-### 6. Next steps
+After setup, verify:
+- `bmad/config.yaml` exists and is valid
+- `planning-artifacts/` directory exists
+- `implementation-artifacts/` directory exists
+{% endif %}
+
+### Next steps
 
 Suggest what the user should do next:
 - `/bmad:create-prd` to start planning
 - `/bmad:epics-stories` to decompose work
+{% if '--workspace' in args %}
 - Direct code exploration in worktrees
+{% endif %}

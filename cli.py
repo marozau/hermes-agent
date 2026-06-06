@@ -9309,19 +9309,21 @@ class HermesCLI:
                         )
                         if result:
                             result_str = str(result)
-                            # Plugin commands that return rendered imperative
-                            # bodies (starting with "EXECUTE NOW") need to be
-                            # injected into the conversation so the LLM
-                            # continues planning — not just displayed in the
-                            # overlay/pager.  This mirrors the skill dispatch
-                            # path which returns {"type": "skill", "message": ...}.
-                            if result_str.startswith("EXECUTE NOW"):
+                            # BMAD plugin commands with imperative_preamble
+                            # return rendered bodies starting with "EXECUTE NOW".
+                            # These need conversation injection (not overlay display)
+                            # so the LLM continues planning.  Scoped to "bmad:"
+                            # commands to avoid false positives on other plugins.
+                            if (
+                                result_str.startswith("EXECUTE NOW")
+                                and base_cmd.startswith("bmad:")
+                            ):
                                 if hasattr(self, '_pending_input'):
                                     self._pending_input.put(result_str)
                             else:
                                 _cprint(result_str)
                     except Exception as e:
-                        _cprint(f"\033[1;31mPlugin command error: {e}\033[0m")
+                        _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
             # Skill bundles take precedence over individual skills — /<bundle>
             # loads multiple skills at once. Rescans cheaply when files change.
             elif base_cmd in skill_bundles:
