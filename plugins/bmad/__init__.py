@@ -129,9 +129,18 @@ def register(ctx) -> None:
             "--non-interactive", action="store_true", default=False,
             help="Fail if config exists or required fields are missing.",
         )
+        subparser.add_argument(
+            "--workspace", action="store_true", default=False,
+            help="Enable workspace mode (planning at root, code in worktrees).",
+        )
+        subparser.add_argument(
+            "--worktree", action="append", default=[],
+            metavar="NAME:UPSTREAM:BRANCH",
+            help="Add a git worktree (repeatable). Requires --workspace.",
+        )
 
     def _run_bmad_init(args):
-        """Thin wrapper: pass Namespace values to bootstrap().
+        """Thin wrapper: pass Namespace values to bootstrap() or bootstrap_workspace().
 
         M-2 fix (code-review 2026-05-21): the non-interactive guard now
         fires BEFORE any input() call. Previously, the project-name input()
@@ -139,44 +148,76 @@ def register(ctx) -> None:
         """
         import sys
         from pathlib import Path
-        from plugins.bmad.scripts.bmad_init import bootstrap
+        from plugins.bmad.scripts.bmad_init import bootstrap, bootstrap_workspace
 
         non_interactive = bool(getattr(args, "non_interactive", False))
+        workspace_mode = bool(getattr(args, "workspace", False))
+        worktree_specs = list(getattr(args, "worktree", []) or [])
 
         # Resolve project_name with the non-interactive guard fired BEFORE
         # any blocking input() call.
         project_name = args.project_name
         if not project_name:
-            if non_interactive:
-                print(
-                    "Error: --project-name is required under --non-interactive",
-                    file=sys.stderr,
-                )
-                sys.exit(3)
-            try:
-                project_name = input("Project name: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print(
-                    "Error: project name required (stdin closed or interrupted)",
-                    file=sys.stderr,
-                )
-                sys.exit(3)
-            if not project_name:
-                print("Error: project name required", file=sys.stderr)
-                sys.exit(3)
+            if non_interactive or workspace_mode:
+                project_name = Path.cwd().name
+            else:
+                try:
+                    project_name = input("Project name: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print(
+                        "Error: project name required (stdin closed or interrupted)",
+                        file=sys.stderr,
+                    )
+                    sys.exit(3)
+                if not project_name:
+                    print("Error: project name required", file=sys.stderr)
+                    sys.exit(3)
 
         try:
-            config = bootstrap(
-                Path.cwd(),
-                project_name=project_name,
-                project_type=args.project_type,
-                project_level=args.project_level,
-                user_name=args.user_name or "",
-                force=args.force,
-                interactive=not non_interactive,
-            )
-            print(f"✅ BMAD project '{config['project_name']}' initialized at {Path.cwd()}")
-            print(f"   Level: {config['project_level']}  |  Type: {config['project_type']}")
+            if workspace_mode:
+                if not worktree_specs:
+                    print(
+                        "Error: --workspace requires at least one --worktree NAME:UPSTREAM:BRANCH",
+                        file=sys.stderr,
+                    )
+                    sys.exit(3)
+                worktrees = []
+                for spec in worktree_specs:
+                    parts = spec.split(":")
+                    if len(parts) != 3:
+                        print(
+                            f"Error: invalid --worktree format: {spec}\n"
+                            "Expected: NAME:UPSTREAM:BRANCH",
+                            file=sys.stderr,
+                        )
+                        sys.exit(3)
+                    worktrees.append({
+                        "name": parts[0],
+                        "upstream": parts[1],
+                        "branch": parts[2],
+                    })
+                config = bootstrap_workspace(
+                    Path.cwd(),
+                    project_name=project_name,
+                    worktrees=worktrees,
+                    project_type=args.project_type,
+                    project_level=args.project_level,
+                    user_name=args.user_name or "",
+                )
+                print(f"✅ BMAD workspace '{config['project_name']}' initialized at {Path.cwd()}")
+                print(f"   Mode: workspace  |  Worktrees: {len(worktrees)}")
+            else:
+                config = bootstrap(
+                    Path.cwd(),
+                    project_name=project_name,
+                    project_type=args.project_type,
+                    project_level=args.project_level,
+                    user_name=args.user_name or "",
+                    force=args.force,
+                    interactive=not non_interactive,
+                )
+                print(f"✅ BMAD project '{config['project_name']}' initialized at {Path.cwd()}")
+                print(f"   Level: {config['project_level']}  |  Type: {config['project_type']}")
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(3)
