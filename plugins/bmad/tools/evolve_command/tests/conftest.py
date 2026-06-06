@@ -2,6 +2,7 @@
 
 Adds the parent of evolve_command to sys.path so that the package
 is importable as `evolve_command.*`.
+Also adds evolve_command/ itself so `from adapters.X import ...` works.
 """
 
 from __future__ import annotations
@@ -13,3 +14,8 @@ from pathlib import Path
 _tools_dir = str(Path(__file__).resolve().parent.parent.parent)
 if _tools_dir not in sys.path:
     sys.path.insert(0, _tools_dir)
+
+# Also add evolve_command/ itself so `from adapters.X import Y` works
+_evolve_dir = str(Path(__file__).resolve().parent.parent)
+if _evolve_dir not in sys.path:
+    sys.path.insert(0, _evolve_dir)

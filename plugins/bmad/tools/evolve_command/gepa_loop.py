@@ -44,11 +44,11 @@ _COST_CAP_USD: float = 50.0
 def _get_cumulative_cost() -> float:
     """Get cumulative cost from DSPy usage tracker (OI-7 enforcement)."""
     try:
-        usage = dspy.settings.get("usage_tracker", None)
-        if usage and hasattr(usage, "total_cost"):
+        usage = getattr(dspy.settings, 'usage_tracker', None)
+        if usage and hasattr(usage, 'total_cost'):
             return float(usage.total_cost)
-    except Exception:
-        pass
+    except (AttributeError, KeyError, TypeError) as exc:
+        logger.debug("Cost tracker not available: %s", exc)
     return 0.0
 
 
@@ -123,6 +123,7 @@ def run_gepa_loop(
     dataset: EvalDataset,
     *,
     max_steps: int = 10,
+    cost_cap: float = _COST_CAP_USD,
     eval_model: str = "openai/gpt-4.1-mini",
 ) -> GEPAResult:
     """Run the GEPA optimisation loop on a :class:`CommandBodyModule`.
@@ -146,7 +147,8 @@ def run_gepa_loop(
         A :class:`GEPAResult` containing the optimised module and run metadata.
     """
     # Enforce OI-7 cost cap
-    safe_steps = _cap_steps(max_steps)
+    _check_cost(cost_cap)
+    safe_steps = _cap_steps(max_steps, cost_cap)
 
     # Configure DSPy LM
     lm = dspy.LM(eval_model)
@@ -200,8 +202,10 @@ def run_gepa_loop(
         if isinstance(inner, CommandBodyModule):
             result_module = inner
         else:
-            # Best-effort: keep original module, trust body_text was mutated
-            pass
+            raise RuntimeError(
+                f"Could not extract CommandBodyModule from {type(result_module).__name__}; "
+                f"MIPROv2 returned incompatible wrapper"
+            )
 
     cost_estimate = _get_cumulative_cost()
 

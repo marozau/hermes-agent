@@ -18,9 +18,12 @@ import re
 from dataclasses import dataclass
 from typing import Optional
 
-import dspy
+from typing import Any, Callable, Optional, Protocol
 
-
+try:
+    import dspy
+except ImportError:
+    dspy = None  # type: ignore[assignment]
 # ── Frontmatter helpers ────────────────────────────────────────────────
 
 _FRONTMATTER_RE = re.compile(
@@ -55,6 +58,7 @@ def parse_command(text: str) -> ParsedCommand:
         If no frontmatter markers are found, ``frontmatter`` is empty and
         ``body`` equals the full text.
     """
+    text = text.lstrip('\ufeff')
     m = _FRONTMATTER_RE.match(text.strip())
     if m:
         return ParsedCommand(

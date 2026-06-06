@@ -63,7 +63,7 @@ PHASE2_REGIONS: frozenset[PhaseRegion] = frozenset({
 
 # Matches markdown H2 or H3 headers: ## Strategy, ### Patterns, etc.
 _SECTION_RE = re.compile(
-    r"^(#{2,3})\s+(.+?)\s*$",
+    r"^(#{1,6})\s+(.+?)\s*$",
     re.MULTILINE,
 )
 
@@ -389,12 +389,12 @@ def run_stacked_pipeline(
     )
 
     if phase1.error:
-        logger.warning("Stacked pipeline: Phase 1 failed: %s", phase1.error)
-        return StackedPipelineResult(
-            frontmatter=parsed.frontmatter,
-            phase1=phase1,
-            total_elapsed=time.monotonic() - total_start,
-            success=False,
+        logger.warning("Stacked pipeline: Phase 1 failed (%s); proceeding with Phase 2 on original body", phase1.error)
+        phase1 = Phase1Result(
+            best_body=parsed.body,
+            mutated_regions=set(),
+            elapsed=phase1.elapsed,
+            error=None,
         )
 
     # ── Step 3: Run Phase 2 (GEPA) on Phase 1 output ──────────────────
@@ -419,15 +419,23 @@ def run_stacked_pipeline(
             success=False,
         )
 
-    # ── Step 4: Validate OI-2 disjoint regions ────────────────────────
-    oi2 = validate_oi2_disjoint(phase1.mutated_regions, phase2.mutated_regions)
+    # ── Step 4: Validate OI-2 disjoint regions (P0-3: empirical diff) ──
+    p1_empirical = compute_empirical_mutations(parsed.body, phase1.best_body)
+    p2_empirical = compute_empirical_mutations(phase1.best_body, phase2.evolved_body)
+    oi2 = validate_oi2_disjoint(p1_empirical, p2_empirical)
     logger.info("Stacked pipeline: OI-2 validation: %s", oi2.message)
 
     if not oi2.passed:
+        # P1-10: include evolved body even on OI-2 failure
+        try:
+            failed_text = reassemble_command(parsed.frontmatter, phase2.evolved_body)
+        except Exception:
+            failed_text = ""
         return StackedPipelineResult(
             frontmatter=parsed.frontmatter,
             phase1=phase1,
             phase2=phase2,
+            command_text=failed_text,
             oi2_validation=oi2,
             total_elapsed=time.monotonic() - total_start,
             success=False,
