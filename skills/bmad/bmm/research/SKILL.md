@@ -1,10 +1,10 @@
 ---
 name: bmad:research
-description: "Analysis-phase research skill — market research, competitive analysis, domain research, technical feasibility. Trigger on: research, market research, competitive analysis, domain research, technical research."
-  Conduct market, domain, or technical research with verified sources. Phase 1
-  Analysis
-user-invocable: true
-
+description: |
+  Analysis-phase research skill — market research, competitive analysis, domain
+  research, technical feasibility. Trigger on: research, market research,
+  competitive analysis, domain research, technical research.
+  Phase 1 Analysis. Requires web search.
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
 platforms: [linux, macos, windows]
@@ -14,36 +14,99 @@ metadata:
     category: bmad
 ---
 
-# Research Workflow
+# /bmad:research — Research Workflow
 
 **Goal:** Conduct comprehensive research across multiple domains using current
 web data and verified sources.
 
-**Agent:** Analyst (Mary) **Phase:** 1 - Analysis
+**Phase:** 1 - Analysis | **Agent:** Analyst
 
 ---
 
-## Workflow Architecture
+## Execution
 
-This uses **routing-based discovery** with micro-file architecture. Each
-research type has its own step folder.
+### Step 1: Parse intent
 
-## Initialization
+Extract from the user's message:
+- **Research type:** market | competitive | domain | technical
+- **Topic:** what to research
+- **Goals:** what decisions will this research inform?
 
-Check for project config at `bmad/config.yaml`. Load project settings.
+If unclear, ask clarifying questions before proceeding.
 
-**Requires:** Web search capability.
+### Step 2: Load template
 
-## Research Tracks
+Read the research template at `skills/bmad/templates/research.template.md`.
+**Follow this template exactly** for output structure, substituting placeholder
+values with actual research content.
 
-- **Market Research:** `./market-steps/step-01-init.md`
-- **Domain Research:** `./domain-steps/step-01-init.md`
-- **Technical Research:** `./technical-steps/step-01-init.md`
+### Step 3: Execute research
 
-Begin by asking the user what they want to research, then route to the
-appropriate track.
+Use web search to gather current data. For each source:
+- Record URL and access date
+- Verify source credibility (official docs > blogs > forums)
+- Cross-check key claims against 2+ sources
 
-## Output
+### Step 4: Synthesize and output
 
-Research document with citations at:
-`planning-artifacts/research/{type}-{topic}-research-{date}.md`
+Populate the template with findings. Output must include:
+- Frontmatter with research_type, research_topic, research_goals, date
+- Research Overview (scope + methodology)
+- Findings (structured per subtopic)
+- Citations (≥3 distinct sources)
+- Conclusions / recommendations
+
+Save to: `planning-artifacts/research/{type}-{topic}-research-{date}.md`
+
+---
+
+## Template Reference
+
+```markdown
+---
+stepsCompleted: []
+inputDocuments: []
+workflowType: 'research'
+lastStep: 1
+research_type: '{{research_type}}'
+research_topic: '{{research_topic}}'
+research_goals: '{{research_goals}}'
+user_name: '{{user_name}}'
+date: '{{date}}'
+web_research_enabled: true
+source_verification: true
+---
+
+# Research Report: {{research_type}}
+
+**Date:** {{date}}
+**Author:** {{user_name}}**
+**Research Type:** {{research_type}}
+
+---
+
+## Research Overview
+
+[Scope, methodology, and key questions]
+
+## Findings
+
+[Structured findings per subtopic]
+
+## Sources
+
+[URL + date accessed for each source]
+
+## Conclusions
+
+[Key takeaways and recommendations]
+```
+
+---
+
+## Anti-patterns
+
+- DO NOT proceed without clarifying the research type and goals
+- DO NOT cite sources without URLs or access dates
+- DO NOT present opinions as facts — distinguish verified claims from inference
+- DO NOT skip the methodology section — future readers need to know how you searched

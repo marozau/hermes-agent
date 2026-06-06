@@ -1,12 +1,13 @@
 #!/usr/bin/env python3
 from __future__ import annotations
-"""check_metric_frozen.py — TI-3 metric freeze gate.
+"""check_metric_frozen.py — TI-3 metric freeze gate (Epic 15.2 extension).
 
-Verifies that the metric definition file hasn't been modified after its
-declared freeze date. If the file was modified after freeze_date, CI fails.
+Verifies that ALL metric definition files in metrics/ haven't been modified
+after their declared freeze_date. If any file was modified after freeze, CI fails.
 
-Exit 0 = PASS (metric is frozen or not yet frozen)
-Exit 1 = FAIL (metric modified after freeze)
+Exit 0 = PASS (all frozen metrics unmodified)
+Exit 1 = FAIL (one or more frozen metrics modified after freeze)
+Exit 2 = ERROR (parse error, missing file, etc.)
 """
 
 import subprocess
@@ -19,9 +20,6 @@ try:
 except ImportError:
     print("SKIP: pyyaml not installed, cannot parse metric YAML")
     sys.exit(0)
-
-
-METRIC_REL_PATH = "plugins/bmad/tools/evolve_command/metrics/dev_story_composite_v1.yaml"
 
 
 def find_repo_root() -> Path:
@@ -41,57 +39,89 @@ def get_last_git_commit_date(repo_root: Path, file_path: str) -> date | None:
         )
         if result.returncode != 0 or not result.stdout.strip():
             return None
-        # Parse ISO datetime, extract date
         ts = result.stdout.strip()
         return datetime.fromisoformat(ts).date()
     except Exception:
         return None
 
 
-def main() -> int:
-    repo_root = find_repo_root()
-    metric_path = repo_root / METRIC_REL_PATH
-
-    if not metric_path.exists():
-        print(f"SKIP: Metric file not found at {metric_path}")
-        return 0
+def check_metric(repo_root: Path, metric_path: Path) -> tuple[str, int]:
+    """Check a single metric. Returns (message, exit_code)."""
+    rel_path = metric_path.relative_to(repo_root)
 
     try:
         with open(metric_path, "r", encoding="utf-8") as f:
             metric = yaml.safe_load(f)
     except Exception as e:
-        print(f"ERROR: Cannot parse metric YAML: {e}")
-        return 1
+        return f"ERROR: Cannot parse {rel_path}: {e}", 2
 
     freeze_date_str = metric.get("freeze_date")
     if not freeze_date_str:
-        print("SKIP: No freeze_date field in metric — not yet frozen")
-        return 0
+        return f"SKIP: {rel_path} — no freeze_date, not yet frozen", 0
 
     try:
         freeze_date = datetime.strptime(str(freeze_date_str), "%Y-%m-%d").date()
     except ValueError:
-        print(f"ERROR: Invalid freeze_date format: {freeze_date_str} (expected YYYY-MM-DD)")
-        return 1
+        return f"ERROR: {rel_path} — invalid freeze_date: {freeze_date_str}", 2
 
-    # Check git log for last modification
-    last_modified = get_last_git_commit_date(repo_root, METRIC_REL_PATH)
-
+    last_modified = get_last_git_commit_date(repo_root, str(rel_path))
     if last_modified is None:
-        print(f"SKIP: Cannot determine last git commit date for {METRIC_REL_PATH}")
-        return 0
+        return f"SKIP: {rel_path} — cannot determine last git commit date", 0
 
     if last_modified >= freeze_date:
-        print(
-            f"METRIC FREEZE VIOLATION: {METRIC_REL_PATH}\n"
+        return (
+            f"METRIC FREEZE VIOLATION: {rel_path}\n"
             f"  last modified: {last_modified}\n"
             f"  freeze_date:   {freeze_date}\n"
-            f"\n  Create a new metric version (v2) instead of modifying a frozen one.\n"
-            f"  See docs/metric-versioning.md for the unfreeze procedure."
+            f"\n  Create a new metric version instead of modifying a frozen one.\n"
+            f"  See docs/metric-versioning.md for the unfreeze procedure.",
+            1,
         )
-        return 1
 
-    print(f"TI-3 PASS: Metric frozen at {freeze_date}, last modified {last_modified}.")
+    return f"PASS: {rel_path} frozen at {freeze_date}, last modified {last_modified}.", 0
+
+
+def main() -> int:
+    repo_root = find_repo_root()
+    metrics_dir = repo_root / "plugins" / "bmad" / "tools" / "evolve_command" / "metrics"
+
+    if not metrics_dir.exists():
+        print(f"ERROR: Metrics directory not found: {metrics_dir}")
+        return 2
+
+    metric_files = sorted(metrics_dir.glob("*.yaml"))
+    if not metric_files:
+        print("SKIP: No metric YAML files found")
+        return 0
+
+    violations = 0
+    errors = 0
+    passes = 0
+    skips = 0
+
+    for metric_path in metric_files:
+        msg, code = check_metric(repo_root, metric_path)
+        print(msg)
+        if code == 1:
+            violations += 1
+        elif code == 2:
+            errors += 1
+        elif "PASS" in msg:
+            passes += 1
+        else:
+            skips += 1
+
+    print(f"\n─── Summary ───")
+    print(f"  Metrics checked: {len(metric_files)}")
+    print(f"  PASS:  {passes}")
+    print(f"  SKIP:  {skips}")
+    print(f"  FAIL:  {violations}")
+    print(f"  ERROR: {errors}")
+
+    if errors > 0:
+        return 2
+    if violations > 0:
+        return 1
     return 0
 
 

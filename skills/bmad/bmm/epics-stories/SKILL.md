@@ -1,12 +1,103 @@
 ---
 name: bmad:epics-stories
-description: "Solutioning-phase skill for decomposing architecture into epics and user stories. Trigger on: create epics, user stories, story mapping, decompose, backlog."
+description: |
+  Solutioning-phase skill for decomposing architecture into epics and user
+  stories. Trigger on: create epics, user stories, story mapping, decompose,
+  backlog.
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
 platforms: [linux, macos, windows]
 metadata:
   hermes:
-    tags: ['bmad', 'bmm', 'solutioning', 'epics-stories']
+    tags: [bmad, bmm, solutioning, epics-stories]
     category: bmad
 ---
-Follow the instructions in ./workflow.md.
+
+# /bmad:epics-stories — Epic & Story Decomposition
+
+**Goal:** Break architecture into deliverable epics and user stories with
+acceptance criteria.
+
+**Phase:** 3 - Solutioning
+
+---
+
+## Execution
+
+### Step 1: Gather inputs
+
+Required:
+- Architecture at `planning-artifacts/architecture-{project}.md`
+- PRD at `planning-artifacts/prd-{project}.md`
+
+If Architecture is missing, run `/bmad:create-architecture` first.
+
+### Step 2: Identify epics
+
+Group stories into epics by functional area or component:
+- Each epic delivers user-visible value
+- Each epic fits in 1-2 sprints
+- Epic count: 3-7 for most projects
+
+### Step 3: Write user stories
+
+For each epic, write stories in format:
+> **As a** [role], **I want** [capability], **so that** [benefit]
+
+Quality checks:
+- INVEST: Independent, Negotiable, Valuable, Estimable, Small, Testable
+- Every story has ≥2 acceptance criteria
+- Stories are small enough for 1-3 days of work
+
+### Step 4: Prioritize
+
+Rank by: Business value ÷ Effort (highest first)
+Tag each story: P0 (must), P1 (should), P2 (could)
+
+### Step 5: Output
+
+Save to: `planning-artifacts/epics-stories-{project}.md`
+
+---
+
+## Template Reference
+
+```markdown
+# Epics & User Stories: {{project_name}}
+
+**Date:** {{date}}
+**Author:** {{user_name}}
+**Version:** 1.0
+
+---
+
+## Epic 1: [Epic Name]
+
+**Business Value:** [Why this matters]
+**Priority:** P0
+
+### User Stories
+
+#### Story 1.1
+
+> As a [role], I want [capability], so that [benefit]
+
+**Acceptance Criteria:**
+- [ ] Given [context], when [action], then [outcome]
+- [ ] Given [context], when [action], then [outcome]
+
+**Priority:** P0
+**Estimate:** [S/M/L or story points]
+
+## Epic 2: [Epic Name]
+...
+```
+
+---
+
+## Anti-patterns
+
+- DO NOT write stories without acceptance criteria — they're not testable
+- DO NOT make stories too large (≥3 days) — break them down
+- DO NOT skip prioritization — everything P0 means nothing is P0
+- DO NOT write technical tasks as user stories — stories deliver user value

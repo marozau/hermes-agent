@@ -1,0 +1,75 @@
+version: 1
+name: research_structural_v1
+description: >
+  Structural scoring rubric for BMAD research skill outputs.
+  Measures presence and quality of required report sections.
+  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-06"
+
+weights:
+  frontmatter_complete: 0.2
+  overview_present: 0.2
+  methodology_present: 0.15
+  findings_structured: 0.2
+  citations_present: 0.15
+  conclusions_present: 0.1
+
+hard_gates:
+  - name: frontmatter_required_fields
+    pattern: "research_type:|research_topic:|date:"
+  - name: has_overview_heading
+    pattern: "## Research Overview|## Overview|# Overview"
+  - name: has_findings_heading
+    pattern: "## Findings|## Results|## Key Findings|# Findings"
+  - name: has_citations
+    pattern: "\\[.*?\\]|https?://|Sources?|References?|Citations?"
+
+scoring:
+  frontmatter_complete:
+    - score: 1.0
+      when: "all of [research_type, research_topic, research_goals, date, author] present"
+    - score: 0.7
+      when: "3-4 of required fields present"
+    - score: 0.3
+      when: "1-2 of required fields present"
+    - score: 0.0
+      when: "no frontmatter"
+  overview_present:
+    - score: 1.0
+      when: "overview section with ≥3 sentences describing scope and methodology"
+    - score: 0.5
+      when: "overview section with 1-2 sentences"
+    - score: 0.0
+      when: "no overview section"
+  methodology_present:
+    - score: 1.0
+      when: "explicit methodology section describing sources and search strategy"
+    - score: 0.5
+      when: "methodology mentioned inline but no dedicated section"
+    - score: 0.0
+      when: "no methodology mentioned"
+  findings_structured:
+    - score: 1.0
+      when: "findings organized with subheadings per topic"
+    - score: 0.7
+      when: "findings as bullet list"
+    - score: 0.4
+      when: "findings as paragraph text"
+    - score: 0.0
+      when: "no findings section"
+  citations_present:
+    - score: 1.0
+      when: "≥3 distinct sources cited with URLs or references"
+    - score: 0.6
+      when: "1-2 sources cited"
+    - score: 0.2
+      when: "sources mentioned but no formal citations"
+    - score: 0.0
+      when: "no sources mentioned"
+  conclusions_present:
+    - score: 1.0
+      when: "conclusions or recommendations section with takeaways"
+    - score: 0.5
+      when: "conclusions inline but no dedicated section"
+    - score: 0.0
+      when: "no conclusions"
