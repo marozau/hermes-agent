@@ -2522,11 +2522,24 @@ def _load_config() -> dict:
     to the persistent config (hermes_cli/config.py load_config()) so that
     ``delegation.model`` / ``delegation.provider`` are picked up regardless
     of the entry point (CLI, gateway, cron).
+
+    Also checks ``model.delegation`` as a fallback — some configs nest
+    delegation under ``model:`` instead of at the root level (especially
+    profiles cloned from ``hermes profile create --clone``).
     """
+    def _with_fallback(delegation_cfg, full_cfg):
+        """If delegation has no model, try model.delegation as fallback."""
+        if delegation_cfg and not delegation_cfg.get("model"):
+            nested = (full_cfg.get("model") or {}).get("delegation")
+            if nested:
+                return {**delegation_cfg, **nested}
+        return delegation_cfg
+
     try:
         from cli import CLI_CONFIG
 
         cfg = CLI_CONFIG.get("delegation") or {}
+        cfg = _with_fallback(cfg, CLI_CONFIG)
         if cfg:
             return cfg
     except Exception:
@@ -2535,7 +2548,9 @@ def _load_config() -> dict:
         from hermes_cli.config import load_config
 
         full = load_config()
-        return full.get("delegation") or {}
+        cfg = full.get("delegation") or {}
+        cfg = _with_fallback(cfg, full)
+        return cfg
     except Exception:
         return {}
 
