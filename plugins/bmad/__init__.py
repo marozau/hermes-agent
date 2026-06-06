@@ -359,11 +359,8 @@ def register(ctx) -> None:
         handler=_bind_ctx(_product_brief_handler),
         args_hint="",
     )
-    ctx.register_command(
-        name="bmad:research",
-        handler=_bind_ctx(_research_handler),
-        args_hint="",
-    )
+    # bmad:research is now a skill (~/.hermes/skills/bmad/research/SKILL.md)
+    # so the LLM continues planning after research setup.
     ctx.register_command(
         name="bmad:brainstorm",
         handler=_bind_ctx(_brainstorm_handler),
