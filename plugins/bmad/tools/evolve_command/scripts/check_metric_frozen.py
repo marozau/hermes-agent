@@ -41,7 +41,7 @@ def get_last_git_commit_date(repo_root: Path, file_path: str) -> date | None:
             return None
         ts = result.stdout.strip()
         return datetime.fromisoformat(ts).date()
-    except Exception:
+    except (subprocess.CalledProcessError, ValueError, OSError):
         return None
 
 
@@ -52,7 +52,7 @@ def check_metric(repo_root: Path, metric_path: Path) -> tuple[str, int]:
     try:
         with open(metric_path, "r", encoding="utf-8") as f:
             metric = yaml.safe_load(f)
-    except Exception as e:
+    except (yaml.YAMLError, OSError, UnicodeDecodeError) as e:
         return f"ERROR: Cannot parse {rel_path}: {e}", 2
 
     freeze_date_str = metric.get("freeze_date")

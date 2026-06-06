@@ -61,10 +61,19 @@ Save to: `planning-artifacts/architecture-{project}.md`
 
 ---
 
-## Template Reference
+## Execution Steps
 
-Use `skills/bmad/templates/architecture.md` **byte-identical from BMAD v6.2.2.0 upstream**.
-Do NOT edit the template structure — substitute placeholders only.
+Follow the BMAD step-file workflow. Each step is a separate file in
+`skills/bmad/bmm/create-architecture/steps/`:
+
+1. Read `step-01-init.md` — initialize the architecture document
+2. Continue through `step-02-context.md` ... `step-08-complete.md`
+3. After each step, save incremental progress to `planning-artifacts/architecture-*.md`
+4. Use `step-01b-continue.md` to resume after interruptions
+
+Use `skills/bmad/templates/architecture.md` **byte-identical from BMAD v6.2.2.0 upstream**
+as the structural template. Do NOT edit the template structure — substitute
+placeholders only.
 
 ```bash
 cat skills/bmad/templates/architecture.md

@@ -22,7 +22,7 @@ hard_gates:
   - name: has_findings_heading
     pattern: "## Findings|## Results|## Key Findings|# Findings"
   - name: has_citations
-    pattern: "\\[.*?\\]|https?://|Sources?|References?|Citations?"
+    pattern: "\\[.*?\\]|https?://|\\bSources?\\b|\\bReferences?\\b|\\bCitations?\\b"
 
 scoring:
   frontmatter_complete:

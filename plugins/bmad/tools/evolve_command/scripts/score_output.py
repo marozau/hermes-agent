@@ -98,7 +98,7 @@ def score_dimension(dim_name: str, dim_spec: list, text: str) -> float:
             # Check if described content exists
             if _matches_condition(when, text_lower):
                 return float(rule.get("score", 0.0))
-        elif "no " in when and ("no frontmatter" in when or "no overview" in when or "no " in when):
+        elif when.startswith("no "):
             # Negative condition — only matches if nothing found
             if not _matches_condition(when.replace("no ", ""), text_lower):
                 return float(rule.get("score", 0.0))
@@ -160,9 +160,9 @@ def _matches_condition(condition: str, text: str) -> bool:
             if metrics_found >= min_count:
                 return True
 
-        # Count acceptance criteria (Given/When/Then)
+        # Count acceptance criteria (Given/When/Then) — multi-line with re.DOTALL
         if "criteria" in condition:
-            criteria = len(re.findall(r"given\b.*when\b.*then\b", text))
+            criteria = len(re.findall(r"given\b.*?when\b.*?then\b", text, re.IGNORECASE | re.DOTALL))
             if criteria >= min_count:
                 return True
 
@@ -213,7 +213,8 @@ def _matches_condition(condition: str, text: str) -> bool:
     if "methodology" in condition:
         return "methodolog" in text or "source" in text
     if "citations" in condition or "sources" in condition:
-        return "http" in text or "source" in text or "[" in text
+        # Word-bounded check: "source" / "sources" but NOT "outsources" / "preferences"
+        return bool(re.search(r"https?://|\[.*?\]|\bsources?\b|\breferences?\b|\bcitations?\b", text, re.IGNORECASE))
     if "conclusions" in condition:
         return "conclusion" in text or "recommendation" in text
     if "requirements" in condition:

@@ -60,10 +60,19 @@ Save to: `planning-artifacts/epics-stories-{project}.md`
 
 ---
 
-## Template Reference
+## Execution Steps
 
-Use `skills/bmad/templates/epics-stories.template.md` **byte-identical from BMAD v6.2.2.0 upstream**.
-Do NOT edit the template structure — substitute placeholders only.
+Follow the BMAD step-file workflow. Each step is a separate file in
+`skills/bmad/bmm/epics-stories/steps/`:
+
+1. Read `step-01-init.md` — initialize the epic decomposition
+2. Continue through remaining step files
+3. After each step, save incremental progress to `planning-artifacts/epics-stories-*.md`
+4. Use resume step files to continue after interruptions
+
+Use `skills/bmad/templates/epics-stories.template.md` **byte-identical from BMAD v6.2.2.0 upstream**
+as the structural template. Do NOT edit the template structure — substitute
+placeholders only.
 
 ```bash
 cat skills/bmad/templates/epics-stories.template.md

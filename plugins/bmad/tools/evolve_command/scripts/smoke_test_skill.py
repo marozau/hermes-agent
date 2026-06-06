@@ -74,6 +74,7 @@ def score_output(metric_name: str, text: str) -> dict:
         capture_output=True,
         text=True,
         cwd=find_repo_root(),
+        timeout=60,  # S3: prevent regex catastrophic backtracking hangs
     )
     if result.returncode != 0:
         return {"error": result.stderr, "composite_score": 0.0}
