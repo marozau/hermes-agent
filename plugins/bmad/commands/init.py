@@ -2,8 +2,8 @@
 
 Registered in ``plugins.bmad/__init__.py`` as ``bmad:init``.
 
-Option B pattern: runs mechanical bootstrap FIRST, then injects the
-rendered spec body into the conversation so the LLM continues planning.
+Returns the rendered spec body (starts with "EXECUTE NOW") so the CLI
+dispatch injects it into the conversation for LLM continuation.
 """
 
 from __future__ import annotations
@@ -39,8 +39,7 @@ def handler(ctx, args: str) -> str:
 
     1. Parse structured args (--force, --workspace, --worktree)
     2. Run mechanical bootstrap (standard or workspace)
-    3. Inject rendered spec body into conversation for LLM continuation
-    4. Return short confirmation for overlay display
+    3. Return rendered spec body (CLI dispatch injects into conversation)
     """
     # ── Parse args ──────────────────────────────────────────────────
     args_list = args.strip().split() if args else []
@@ -127,7 +126,9 @@ def handler(ctx, args: str) -> str:
         except Exception as exc:
             return f"❌ Failed to initialize BMAD project: {exc}"
 
-    # ── Phase 2: Inject rendered spec body for LLM continuation ─────
+    # ── Phase 2: Return rendered spec body ──────────────────────────
+    # Returns "EXECUTE NOW..." — the CLI dispatch detects this and injects
+    # into _pending_input so the LLM continues planning.
     try:
         from plugins.bmad.lib.spec_parser import parse_command_body
         from plugins.bmad.lib.render import render_command
@@ -136,12 +137,7 @@ def handler(ctx, args: str) -> str:
         body = spec_path.read_text()
         spec, body_text = parse_command_body(body)
         clean_args = _strip_flags(args)
-        rendered = render_command(spec, body_text, args=clean_args, ctx=ctx)
-
-        # Inject into conversation so the LLM continues planning
-        ctx.inject_message(rendered)
+        return render_command(spec, body_text, args=clean_args, ctx=ctx)
     except Exception as exc:
-        logger.warning("bmad:init: failed to render/inject spec body: %s", exc)
-
-    # Return short confirmation for overlay/pager display
-    return f"✅ BMAD project initialized at `{project_dir}`"
+        logger.warning("bmad:init: failed to render spec body: %s", exc)
+        return f"✅ BMAD project initialized at `{project_dir}`"
