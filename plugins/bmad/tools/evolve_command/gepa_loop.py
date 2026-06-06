@@ -53,7 +53,7 @@ def _get_cumulative_cost() -> float:
 
 
 def _check_cost(cost_cap: float) -> None:
-    """Raise if cumulative cost exceeds OI-7 cap."""
+    """Raise if cumulative cost >= OI-7 cap (OI-7 enforcement is entry-gate only; mid-loop abort deferred to Epic 15.1 per D-43)."""
     spent = _get_cumulative_cost()
     effective_cap = min(cost_cap, _COST_CAP_USD)
     if spent >= effective_cap:
@@ -98,8 +98,8 @@ class GEPAResult:
 
 # ── Core loop ──────────────────────────────────────────────────────────
 
-def _cap_steps(max_steps: int, cost_cap: float = _COST_CAP_USD) -> int:
-    """Return max_steps (actual enforcement via _check_cost mid-loop)."""
+def _cap_steps(max_steps: int) -> int:
+    """Return max_steps. OI-7 enforcement is entry-gate via _check_cost; mid-loop abort deferred per DSPy API constraint."""
     return max_steps
 
 
@@ -147,8 +147,9 @@ def run_gepa_loop(
         A :class:`GEPAResult` containing the optimised module and run metadata.
     """
     # Enforce OI-7 cost cap
+    # OI-7 enforcement is entry-gate only; mid-loop abort deferred to Epic 15.1 per D-43
     _check_cost(cost_cap)
-    safe_steps = _cap_steps(max_steps, cost_cap)
+    safe_steps = _cap_steps(max_steps)
 
     # Configure DSPy LM
     lm = dspy.LM(eval_model)

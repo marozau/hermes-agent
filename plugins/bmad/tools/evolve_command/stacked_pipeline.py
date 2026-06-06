@@ -259,6 +259,7 @@ class Phase1Result:
     mutated_regions: set[PhaseRegion] = field(default_factory=set)
     elapsed: float = 0.0
     error: Optional[str] = None
+    degraded_from_error: Optional[str] = None  # P2: preserves original Phase 1 failure for audit
 
 
 @dataclass
@@ -280,6 +281,7 @@ class Phase2Result:
     cost_estimate: float = 0.0
     used_fallback: bool = False
     error: Optional[str] = None
+    degraded_from_error: Optional[str] = None  # P2: preserves original Phase 1 failure for audit
 
 
 @dataclass
@@ -398,6 +400,7 @@ def run_stacked_pipeline(
             mutated_regions=set(),
             elapsed=phase1.elapsed,
             error=None,
+            degraded_from_error=phase1.error,  # P2: preserve original failure for audit
         )
 
     # ── Step 3: Run Phase 2 (GEPA) on Phase 1 output ──────────────────
@@ -430,10 +433,7 @@ def run_stacked_pipeline(
 
     if not oi2.passed:
         # P1-10: include evolved body even on OI-2 failure
-        try:
-            failed_text = reassemble_command(parsed.frontmatter, phase2.evolved_body)
-        except Exception:
-            failed_text = ""
+        failed_text = reassemble_command(parsed.frontmatter, phase2.evolved_body)
         return StackedPipelineResult(
             frontmatter=parsed.frontmatter,
             phase1=phase1,
