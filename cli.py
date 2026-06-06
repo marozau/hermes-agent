@@ -9308,20 +9308,7 @@ class HermesCLI:
                             plugin_handler(user_args)
                         )
                         if result:
-                            result_str = str(result)
-                            # BMAD plugin commands with imperative_preamble
-                            # return rendered bodies starting with "EXECUTE NOW".
-                            # These need conversation injection (not overlay display)
-                            # so the LLM continues planning.  Scoped to "bmad:"
-                            # commands to avoid false positives on other plugins.
-                            if (
-                                result_str.startswith("EXECUTE NOW")
-                                and base_cmd.startswith("bmad:")
-                            ):
-                                if hasattr(self, '_pending_input'):
-                                    self._pending_input.put(result_str)
-                            else:
-                                _cprint(result_str)
+                            _cprint(str(result))
                     except Exception as e:
                         _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
             # Skill bundles take precedence over individual skills — /<bundle>

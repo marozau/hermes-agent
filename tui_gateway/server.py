@@ -6320,14 +6320,7 @@ def _(rid, params: dict) -> dict:
         handler = get_plugin_command_handler(name)
         if handler:
             result = resolve_plugin_command_result(handler(arg))
-            result_str = str(result or "")
-            # BMAD plugin commands with imperative_preamble return rendered
-            # bodies starting with "EXECUTE NOW".  Route these as skill
-            # messages so the TUI injects them into the conversation for
-            # LLM continuation — not as static plugin output in a pager.
-            if result_str.startswith("EXECUTE NOW") and name.startswith("bmad:"):
-                return _ok(rid, {"type": "skill", "message": result_str, "name": name})
-            return _ok(rid, {"type": "plugin", "output": result_str})
+            return _ok(rid, {"type": "plugin", "output": str(result or "")})
     except Exception:
         pass
 
