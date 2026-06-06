@@ -68,7 +68,7 @@ metadata:
 
 ### Skill Creation Checklist
 
-- [ ] Skills directory: `~/.hermes/skills/bmad/{skill-name}/`
+- [ ] Skills directory: `skills/bmad/{skill-name}/`
 - [ ] SKILL.md with proper YAML frontmatter
 - [ ] Clear trigger keywords in description
 - [ ] Core workflow with numbered steps

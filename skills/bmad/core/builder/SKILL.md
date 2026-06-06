@@ -45,7 +45,7 @@ Use this skill when the user:
 ### Templates
 
 BMAD templates provide structured output formats for each phase. Templates
-live in `~/.hermes/skills/bmad/templates/`:
+live in `skills/bmad/templates/`:
 
 | Template | Phase | Purpose |
 |----------|-------|---------|

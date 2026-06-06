@@ -48,7 +48,7 @@ refactor_regions:
 ```
 
 AND require the dev agent to use the **`chunked-refactor`** skill
-(`~/.hermes/skills/bmad/_shared/chunked-refactor/SKILL.md`). Mention this
+(`skills/bmad/_shared/chunked-refactor/SKILL.md`). Mention this
 explicitly in the story's "Implementation notes" section so the dev agent
 sees it on story open.
 

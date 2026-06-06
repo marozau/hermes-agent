@@ -5,7 +5,7 @@
 
 ## Current State: Skills-Only
 
-Hermes BMAD is built as 9 SKILL.md files under `~/.hermes/skills/bmad/`.
+Hermes BMAD is built as 9 SKILL.md files under `skills/bmad/`.
 These are prompt documentation — they instruct the LLM how to respond when a
 user requests BMAD work. No autonomous processes, no persistent state, no
 automated phase transitions.
@@ -36,7 +36,7 @@ delegate to profile B with session persistence. ~2-3 days of dev work.
 ## YAML Tracking Gap
 
 `bmm-workflow-status.template.yaml` and `sprint-status.template.yaml` exist
-as templates at `~/.hermes/skills/bmad/templates/`. But:
+as templates at `skills/bmad/templates/`. But:
 - No cron job reads/writes them between sessions
 - No Prefect flow tracks state transitions
 - The orchestrator skill documents how to read/write them via file tools,
