@@ -63,48 +63,15 @@ Save to: `planning-artifacts/architecture-{project}.md`
 
 ## Template Reference
 
-```markdown
-# System Architecture: {{project_name}}
+Use `skills/bmad/templates/architecture.md` **byte-identical from BMAD v6.2.2.0 upstream**.
+Do NOT edit the template structure — substitute placeholders only.
 
-**Date:** {{date}}
-**Architect:** {{user_name}}
-**Version:** 1.0
-**Status:** Draft
-
----
-
-## Architectural Drivers
-
-[Requirements that heavily influence decisions]
-
-## System Overview
-
-[High-level description with diagram]
-
-## Component Model
-
-| Component | Responsibility | Interface |
-|-----------|---------------|-----------|
-| [Name] | [What it does] | [How others talk to it] |
-
-## Data Model
-
-[Entities, relationships, storage strategy]
-
-## API Design
-
-| Endpoint | Method | Purpose |
-|----------|--------|---------|
-| /api/v1/... | GET/POST | [What it does] |
-
-## Security Model
-
-[Auth, authorization, data protection]
-
-## Deployment Architecture
-
-[Environments, scaling, failover]
+```bash
+cat skills/bmad/templates/architecture.md
 ```
+
+The upstream template is 289 lines and includes all sections from Architectural
+Drivers through Appendix C: Cost Estimation.
 
 ---
 

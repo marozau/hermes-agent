@@ -71,50 +71,15 @@ Return the file path and a 1-paragraph summary of what the PRD covers.
 
 ## Template Reference
 
-```markdown
-# Product Requirements Document: {{project_name}}
+Use `skills/bmad/templates/prd.md` **byte-identical from BMAD v6.2.2.0 upstream**.
+Do NOT edit the template structure — substitute placeholders only.
 
-**Date:** {{date}}
-**Author:** {{user_name}}
-**Version:** 1.0
-**Status:** Draft
-
----
-
-## Executive Summary
-
-[What, why, scope — 3+ sentences]
-
-## Product Goals
-
-### Business Objectives
-
-[Measurable business outcomes]
-
-### Success Metrics
-
-[KPIs with targets]
-
-## Functional Requirements
-
-| ID | Requirement | Priority |
-|----|-------------|----------|
-| FR-1 | [Specific, testable requirement] | P0 |
-
-## Non-Functional Requirements
-
-| Category | Requirement | Target |
-|----------|-------------|--------|
-| Performance | [Quantitative target] | [Value] |
-
-## Out of Scope
-
-[Explicit exclusions]
-
-## Open Questions
-
-[Decisions pending]
+```bash
+cat skills/bmad/templates/prd.md
 ```
+
+The upstream template is 228 lines and includes all sections from Executive
+Summary through Appendix B: Prioritization Details.
 
 ---
 

@@ -62,36 +62,16 @@ Save to: `planning-artifacts/epics-stories-{project}.md`
 
 ## Template Reference
 
-```markdown
-# Epics & User Stories: {{project_name}}
+Use `skills/bmad/templates/epics-stories.template.md` **byte-identical from BMAD v6.2.2.0 upstream**.
+Do NOT edit the template structure — substitute placeholders only.
 
-**Date:** {{date}}
-**Author:** {{user_name}}
-**Version:** 1.0
-
----
-
-## Epic 1: [Epic Name]
-
-**Business Value:** [Why this matters]
-**Priority:** P0
-
-### User Stories
-
-#### Story 1.1
-
-> As a [role], I want [capability], so that [benefit]
-
-**Acceptance Criteria:**
-- [ ] Given [context], when [action], then [outcome]
-- [ ] Given [context], when [action], then [outcome]
-
-**Priority:** P0
-**Estimate:** [S/M/L or story points]
-
-## Epic 2: [Epic Name]
-...
+```bash
+cat skills/bmad/templates/epics-stories.template.md
 ```
+
+The upstream template is 61 lines and includes epic structure with business
+value, priority, user stories (As a/I want/so that), acceptance criteria
+(Given/When/Then), estimates, and revision history.
 
 ---
 
