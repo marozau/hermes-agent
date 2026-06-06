@@ -9,9 +9,30 @@ natural-language args.
 
 from __future__ import annotations
 
+import logging
 from pathlib import Path
 
 from plugins.bmad.scripts.bmad_init import bootstrap, bootstrap_workspace
+
+logger = logging.getLogger(__name__)
+
+
+def _strip_flags(args: str) -> str:
+    """Remove --force, --workspace, and --worktree specs from args for rendering."""
+    parts = args.strip().split() if args else []
+    cleaned: list[str] = []
+    skip_next = False
+    for i, part in enumerate(parts):
+        if skip_next:
+            skip_next = False
+            continue
+        if part in ("--force", "--workspace"):
+            continue
+        if part == "--worktree" and i + 1 < len(parts):
+            skip_next = True
+            continue
+        cleaned.append(part)
+    return " ".join(cleaned)
 
 
 def handler(ctx, args: str) -> str:
@@ -47,6 +68,7 @@ def handler(ctx, args: str) -> str:
 
     # ── Phase 1: Mechanical bootstrap ───────────────────────────────
     bootstrap_result = ""
+    bootstrap_succeeded = False
 
     if workspace_mode:
         if not worktree_specs:
@@ -75,6 +97,12 @@ def handler(ctx, args: str) -> str:
                 bootstrap_result = parse_error
             else:
                 try:
+                    # P0-2: --force removes existing workspace config before bootstrap
+                    if force:
+                        config_path = project_dir / "bmad" / "config.yaml"
+                        if config_path.exists():
+                            config_path.unlink()
+
                     config = bootstrap_workspace(
                         project_dir,
                         project_name=project_name,
@@ -83,6 +111,7 @@ def handler(ctx, args: str) -> str:
                         project_level=project_level,
                         user_name=user_name,
                     )
+                    bootstrap_succeeded = True
                     lines = [
                         f"✅ **BMAD workspace initialized** at `{project_dir}`",
                         "",
@@ -124,6 +153,7 @@ def handler(ctx, args: str) -> str:
                 force=force,
                 interactive=False,
             )
+            bootstrap_succeeded = True
             bootstrap_result = "\n".join([
                 f"✅ **BMAD project initialized** at `{project_dir}`",
                 "",
@@ -147,7 +177,10 @@ def handler(ctx, args: str) -> str:
             bootstrap_result = f"❌ Failed to initialize BMAD project: {exc}"
 
     # ── Phase 2: Render spec body for LLM continuation ──────────────
-    # Read init.md and render so the LLM continues planning
+    # P0-1: Only render when bootstrap succeeded
+    if not bootstrap_succeeded:
+        return bootstrap_result
+
     try:
         from plugins.bmad.lib.spec_parser import parse_command_body
         from plugins.bmad.lib.render import render_command
@@ -155,9 +188,12 @@ def handler(ctx, args: str) -> str:
         spec_path = Path(__file__).with_name("init.md")
         body = spec_path.read_text()
         spec, body_text = parse_command_body(body)
-        rendered = render_command(spec, body_text, args=args.strip() if args else "", ctx=ctx)
-    except Exception:
-        # If rendering fails, just return the bootstrap result
+        # P2-7: Strip flags from args before rendering
+        clean_args = _strip_flags(args)
+        rendered = render_command(spec, body_text, args=clean_args, ctx=ctx)
+    except Exception as exc:
+        # P1-4: Log render failures instead of silently swallowing
+        logger.warning("bmad:init: failed to render spec body: %s", exc)
         rendered = ""
 
     # ── Combine: bootstrap confirmation + LLM continuation ──────────
