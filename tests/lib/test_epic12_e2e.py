@@ -5,6 +5,16 @@ from unittest import mock
 import pytest
 
 
+def _run_dispatch_inline():
+    """F4 test helper: patch ThreadPoolExecutor.submit to run inline (synchronous)."""
+    import lib.verify_dispatch as _vd
+    _vd._SEEN_TRAJECTORY_HASHES.clear()
+    return mock.patch.object(
+        _vd._DISPATCH_EXECUTOR, "submit",
+        side_effect=lambda fn, *args, **kwargs: fn(*args, **kwargs),
+    )
+
+
 # ---------------------------------------------------------------------------
 # Story 12.2 — verify_capture plugin
 # ---------------------------------------------------------------------------
@@ -73,6 +83,12 @@ class TestSelfReportValidation:
 
 class TestDispatchSelfReport:
     """Story 12.3: dispatch_self_report routes to canonical writers."""
+
+    @pytest.fixture(autouse=True)
+    def _inline_executor(self):
+        """F4: Run ThreadPoolExecutor.submit inline for deterministic tests."""
+        with _run_dispatch_inline():
+            yield
 
     def test_hit_match_calls_reinforce(self, tmp_path):
         """match=hit → reinforce_entry called for each cited ID."""
@@ -204,6 +220,12 @@ class TestDispatchSelfReport:
 class TestEpic12E2E:
     """Story 12.4: Full pipeline from response text → canonical writers."""
 
+    @pytest.fixture(autouse=True)
+    def _inline_executor(self):
+        """F4: Run ThreadPoolExecutor.submit inline for deterministic tests."""
+        with _run_dispatch_inline():
+            yield
+
     def test_full_pipeline_hit(self):
         """Complete flow: response → extract → validate → dispatch → reinforce."""
         from plugins.verify_capture import on_post_llm_call
@@ -303,6 +325,12 @@ self_report:
 class TestDispatchErrorPaths:
     """Exercise error-handling branches for coverage."""
 
+    @pytest.fixture(autouse=True)
+    def _inline_executor(self):
+        """F4: Run ThreadPoolExecutor.submit inline for deterministic tests."""
+        with _run_dispatch_inline():
+            yield
+
     def test_build_manifest_failure(self):
         """build_manifest raises → manifest="", dispatch continues."""
         from plugins.verify_capture import SelfReport, TrajectoryEntry
@@ -377,7 +405,7 @@ class TestDispatchErrorPaths:
         mock_add.assert_called_once()
 
     def test_trajectory_unknown_action(self):
-        """Unknown classification action → logged, no writers called."""
+        """Unknown classification action → F2 fallback writes as new entry + WARNING telemetry."""
         from plugins.verify_capture import SelfReport, TrajectoryEntry
         from lib.verify_dispatch import dispatch_self_report
 
@@ -393,7 +421,8 @@ class TestDispatchErrorPaths:
                         return_value={"action": "weird"}):
             dispatch_self_report(report, session_id="s1")
 
-        mock_add.assert_not_called()
+        # F2: fallback writes trajectory even on unknown action
+        mock_add.assert_called_once()
         mock_reinforce.assert_not_called()
 
     def test_classify_failure_continues(self):
@@ -534,3 +563,102 @@ self_report:
         log_dir = tmp_path.parent / ".hermes" / "preflight" / "log"
         # File was written to real home dir, not tmp_path
         # Just verify no exception was raised
+
+
+class TestDedupAndEdgeCases:
+    """F9 dedup + defensive exception handlers."""
+
+    def test_duplicate_trajectory_skipped(self):
+        """F9: Same body twice → second call skipped via hash dedup."""
+        from plugins.verify_capture import SelfReport, TrajectoryEntry
+        from lib.verify_dispatch import dispatch_self_report
+
+        report = SelfReport(
+            trajectories=[
+                TrajectoryEntry(category="x", body="A" * 50),
+            ]
+        )
+
+        with _run_dispatch_inline():
+            with mock.patch("lib.hermes_memory.classify_trajectory_with_manifest",
+                            return_value={"action": "new"}) as mock_cls, \
+                 mock.patch("lib.hermes_memory.add_entry") as mock_add:
+                # First dispatch
+                dispatch_self_report(report, session_id="s1")
+                # Second dispatch with same body
+                dispatch_self_report(report, session_id="s1")
+
+        # classify should run once (second is dedup'd before classify)
+        assert mock_cls.call_count == 1
+        # add_entry should run once
+        assert mock_add.call_count == 1
+
+    def test_file_lock_exception_handled(self):
+        """F13: _file_lock/_file_unlock exceptions are swallowed."""
+        from lib.verify_dispatch import _file_lock, _file_unlock
+        import io
+
+        # Pass a non-file object to trigger exception
+        buf = io.BytesIO()
+        _file_lock(buf)  # Should not raise
+        _file_unlock(buf)  # Should not raise
+
+    def test_derive_project_role_exception_path(self):
+        """F14: _derive_project_role handles exceptions gracefully."""
+        from lib.verify_dispatch import _derive_project_role
+
+        with mock.patch("os.getcwd", side_effect=OSError("no cwd")):
+            project, role = _derive_project_role()
+
+        assert isinstance(project, str)
+        assert isinstance(role, str)
+
+    def test_add_entry_fallback_failure(self):
+        """F2: add_entry fails in fallback path → logged, no crash."""
+        from plugins.verify_capture import SelfReport, TrajectoryEntry
+        from lib.verify_dispatch import dispatch_self_report
+
+        report = SelfReport(
+            trajectories=[
+                TrajectoryEntry(category="x", body="A" * 50),
+            ]
+        )
+
+        with _run_dispatch_inline():
+            with mock.patch("lib.hermes_memory.add_entry",
+                            side_effect=RuntimeError("boom")) as mock_add, \
+                 mock.patch("lib.hermes_memory.classify_trajectory_with_manifest",
+                            return_value={"action": "weird"}):
+                dispatch_self_report(report, session_id="s1")
+
+        # add_entry called twice: once for fallback (fails), no second call
+        assert mock_add.call_count == 1
+
+    def test_derive_role_from_profile_path(self):
+        """F14: Role derived from profile directory name."""
+        from lib.verify_dispatch import _derive_project_role
+        from pathlib import Path
+
+        with mock.patch("lib.verify_dispatch.get_hermes_home",
+                        return_value=Path("/Users/im/.hermes/profiles/cto")):
+            project, role = _derive_project_role()
+
+        assert role == "cto"
+
+    def test_derive_role_exception_path(self):
+        """F14: _derive_project_role handles home.parent.name exception."""
+        from lib.verify_dispatch import _derive_project_role
+
+        # Mock get_hermes_home to return an object whose .parent raises
+        class BadPath:
+            @property
+            def parent(self):
+                raise RuntimeError("no parent")
+            @property
+            def name(self):
+                return "x"
+
+        with mock.patch("lib.verify_dispatch.get_hermes_home", return_value=BadPath()):
+            project, role = _derive_project_role()
+
+        assert role == "default"

@@ -19,8 +19,9 @@ from typing import Any, Literal, Optional
 _candidate = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))).resolve()
 for _anchor in [_candidate, _candidate.parent, _candidate.parent.parent, _candidate.parent.parent.parent]:
     _lib = _anchor / "lib"
-    if _lib.is_dir() and str(_anchor) not in sys.path:
-        sys.path.insert(0, str(_anchor))
+    if _lib.is_dir():
+        if str(_anchor) not in sys.path:
+            sys.path.insert(0, str(_anchor))
         break
 else:
     _real_root = Path(os.path.expanduser("~/.hermes")).resolve()
@@ -30,11 +31,12 @@ else:
 logger = logging.getLogger(__name__)
 
 try:
-    from pydantic import BaseModel, Field
+    from pydantic import BaseModel, Field, ValidationError
     import yaml
 except ImportError as _imp_err:
     logger.warning("verify_capture: pydantic or yaml not available: %s", _imp_err)
     BaseModel = None  # type: ignore[misc,assignment]
+    ValidationError = None  # type: ignore[misc,assignment]
     yaml = None  # type: ignore[misc,assignment]
 
 
@@ -63,9 +65,9 @@ class SelfReport(BaseModel):
     trajectories: list[TrajectoryEntry] = Field(default_factory=list)
 
 
-# Fenced-block extractor — robust to ```yaml, ```YAML, leading whitespace
+# Fenced-block extractor — robust to ```yaml, ~~~yaml, untagged fences
 _FENCE_RE = re.compile(
-    r"```\s*ya?ml\s*\n(.*?)```",
+    r"(`{3}|~{3})\s*(?:ya?ml)?\s*\n(.*?)\1",
     re.IGNORECASE | re.DOTALL,
 )
 
@@ -74,18 +76,21 @@ def _extract_self_report(content: str) -> Optional[dict]:
     """Scan response for fenced YAML containing a `self_report` key.
 
     Returns the dict under the `self_report` key, or None if not found.
+    Prefers the *last* match — real self-reports are emitted at the end
+    of the response per skill instructions.
     """
     if not content or not isinstance(content, str):
         return None
+    result = None
     for match in _FENCE_RE.finditer(content):
-        body = match.group(1).strip()
+        body = match.group(2).strip()
         try:
             doc = yaml.safe_load(body)
         except yaml.YAMLError:
             continue
         if isinstance(doc, dict) and "self_report" in doc:
-            return doc["self_report"]
-    return None
+            result = doc["self_report"]
+    return result
 
 
 def on_post_llm_call(
@@ -93,10 +98,11 @@ def on_post_llm_call(
     session_id: str = "",
     response: str = "",
     content: str = "",
+    assistant_response: str = "",
     **_kwargs: Any,
 ) -> None:
     """Parse the last assistant turn's self_report block; dispatch to writers."""
-    text = response or content or ""
+    text = response or content or assistant_response or ""
     if not isinstance(text, str) or not text:
         return
 
@@ -104,12 +110,22 @@ def on_post_llm_call(
     if raw_report is None:
         return  # No block → no-op (fail-open)
 
-    # Pydantic validation
-    try:
-        report = SelfReport(**raw_report)
-    except Exception as e:
-        logger.warning("verify_capture: SelfReport validation failed: %s", e)
-        return  # Invalid block → log + no-op
+    # Pydantic validation (F15: catch ValidationError separately from Exception)
+    if ValidationError is not None:
+        try:
+            report = SelfReport(**raw_report)
+        except ValidationError as e:
+            logger.warning("verify_capture: SelfReport validation failed: %s", e)
+            return  # Invalid block → log + no-op
+        except Exception as e:
+            logger.warning("verify_capture: SelfReport construction failed: %s", e)
+            return
+    else:
+        try:
+            report = SelfReport(**raw_report)
+        except Exception as e:
+            logger.warning("verify_capture: SelfReport validation failed: %s", e)
+            return  # Invalid block → log + no-op
 
     # Dispatch to canonical writers
     try:
