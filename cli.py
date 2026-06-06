@@ -9308,18 +9308,9 @@ class HermesCLI:
                             plugin_handler(user_args)
                         )
                         if result:
-                            result_str = str(result)
-                            # If the handler returned a rendered body with
-                            # imperative_preamble (starts with "EXECUTE NOW"),
-                            # inject it into the conversation so the LLM
-                            # continues planning — don't just print it.
-                            if result_str.startswith("EXECUTE NOW"):
-                                if hasattr(self, '_pending_input'):
-                                    self._pending_input.put(result_str)
-                            else:
-                                _cprint(result_str)
+                            _cprint(str(result))
                     except Exception as e:
-                        _cprint(f"\033[1;31mPlugin command error: {e}\033[0m")
+                        _cprint(f"\033[1;31mPlugin command error: {e}{_RST}")
             # Skill bundles take precedence over individual skills — /<bundle>
             # loads multiple skills at once. Rescans cheaply when files change.
             elif base_cmd in skill_bundles:
