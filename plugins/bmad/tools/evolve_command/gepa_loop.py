@@ -99,7 +99,7 @@ class GEPAResult:
 # ── Core loop ──────────────────────────────────────────────────────────
 
 def _cap_steps(max_steps: int) -> int:
-    """Return max_steps. OI-7 enforcement is entry-gate via _check_cost; mid-loop abort deferred per DSPy API constraint."""
+    """Return max_steps. OI-7: see _check_cost docstring."""
     return max_steps
 
 
@@ -147,7 +147,7 @@ def run_gepa_loop(
         A :class:`GEPAResult` containing the optimised module and run metadata.
     """
     # Enforce OI-7 cost cap
-    # OI-7 enforcement is entry-gate only; mid-loop abort deferred to Epic 15.1 per D-43
+    # OI-7: see _check_cost docstring
     _check_cost(cost_cap)
     safe_steps = _cap_steps(max_steps)
 

@@ -281,7 +281,6 @@ class Phase2Result:
     cost_estimate: float = 0.0
     used_fallback: bool = False
     error: Optional[str] = None
-    degraded_from_error: Optional[str] = None  # P2: preserves original Phase 1 failure for audit
 
 
 @dataclass
