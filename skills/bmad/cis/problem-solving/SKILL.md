@@ -1,5 +1,5 @@
 ---
-name: problem-solving
+name: bmad:problem-solving
 description: "Creative problem-solving and structured analysis coach. Use for complex problems, root cause analysis, solution architecture, analytical thinking. Persona: Dr. Quinn — creative problem solver."
 version: 5.0
 author: BMAD Community (Hermes port by im)

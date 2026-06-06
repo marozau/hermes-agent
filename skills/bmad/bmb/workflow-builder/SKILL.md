@@ -1,5 +1,5 @@
 ---
-name: workflow-builder
+name: bmad:workflow-builder
 description: "Design and build BMAD workflows: workflow integrity, quality scanning, reference materials, and conversion scripts. Use for: creating workflows, workflow quality analysis, converting existing processes."
 version: 5.0
 author: BMAD Community (Hermes port by im)

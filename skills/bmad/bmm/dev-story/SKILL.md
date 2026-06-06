@@ -1,5 +1,5 @@
 ---
-name: dev-story
+name: bmad:dev-story
 description: "Implementation-phase skill for implementing a user story end-to-end with TDD — RED/GREEN/REFACTOR. Trigger on: implement story, dev story, develop story, TDD."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

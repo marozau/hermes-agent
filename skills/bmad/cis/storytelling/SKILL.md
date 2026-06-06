@@ -1,5 +1,5 @@
 ---
-name: storytelling
+name: bmad:storytelling
 description: "Narrative design and storytelling coach. Use for narrative crafting, story arcs, audience engagement, persuasive messaging. Persona: Sophia — storyteller."
 version: 5.0
 author: BMAD Community (Hermes port by im)

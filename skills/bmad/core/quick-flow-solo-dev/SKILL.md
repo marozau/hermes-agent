@@ -1,5 +1,5 @@
 ---
-name: quick-flow-solo-dev
+name: bmad:quick-flow-solo-dev
 description: "Elite full-stack developer for rapid spec and implementation (Quick Flow). Minimum ceremony, lean artifacts, ruthless efficiency. Trigger on: Barry, quick flow, solo dev, quick dev, quick spec, full-stack dev, rapid prototyping, implement fast."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

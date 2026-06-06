@@ -1,5 +1,5 @@
 ---
-name: ux-designer
+name: bmad:ux-designer
 description: "Creates UX designs, wireframes, user flows, and accessibility assessments. Trigger on: UX design, wireframes, mockups, user flow, accessibility, WCAG, responsive design, mobile-first, design tokens, design system."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

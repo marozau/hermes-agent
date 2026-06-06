@@ -1,5 +1,5 @@
 ---
-name: workflow-engine
+name: bmad:workflow-engine
 description: 'Workflow engine: BMAD mandates (M1, M3, M4, M5, M7, M9, R1, R2, M8, M10, R3) — phase enforcement rules for BMAD projects'
 version: '6.6.0'
 tags:

@@ -1,5 +1,5 @@
 ---
-name: research
+name: bmad:research
 description: "Analysis-phase research skill — market research, competitive analysis, domain research, technical feasibility. Trigger on: research, market research, competitive analysis, domain research, technical research."
   Conduct market, domain, or technical research with verified sources. Phase 1
   Analysis

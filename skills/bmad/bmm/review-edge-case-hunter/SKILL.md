@@ -1,5 +1,5 @@
 ---
-name: review-edge-case-hunter
+name: bmad:review-edge-case-hunter
 description: |
   Walk every branching path and boundary condition in content; report only
   unhandled edge cases. Used as the "Edge Case Hunter" reviewer in

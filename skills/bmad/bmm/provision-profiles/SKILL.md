@@ -1,5 +1,5 @@
 ---
-name: provision-profiles
+name: bmad:provision-profiles
 description: |
   Solutioning-phase skill: derive the Hermes profiles + skills the
   implementation phase will require, install/create what's missing, validate

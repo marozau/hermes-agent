@@ -1,5 +1,5 @@
 ---
-name: document-project
+name: bmad:document-project
 description: "Analysis-phase skill for comprehensive project documentation — brownfield analysis, architecture scanning, project context. Trigger on: document project, project documentation, brownfield analysis, architecture scanning, project context."
 
 version: 6.6.0

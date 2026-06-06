@@ -1,5 +1,5 @@
 ---
-name: test-design
+name: bmad:test-design
 description: "TEA skill for test design — test architecture, risk analysis, testability assessment, QA handoff. Trigger on: test design, test architecture, QA, test planning, test strategy."
 version: 5.0
 author: BMAD Community (Hermes port by im)

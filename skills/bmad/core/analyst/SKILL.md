@@ -1,5 +1,5 @@
 ---
-name: analyst
+name: bmad:analyst
 description: "Strategic business analyst who creates product briefs, conducts market research, competitive analysis, and requirements discovery. Trigger on: analyst, Mary, business analyst, product brief, market research, competitive analysis, user needs, requirements discovery, 5 Whys, Jobs-to-be-Done."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

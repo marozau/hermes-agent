@@ -1,5 +1,5 @@
 ---
-name: pm
+name: bmad:pm
 description: "Creates PRDs, tech specs, and prioritized requirements using MoSCoW, RICE, and Kano frameworks. Trigger on: PRD, product requirements document, tech spec, technical specification, requirements, prioritization, MVP, feature prioritization, epics, user stories."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

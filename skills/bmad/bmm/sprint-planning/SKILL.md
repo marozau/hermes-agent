@@ -1,5 +1,5 @@
 ---
-name: sprint-planning
+name: bmad:sprint-planning
 description: "Implementation-phase skill for sprint planning — story selection, capacity planning, dependency management, Definition of Done. Trigger on: sprint planning, sprint plan, capacity planning, iteration planning."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

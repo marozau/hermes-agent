@@ -1,5 +1,5 @@
 ---
-name: validate-prd
+name: bmad:validate-prd
 description: "Planning-phase skill for validating PRDs — completeness check, consistency review, adversarial review, editorial review. Trigger on: validate PRD, PRD review, validate requirements, review PRD, PRD validation."
 
 version: 6.6.0

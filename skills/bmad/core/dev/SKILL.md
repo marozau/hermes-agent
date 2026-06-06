@@ -1,5 +1,5 @@
 ---
-name: dev
+name: bmad:dev
 description: "Implements user stories and features with test-driven development, clean code practices, and 80%+ coverage. Trigger on: implement story, dev story, build feature, fix bug, write tests, code review, refactor, implement, coding, feature development."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

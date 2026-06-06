@@ -1,5 +1,5 @@
 ---
-name: correct-course
+name: bmad:correct-course
 description: "Implementation-phase skill for fixing implementation issues found during review. Trigger on: correct course, fix issues, address review, fix implementation."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

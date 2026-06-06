@@ -1,5 +1,5 @@
 ---
-name: product-brief
+name: bmad:product-brief
 description: "Analysis-phase skill for creating product briefs — problem statement, current state, proposed solution, target users, success metrics, competitive landscape, risks. Trigger on: create product brief, product brief, problem statement, discovery."
 
 version: 6.6.0

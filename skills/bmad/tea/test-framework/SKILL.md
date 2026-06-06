@@ -1,5 +1,5 @@
 ---
-name: test-framework
+name: bmad:test-framework
 description: "TEA skill for test framework selection and scaffolding — framework evaluation, setup, documentation. Trigger on: test framework, framework selection, scaffold tests, test setup."
 version: 5.0
 author: BMAD Community (Hermes port by im)

@@ -1,5 +1,5 @@
 ---
-name: edit-prd
+name: bmad:edit-prd
 description: "Planning-phase skill for editing and refining existing PRDs — section updates, scope changes, requirement adjustments. Trigger on: edit PRD, modify PRD, update PRD, change requirements."
 
 version: 6.6.0

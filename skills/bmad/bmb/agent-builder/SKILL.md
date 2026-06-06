@@ -1,5 +1,5 @@
 ---
-name: agent-builder
+name: bmad:agent-builder
 description: "Build and refine BMAD agents: skill composition, quality analysis, reference materials, and scripts for agent creation. Use for: building new agents, improving existing agents, agent quality scanning."
 version: 5.0
 author: BMAD Community (Hermes port by im)
