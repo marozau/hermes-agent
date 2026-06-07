@@ -538,7 +538,7 @@ just the registration glue.
 ```
 plugins/preflight/
 ├── __init__.py    # register(ctx) → ctx.register_hook("pre_llm_call", on_pre_llm_call)
-└── plugin.yaml    # manifest (name, version, requires lib.hermes_preflight)
+└── plugin.yaml    # manifest (name, version, requires autodream.preflight)
 ```
 
 **Runtime state lives elsewhere** (per the dev tree vs runtime split in the
@@ -583,7 +583,7 @@ works from any checkout. Override `HERMES_PREFLIGHT_CLI` /
 preflight-related path (`autodream/preflight.py`, `plugins/preflight/**`,
 `bin/hermes-preflight`, `tests/autodream/test_hermes_preflight*.py`,
 `scripts/smoke-test-preflight.sh`). Runs unit + integration tests on
-Python 3.11 + 3.12, asserts ≥80% coverage on `lib.hermes_preflight`, then
+Python 3.11 + 3.12, asserts ≥80% coverage on `autodream.preflight`, then
 the smoke test.
 
 ### BMAD plugin (`plugins/bmad/`)

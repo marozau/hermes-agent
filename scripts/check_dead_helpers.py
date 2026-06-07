@@ -106,7 +106,7 @@ def main():
         print(f"ERROR: autodream/ not found at {autodream_dir}")
         sys.exit(1)
 
-    functions = find_public_functions(lib_dir)
+    functions = find_public_functions(autodream_dir)
     dead_helpers = []
 
     for filepath, fns in functions.items():
@@ -115,7 +115,7 @@ def main():
             if any(p in fn_name for p in exclude_patterns):
                 continue
 
-            callers = count_callers(lib_dir, fn_name, filepath)
+            callers = count_callers(autodream_dir, fn_name, filepath)
 
             if callers == 0:
                 dead_helpers.append((filepath, fn_name))
