@@ -18,9 +18,18 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from autodream.memory import (
-    build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
-)
+try:
+    from autodream.memory import (
+        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+    )
+except ImportError:
+    # Fallback for environments without editable install
+    _src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
+    if _src_root and _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+    from autodream.memory import (
+        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+    )
 
 def _emit_telemetry(outcome: str, manifest_size: int, entry_id: str = "") -> None:
     """Emit trajectory_outcome telemetry row to preflight log."""

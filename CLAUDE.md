@@ -264,6 +264,10 @@ Never:
   observability/{llm_calls.jsonl, advisory.jsonl}
   profiles/<profile-name>/                        ← profile-scoped HERMES_HOME
 
+## Telemetry expectations
+
+Every implementation must emit:
+
 ~/usr-local/hermes/                               ← parent main checkout (SHARES .git with this worktree)
                                                   ← do NOT edit code here during Epic 8+9; user merges into main from here
 ```

@@ -1024,17 +1024,17 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 
 ```
 ~/usr-local/hermes/
-├── lib/                                # Substrate helpers (fork-only; NOT upstream hermes-agent)
-│   ├── hermes_memory.py                # FR-3 chokepoint — add_entry / update_entry / supersede_entry / expire_entry / read_entries
-│   ├── hermes_llm.py                   # LLMSpec + llm_call (Prefect @task; cache_policy=INPUTS) — sole LLM call site
-│   ├── hermes_dream.py                 # create_dream_artifact / apply_dream / discard_dream (lock + COW)
-│   ├── hermes_recall.py                # run_regression_check — dry-run gate for proposals
-│   ├── hermes_trust.py                 # attestation pre-flight + rebaseline
-│   ├── hermes_preflight.py             # pre_task_start classification + retrieval (≤200ms p95)
-│   ├── hermes_providers.py             # register_all() — Story 3.8 dispatcher entry point
-│   ├── hermes_providers_anthropic.py   # Story 3.6: Anthropic Messages API + cache_control breakpoints
-│   ├── hermes_providers_chat.py        # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
-│   └── README.md                       # Provider adapter architecture + deploy.sh + fixtures
+├── autodream/                          # Substrate helpers (fork-only; NOT upstream hermes-agent)
+│   ├── memory.py                       # FR-3 chokepoint — add_entry / update_entry / supersede_entry / expire_entry / read_entries
+│   ├── llm.py                          # LLMSpec + llm_call (Prefect @task; cache_policy=INPUTS) — sole LLM call site
+│   ├── dream.py                        # create_dream_artifact / apply_dream / discard_dream (lock + COW)
+│   ├── recall.py                       # run_regression_check — dry-run gate for proposals
+│   ├── trust.py                        # attestation pre-flight + rebaseline
+│   ├── preflight.py                    # pre_task_start classification + retrieval (≤200ms p95)
+│   ├── providers.py                    # register_all() — Story 3.8 dispatcher entry point
+│   ├── providers_anthropic.py          # Story 3.6: Anthropic Messages API + cache_control breakpoints
+│   ├── providers_chat.py               # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
+│   └── README.md                       # Provider adapter architecture + fixtures
 ├── tests/autodream/                          # Substrate + provider adapter tests
 │   ├── conftest.py                     # Dev-tree lib/ on sys.path + HERMES_ROOT
 │   ├── test_hermes_memory.py

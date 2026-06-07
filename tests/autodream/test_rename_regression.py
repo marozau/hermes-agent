@@ -66,14 +66,6 @@ class TestBinWrappers:
         assert "lib.hermes_llm" not in src, "hermes-preflight wrapper still imports lib"
 
 
-class TestDeployScript:
-    """Finding 5: deploy.sh glob updated."""
-
-    def test_deploy_glob(self):
-        src = (REPO_ROOT / "deploy.sh").read_text()
-        assert 'lib/hermes_providers*.py' not in src, "deploy.sh still globs old lib path"
-
-
 class TestMainPyLogging:
     """Finding 6: main.py import failure is logged."""
 
