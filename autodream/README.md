@@ -136,11 +136,11 @@ _replay_anthropic_response(mock_instance)
 
 ```bash
 # All provider adapter tests (25 unit + 13 e2e):
-pytest tests/lib/ -v
+pytest tests/autodream/ -v
 
 # Memory tool tests (33 unit + 2 regression):
 pytest tests/tools/test_memory_tool.py -v
 
 # Everything:
-pytest tests/lib/ tests/tools/test_memory_tool.py -v
+pytest tests/autodream/ tests/tools/test_memory_tool.py -v
 ```
