@@ -4,7 +4,7 @@
 # Revisions policy: ship as research_structural_v2; never retrofit (per Epic 15 OI-1)
 
 name: research_g4_v1
-freeze_date: 2026-06-07
+freeze_date: "2026-06-08"
 provenance:
   reference_docs_n: 11
   source_dir: /Users/im/usr-local/hermes-bmad/planning-artifacts/research/

@@ -264,16 +264,26 @@ Kubernetes with 3 replicas.
         assert result["composite_score"] > 0.2
 
     def test_all_metrics_have_valid_yaml(self):
-        """Every metric YAML file must be parseable and have required fields."""
+        """Every metric YAML file must be parseable and have required fields.
+
+        Two schemas coexist after Epic 15.2:
+        - Epic 15.2 structural metrics: flat `weights:` + `scoring:` + `hard_gates:`
+          + top-level `version:` int — scored by score_output.py
+        - Epic 15 G4 metric (research_g4_v1.yaml): legacy `dimensions:` nested
+          schema from prior G4 experiment work; scored by its dedicated .py module
+          (research_g4_v1.py), not score_output.py. No `version:` by design.
+        """
+        import yaml
         for path in METRICS_DIR.glob("*.yaml"):
             with open(path, "r") as f:
-                import yaml
                 data = yaml.safe_load(f)
             assert "name" in data, f"{path.name}: missing 'name'"
-            assert "version" in data, f"{path.name}: missing 'version'"
             assert "freeze_date" in data, f"{path.name}: missing 'freeze_date'"
+            is_g4_legacy = "dimensions" in data and "weights" not in data
+            if is_g4_legacy:
+                continue  # G4 schema has its own dedicated scorer
+            assert "version" in data, f"{path.name}: missing 'version'"
             assert "weights" in data or "hard_gates" in data, f"{path.name}: missing 'weights' and 'hard_gates'"
-            # Weights must sum to ~1.0 (if present)
             if "weights" in data:
                 total = sum(data["weights"].values())
                 assert 0.95 <= total <= 1.05, f"{path.name}: weights sum {total}, expected ~1.0"
