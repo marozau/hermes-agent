@@ -283,9 +283,14 @@ def register(ctx) -> None:
             working_directory = str(Path.cwd())
         return _status_handler(_MinimalCtx(), "")
 
+    # bmad-status: no sub-arguments needed — bare "hermes bmad-status"
+    def _setup_bmad_status_cli(subparsers):
+        pass
+
     ctx.register_cli_command(
         name="bmad-status",
         help="Show current BMAD workflow status",
+        setup_fn=_setup_bmad_status_cli,
         handler_fn=_run_bmad_status,
         description="Display current BMAD workflow phase state and next recommended action.",
     )
