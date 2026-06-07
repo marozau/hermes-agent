@@ -511,9 +511,10 @@ def evaluate_skip_ladder(
     if gate.turn_count < warmup:
         return SkipReason.WARM_UP
 
-    # Within-skip-window (10 min).
+    # Within-skip-window (configurable; default 3 min = 180s).
+    skip_window_seconds = int(_load_config().get("skip_window_minutes", 3)) * 60
     if gate._last_fired_at > 0:
-        if (time.time() - gate._last_fired_at) < 600:
+        if (time.time() - gate._last_fired_at) < skip_window_seconds:
             return SkipReason.WITHIN_SKIP_WINDOW
 
     # Classify only if not already done by caller (P16: dedupe).
