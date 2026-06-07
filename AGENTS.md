@@ -1036,7 +1036,7 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 │   ├── providers_chat.py               # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
 │   └── README.md                       # Provider adapter architecture + fixtures
 ├── tests/autodream/                          # Substrate + provider adapter tests
-│   ├── conftest.py                     # Dev-tree lib/ on sys.path + HERMES_ROOT
+│   ├── conftest.py                     # Dev-tree autodream/ package + HERMES_ROOT
 │   ├── test_hermes_memory.py
 │   ├── test_hermes_llm.py
 │   ├── test_hermes_dream.py

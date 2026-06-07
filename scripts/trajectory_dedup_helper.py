@@ -27,9 +27,15 @@ except ImportError:
     _src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
     if _src_root and _src_root not in sys.path:
         sys.path.insert(0, _src_root)
-    from autodream.memory import (
-        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
-    )
+    try:
+        from autodream.memory import (
+            build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+        )
+    except ImportError as _e:
+        raise ImportError(
+            "autodream is not installed. Run 'pip install -e .' in ~/.hermes/hermes-agent/ "
+            "or set HERMES_PYTHON_SRC_ROOT to the repo root."
+        ) from _e
 
 def _emit_telemetry(outcome: str, manifest_size: int, entry_id: str = "") -> None:
     """Emit trajectory_outcome telemetry row to preflight log."""

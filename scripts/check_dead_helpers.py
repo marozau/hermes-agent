@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
-"""CI gate: detect dead helper functions in lib/*.py.
+"""CI gate: detect dead helper functions in autodream/*.py.
 
 A3 from retrospective-epic-10-2026-05-31.md:
-Flag new helper functions in lib/ with zero production callers.
+Flag new helper functions in autodream/ with zero production callers.
 This catches the Epic 9 + Epic 10 dead-code pattern: helper defined,
 tests pass, but never wired into production code.
 
@@ -18,7 +18,7 @@ import sys
 from pathlib import Path
 
 
-# Known public API functions called from outside lib/ (CLI, plugins, agent runtime).
+# Known public API functions called from outside autodream/ (CLI, plugins, agent runtime).
 # These are entry points by design — not dead code.
 ALLOWED_PUBLIC_API = {
     # autodream.dream.py — called by `hermes dream` CLI
@@ -39,7 +39,7 @@ ALLOWED_PUBLIC_API = {
 
 
 def find_public_functions(lib_dir: Path) -> dict[str, list[str]]:
-    """Find all public function definitions in lib/*.py.
+    """Find all public function definitions in autodream/*.py.
 
     Returns {filepath: [function_name, ...]}.
     Skips private functions (starting with _) and test files.
@@ -65,7 +65,7 @@ def find_public_functions(lib_dir: Path) -> dict[str, list[str]]:
 def count_callers(lib_dir: Path, fn_name: str, defining_file: str) -> int:
     """Count production callers of fn_name.
 
-    Checks: intra-file callers (same file), other lib/*.py files,
+    Checks: intra-file callers (same file), other autodream/*.py files,
     scripts/*.py, plugins/**/*.py. Excludes test files and the
     bare definition line.
     """
@@ -99,11 +99,11 @@ def main():
             exclude_patterns.append(sys.argv[i + 1])
 
     repo_root = Path(__file__).resolve().parent.parent
-    lib_dir = repo_root / "autodream"
+    autodream_dir = repo_root / "autodream"
     scripts_dir = repo_root / "scripts"
 
-    if not lib_dir.exists():
-        print(f"ERROR: lib/ not found at {lib_dir}")
+    if not autodream_dir.exists():
+        print(f"ERROR: autodream/ not found at {autodream_dir}")
         sys.exit(1)
 
     functions = find_public_functions(lib_dir)
@@ -132,7 +132,7 @@ def main():
         sys.exit(1)
     else:
         total = sum(len(fns) for fns in functions.values())
-        print(f"✅ {total} public functions in lib/ — all have ≥ 1 production caller")
+        print(f"✅ {total} public functions in autodream/ — all have ≥ 1 production caller")
         sys.exit(0)
 
 

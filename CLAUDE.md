@@ -264,13 +264,13 @@ Never:
   observability/{llm_calls.jsonl, advisory.jsonl}
   profiles/<profile-name>/                        ← profile-scoped HERMES_HOME
 
-## Telemetry expectations
-
-Every implementation must emit:
-
 ~/usr-local/hermes/                               ← parent main checkout (SHARES .git with this worktree)
                                                   ← do NOT edit code here during Epic 8+9; user merges into main from here
 ```
+
+## Telemetry expectations
+
+Every implementation must emit:
 
 - **Per LLM call** → one JSONL row to `~/.hermes/observability/llm_calls.jsonl` (workload, model, tokens, cache_read, latency, schema status, idempotency_key).
 - **Per dream `create`** → `manifest.json` with scope, gates fired, model, cost, signal-density score, recall verdict.

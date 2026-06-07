@@ -53,13 +53,17 @@ class TestBinWrappersNoLibRoot:
 
     def test_hermes_preflight_no_sys_path(self):
         src = (REPO_ROOT / "bin" / "hermes-preflight").read_text()
-        # sys.path.insert allowed only for HERMES_PYTHON_SRC_ROOT fallback
         assert "_LIB_ROOT" not in src, "hermes-preflight still computes _LIB_ROOT"
+        # If sys.path.insert exists, it must be the canonical HERMES_PYTHON_SRC_ROOT fallback
+        if "sys.path.insert" in src:
+            assert "_src_root" in src, "hermes-preflight sys.path.insert not guarded by _src_root"
 
     def test_hermes_dream_no_sys_path(self):
         src = (REPO_ROOT / "bin" / "hermes-dream").read_text()
-        # sys.path.insert allowed only for HERMES_PYTHON_SRC_ROOT fallback
         assert "_LIB_ROOT" not in src, "hermes-dream still computes _LIB_ROOT"
+        # If sys.path.insert exists, it must be the canonical HERMES_PYTHON_SRC_ROOT fallback
+        if "sys.path.insert" in src:
+            assert "_src_root" in src, "hermes-dream sys.path.insert not guarded by _src_root"
 
 
 class TestClaudeMdNoSyncDiscipline:
