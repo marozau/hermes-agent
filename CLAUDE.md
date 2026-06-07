@@ -84,7 +84,7 @@ These are AI-agent-consistency anchors. An implementer **could decide differentl
 ## Canonical helpers (build these first, use everywhere)
 
 ```python
-# ~/.hermes/autodream/memory.py
+# autodream/memory.py (package)
 def add_entry(type: Literal["preference","fact","procedure","episode","superseded","trajectory","unknown"],
               body: str, source: str, *,
               evidence: str | None = None,
@@ -103,7 +103,7 @@ def expire_entry(id: str) -> None: ...                       # sets valid_until=
 ```
 
 ```python
-# ~/.hermes/autodream/llm.py
+# autodream/llm.py (package)
 class LLMSpec(BaseModel):
     workload: str             # key into ~/.hermes/dreams/providers.yaml
     messages: list[dict]
@@ -211,7 +211,7 @@ Never:
 3. Read the AC list. Each AC is `Given / When / Then` — that's your tests-first checklist.
 4. Open the `**Reference:**` line at the bottom of the story; it names the PR #4480 commit you're porting from (Epic 8/9) and the Hard Invariant you must not violate.
 5. Open the relevant FR in `planning-artifacts/prd-hermes-2026-05-12.md` and the relevant ADR / pattern in `planning-artifacts/architecture.md`.
-6. Implement against the Given/When/Then ACs. Sync `lib/*` and `plugins/preflight/*` edits to `~/.hermes/` (see §"Sync discipline" above).
+6. Implement against the Given/When/Then ACs. autodream is a first-class package — reinstall with `pip install -e . --no-deps` after changes.
 7. Move the story through `in-progress` → `review` → `done` in `sprint-status.yaml` as you progress. Update `workflow-status.yaml` only when an epic-level milestone changes.
 8. If you discover an ambiguity not resolved by docs 1–6, look at the relevant research doc (read order above). If still ambiguous, write it down as an Open Question and surface it — **do not silently invent**.
 
@@ -232,14 +232,14 @@ Never:
 └── worktree/
     └── hermes-agent/                             ← ★ YOU ARE HERE — branch feature/auto-dream-epic-8-9
         ├── CLAUDE.md                             ← this file (planning artifacts NOT under this dir)
-        ├── lib/                                  ← canonical helpers — EDIT HERE
-        │   ├── hermes_memory.py
-        │   ├── hermes_llm.py
-        │   ├── hermes_preflight.py
-        │   ├── hermes_recall.py
-        │   ├── hermes_dream.py
-        │   ├── hermes_trust.py
-        │   └── _hermes_paths.py
+        ├── autodream/                            ← canonical helpers — EDIT HERE
+        │   ├── memory.py
+        │   ├── llm.py
+        │   ├── preflight.py
+        │   ├── recall.py
+        │   ├── dream.py
+        │   ├── trust.py
+        │   └── _paths.py
         ├── plugins/preflight/                    ← bundled preflight plugin
         ├── plugins/bmad/                         ← BMAD plugin
         ├── hermes_cli/plugins.py                 ← VALID_HOOKS lives here
@@ -250,7 +250,7 @@ Never:
 
 ~/.hermes/                                        ← Hermes RUNTIME workspace (the substrate at runtime)
   hermes-agent/                                   ← runtime checkout of the Python codebase
-  lib/                                            ← RUNTIME copy of lib/* — sync from worktree after edits
+  hermes-agent/autodream/                         ← runtime package (installed via editable wheel)
   hermes-agent/plugins/preflight/                 ← RUNTIME copy of bundled plugin
   dreams/providers.yaml                           ← live workload routing; Epic 8.4 + 8.6 add entries here
   dreams/<dream_id>/                              ← copy-on-write artifacts
@@ -268,33 +268,6 @@ Never:
                                                   ← do NOT edit code here during Epic 8+9; user merges into main from here
 ```
 
-### Sync discipline — worktree → runtime
-
-After editing any `lib/*.py` or `plugins/preflight/*.py` file in this worktree, copy it into `~/.hermes/` so the running agent picks it up:
-
-```bash
-# From this worktree root:
-cp lib/hermes_<file>.py ~/.hermes/hermes-agent/autodream/hermes_<file>.py
-rm -f ~/.hermes/hermes-agent/autodream/__pycache__/hermes_<file>.cpython-*.pyc
-
-cp plugins/preflight/__init__.py ~/.hermes/hermes-agent/plugins/preflight/__init__.py
-rm -f ~/.hermes/hermes-agent/plugins/preflight/__pycache__/__init__.cpython-*.pyc
-```
-
-Audit drift before each commit:
-
-```bash
-for f in lib/*.py; do diff -q "$f" "$HOME/.hermes/$f"; done
-for f in plugins/preflight/*.py; do diff -q "$f" "$HOME/.hermes/hermes-agent/$f"; done
-```
-
-Silent drift has bitten this project twice — treat it as P0 once observed.
-
----
-
-## Telemetry expectations
-
-Every implementation must emit:
 - **Per LLM call** → one JSONL row to `~/.hermes/observability/llm_calls.jsonl` (workload, model, tokens, cache_read, latency, schema status, idempotency_key).
 - **Per dream `create`** → `manifest.json` with scope, gates fired, model, cost, signal-density score, recall verdict.
 - **Per `apply` / `discard` / `force-override`** → one row to `~/.hermes/dreams/audit.jsonl` (hash-chained).

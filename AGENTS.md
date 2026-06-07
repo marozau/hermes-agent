@@ -46,7 +46,7 @@ hermes-agent/
 │   ├── hermes-achievements/  # Gamified achievement tracking
 │   ├── observability/    # Metrics / traces / logs plugin
 │   ├── image_gen/        # Image-generation providers
-│   ├── preflight/        # FAMA Tier-2 #3 / Epic 7 — pre_llm_call shim that calls lib/hermes_preflight
+│   ├── preflight/        # FAMA Tier-2 #3 / Epic 7 — pre_llm_call shim that calls autodream.preflight
 │   └── <others>/         # disk-cleanup, example-dashboard, google_meet, platforms,
 │                         #   spotify, strike-freedom-cockpit, ...
 ├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
@@ -527,7 +527,7 @@ explicitly (it's idempotent).
 
 ### Preflight plugin (`plugins/preflight/` — FAMA Tier-2 #3 / Epic 7)
 
-Thin `pre_llm_call` shim that wires `lib/hermes_preflight.should_run_preflight()`
+Thin `pre_llm_call` shim that wires `autodream.preflight.should_run_preflight()`
 into the model dispatch path. The plugin is intentionally minimal — all gate
 state, classification, retrieval, ranking, dedupe, formatting, telemetry,
 and citation persistence live in `autodream/preflight.py`. The plugin is
@@ -581,7 +581,7 @@ works from any checkout. Override `HERMES_PREFLIGHT_CLI` /
 
 **CI:** `.github/workflows/preflight-ci.yml` triggers on changes to any
 preflight-related path (`autodream/preflight.py`, `plugins/preflight/**`,
-`bin/hermes-preflight`, `tests/lib/test_hermes_preflight*.py`,
+`bin/hermes-preflight`, `tests/autodream/test_hermes_preflight*.py`,
 `scripts/smoke-test-preflight.sh`). Runs unit + integration tests on
 Python 3.11 + 3.12, asserts ≥80% coverage on `lib.hermes_preflight`, then
 the smoke test.
@@ -969,7 +969,7 @@ confined to `<dream_id>/.hermes-private/` inside each dream artifact.
 |---|---|---|
 | Source code (Python modules, plugins, skills) | `~/usr-local/hermes/{lib,plugins,skills,...}/` | **Yes — only here** |
 | Version-controlled config (e.g. `providers.yaml`) | `~/usr-local/hermes/dreams/providers.yaml` (target — currently at `~/.hermes/dreams/providers.yaml`, mirror to dev tree when stable) | Yes |
-| Tests | `~/usr-local/hermes/tests/lib/`, `~/usr-local/hermes/tests/tools/`, ... | Yes |
+| Tests | `~/usr-local/hermes/tests/autodream/`, `~/usr-local/hermes/tests/tools/`, ... | Yes |
 | Planning artifacts (PRD, architecture, epics, status, stories) | `~/usr-local/hermes/{planning,implementation}-artifacts/` | Yes |
 | **Runtime state** — dream artifacts, audit log, raw entries, memory store, telemetry, logs, per-instance preflight config | `~/.hermes/{dreams,raw,observability,memory,memories,preflight,logs}/` | **No — written by code at runtime** |
 | Per-instance / per-profile config | `~/.hermes/config.yaml`, `~/.hermes/preflight/config.yaml`, `~/.hermes/.env` | Operator-edited, not version-controlled |
@@ -1035,7 +1035,7 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 │   ├── hermes_providers_anthropic.py   # Story 3.6: Anthropic Messages API + cache_control breakpoints
 │   ├── hermes_providers_chat.py        # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
 │   └── README.md                       # Provider adapter architecture + deploy.sh + fixtures
-├── tests/lib/                          # Substrate + provider adapter tests
+├── tests/autodream/                          # Substrate + provider adapter tests
 │   ├── conftest.py                     # Dev-tree lib/ on sys.path + HERMES_ROOT
 │   ├── test_hermes_memory.py
 │   ├── test_hermes_llm.py
@@ -1101,7 +1101,7 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 ├── observability/
 │   ├── llm_calls.jsonl                 # Per-call telemetry (workload, model, tokens, cache_read, latency, schema_status)
 │   └── advisory.jsonl
-├── memory/typed/                       # Frontmattered typed entries (written by lib/hermes_memory.add_entry)
+├── memory/typed/                       # Frontmattered typed entries (written by autodream.memory.add_entry)
 ├── memories/                           # LEGACY § -delimited memory (Story 1.5 follow-up will retire)
 └── logs/                               # agent.log / errors.log / gateway.log
 ```
@@ -1159,7 +1159,7 @@ result = llm_call(LLMSpec(
 
 The dream bundle (`[system | skills bundle | trajectories | human turn]`) **must be byte-stable within a flow run.** Mutations on message dicts re-hash the block and invalidate `cache_control`. Adapter code MUST build new dicts; never mutate in place. Bundle is assembled **once per flow run** — building it mid-flow is the cache-break trap.
 
-Cross-references: this is the doctrine CLAUDE.md cites and that the provider adapters in `lib/hermes_providers_anthropic.py` gate on. Story 3.8's end-to-end smoke test asserts the cache-warm second run pays zero provider cost.
+Cross-references: this is the doctrine CLAUDE.md cites and that the provider adapters in `autodream/providers_anthropic.py` gate on. Story 3.8's end-to-end smoke test asserts the cache-warm second run pays zero provider cost.
 
 ### Provider routing (workload-keyed)
 
@@ -1232,7 +1232,7 @@ hermes-runtime-update && hermes gateway restart
 
 **Why no file-copy script.** The two checkouts are two working copies of the same private repo (dev tree → `origin = hermes-agent-private`; runtime → `private = hermes-agent-private`). `git pull` already moves code; `hermes update` wraps it with the skills-sync and dep-install steps you need anyway. Earlier file-copy scripts (`deploy.sh`, `deploy-skills.sh`) were removed because they introduced a parallel deployment path that could `rsync --delete` user-customized skills.
 
-Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last `hermes update` there.
+Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/autodream/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last `hermes update` there.
 
 ### Definition-of-Done (V1)
 

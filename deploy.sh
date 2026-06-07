@@ -1,29 +1,26 @@
 #!/bin/bash
-# deploy.sh — Deploy dev-repo lib modules to live agent runtime path
+# deploy.sh — DEPRECATED: autodream is now a first-class package via editable install.
 #
-# Usage: ./deploy.sh [--live-dir PATH]
+# Usage: ./deploy.sh [LIVE_DIR]
+#   LIVE_DIR defaults to $HOME/.hermes/hermes-agent/autodream
 #
-# Copies lib/*.py from dev repo to ~/.hermes/lib/ (or specified live dir).
-# After deploy, the live agent can import these modules.
-#
-# Run from dev repo root: cd ~/usr-local/hermes && ./deploy.sh
+# Kept for backward compatibility with existing workflows. The canonical
+# deployment is: cd ~/.hermes/hermes-agent && pip install -e . --no-deps
 
 set -euo pipefail
 
-LIVE_DIR="${1:-$HOME/.hermes/lib}"
+LIVE_DIR="${1:-$HOME/.hermes/hermes-agent/autodream}"
 
 if [ ! -d "$LIVE_DIR" ]; then
-    echo "Error: target directory $LIVE_DIR does not exist"
-    echo "Usage: $0 [--live-dir PATH]"
-    exit 1
+    mkdir -p "$LIVE_DIR"
 fi
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-echo "Deploying lib modules from $SCRIPT_DIR/lib/ to $LIVE_DIR/"
+echo "[DEPRECATED] deploy.sh is obsolete — autodream is installed via editable wheel."
+echo "Copying autodream modules from $SCRIPT_DIR/autodream/ to $LIVE_DIR/ anyway..."
 
-for f in "$SCRIPT_DIR"/autodream/providers*.py; do
+for f in "$SCRIPT_DIR"/autodream/*.py; do
     cp -v "$f" "$LIVE_DIR/"
 done
 
-echo "Done. Live agent can import provider adapters."
-echo "Restart gateway if running: hermes gateway restart"
+echo "Done. Prefer: cd ~/.hermes/hermes-agent && pip install -e . --no-deps"

@@ -460,7 +460,7 @@ try:
     import autodream.providers  # noqa: E402
     autodream.providers.register_all()
 except Exception as _e:
-    logger.warning("autodream.providers.register_all() failed: %s", _e)
+    print(f"autodream.providers.register_all() failed: {_e}", file=sys.stderr)
 
 # Apply IPv4 preference early, before any HTTP clients are created.
 # We already determined whether to force IPv4 from the raw yaml read above —

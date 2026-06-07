@@ -83,7 +83,7 @@ class TestMainPyLogging:
         idx = src.find("import autodream.providers")
         assert idx != -1, "main.py missing autodream.providers import"
         block = src[idx:idx+500]
-        assert "logger.error" in block or "logging.error" in block or "logger.warning" in block, "main.py silently catches import failure"
+        assert "print(" in block and "file=sys.stderr" in block, "main.py silently catches import failure"
 
 
 class TestLogStringsUpdated:
