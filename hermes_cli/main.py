@@ -11510,6 +11510,7 @@ def _cmd_update_impl(args, gateway_mode: bool):
                         get_launchd_plist_path,
                     )
 
+                    # Default gateway: canonical restart path (works reliably).
                     plist_path = get_launchd_plist_path()
                     if plist_path.exists():
                         check = subprocess.run(
@@ -11525,6 +11526,47 @@ def _cmd_update_impl(args, gateway_mode: bool):
                             except subprocess.CalledProcessError as e:
                                 stderr = (getattr(e, "stderr", "") or "").strip()
                                 print(f"  ⚠ Gateway restart failed: {stderr}")
+
+                    # Per-profile gateways: kickstart -k is unreliable (20% success).
+                    # Enumerate all ai.hermes.gateway-* services and use graceful
+                    # SIGUSR1 drain + PID kill, letting launchd auto-restart.
+                    _launchd_list = subprocess.run(
+                        ["launchctl", "list"],
+                        capture_output=True,
+                        text=True,
+                        timeout=10,
+                    )
+                    for line in _launchd_list.stdout.strip().splitlines():
+                        parts = line.split()
+                        if len(parts) < 3 or not parts[2].startswith("ai.hermes.gateway-"):
+                            continue
+                        _svc_label = parts[2]
+                        try:
+                            _svc_pid = int(parts[0])
+                        except ValueError:
+                            continue
+                        if _svc_pid <= 0:
+                            continue
+                        _drained = _graceful_restart_via_sigusr1(
+                            _svc_pid,
+                            drain_timeout=_drain_budget,
+                        )
+                        if not _drained:
+                            try:
+                                os.kill(_svc_pid, _signal.SIGTERM)
+                            except (ProcessLookupError, PermissionError):
+                                pass
+                        # Wait for the specific PID to exit (can't use
+                        # _wait_for_gateway_exit which only checks the default
+                        # gateway's PID file).
+                        _svc_deadline = _time.monotonic() + 5.0
+                        while _time.monotonic() < _svc_deadline:
+                            try:
+                                os.kill(_svc_pid, 0)
+                            except (ProcessLookupError, PermissionError, OSError):
+                                break
+                            _time.sleep(0.3)
+                        restarted_services.append(_svc_label)
                 except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
                     pass
 

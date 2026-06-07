@@ -127,24 +127,25 @@ def _get_service_pids() -> set:
     # --- launchd (macOS) ---
     if is_macos():
         try:
-            label = get_launchd_label()
             result = subprocess.run(
-                ["launchctl", "list", label],
+                ["launchctl", "list"],
                 capture_output=True,
                 text=True,
-                timeout=5,
+                timeout=10,
             )
-            if result.returncode == 0:
-                # Output: "PID\tStatus\tLabel" header, then one data line
-                for line in result.stdout.strip().splitlines():
-                    parts = line.split()
-                    if len(parts) >= 3 and parts[2] == label:
-                        try:
-                            pid = int(parts[0])
-                            if pid > 0:
-                                pids.add(pid)
-                        except ValueError:
-                            pass
+            for line in result.stdout.strip().splitlines():
+                parts = line.split()
+                if len(parts) < 3:
+                    continue
+                label = parts[2]
+                if not label.startswith("ai.hermes.gateway"):
+                    continue
+                try:
+                    pid = int(parts[0])
+                    if pid > 0:
+                        pids.add(pid)
+                except ValueError:
+                    pass
         except (FileNotFoundError, subprocess.TimeoutExpired):
             pass
 
