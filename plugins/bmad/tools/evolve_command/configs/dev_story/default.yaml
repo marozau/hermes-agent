@@ -1,0 +1,6 @@
+# SkillOpt training configuration - default parameters
+model: gpt-4o
+max_steps: 100
+batch_size: 8
+learning_rate: 0.001
+reward_threshold: 0.9

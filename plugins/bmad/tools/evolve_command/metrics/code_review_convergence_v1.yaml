@@ -1,0 +1,25 @@
+version: 1
+name: code_review_convergence_v1
+description: >
+  Pre-registered metric for code-review tuning.
+  Tracks P0 monotonic-drop across review rounds.
+  Each (review JSON, fix commit, next-round JSON) triple is a training example
+  (L-29/D-44 thesis).  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-05"
+
+weights:
+  p0_drop_rate: 0.5
+  fix_round_efficiency: 0.3
+  nit_introduction_rate: 0.2
+
+hard_gates:
+  - name: p0_monotonic_drop
+    description: >
+      P0 count must never increase between consecutive review rounds.
+      A violation means the fix introduced new P0 issues.
+    op: "<="
+  - name: fix_must_address_p0s
+    description: >
+      Every P0 flagged in round N must be resolved (absent) in round N+1.
+      Partial resolution is a gate failure.
+    op: "=="

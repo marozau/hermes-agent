@@ -55,23 +55,27 @@ class TestP0JudgeLoadsPatternsFromYAML:
 class TestP0ImporterJSONL:
     """P0-3: Importer must parse JSONL (one JSON per line), not single JSON."""
 
-    def test_collect_messages_parses_jsonl_lines(self) -> None:
-        """Each line in a .jsonl file is a separate message."""
+    def test_collect_messages_parses_json_lines(self) -> None:
+        """HermesSessionImporter parses Hermes session JSON files."""
         from unittest.mock import patch
-        from plugins.bmad.tools.evolve_command._vendor.external_importers import HermesSessionImporter
+        from evolution.core.external_importers import HermesSessionImporter
         import json
 
         with tempfile.TemporaryDirectory() as tmpdir:
             session_dir = Path(tmpdir) / "sessions"
             session_dir.mkdir()
-            # Write 3 JSONL lines
-            lines = [
-                json.dumps({"role": "user", "content": "implement story 13.8"}),
-                json.dumps({"role": "assistant", "content": "implementing story 13.8 now"}),
-                json.dumps({"role": "user", "content": "verify the implementation"}),
-            ]
-            session_file = session_dir / "test_session.jsonl"
-            session_file.write_text("\n".join(lines) + "\n")
+            # Hermes format: single JSON with "messages" key
+            session_data = {
+                "session_id": "test-session",
+                "messages": [
+                    {"role": "user", "content": "implement story 13.8 now"},
+                    {"role": "assistant", "content": "implementing the story now done"},
+                    {"role": "user", "content": "verify the implementation works"},
+                    {"role": "assistant", "content": "verification complete all tests pass"},
+                ],
+            }
+            session_file = session_dir / "test_session.json"
+            session_file.write_text(json.dumps(session_data))
 
             with patch.object(HermesSessionImporter, "SESSION_DIR", session_dir):
                 messages = HermesSessionImporter.extract_messages(limit=10)
