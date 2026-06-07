@@ -623,14 +623,17 @@ def sync_skills(quiet: bool = False) -> dict:
             _skill_ancestors.add(p)
             p = p.parent
 
+    # Only consider category-level containers (no direct SKILL.md) —
+    # skill-level dirs already have their subdirs synced by copytree.
+    _skill_categories = {p for p in _skill_ancestors if not (p / "SKILL.md").exists()}
+
     _supplementary_dirs = []
-    for anc in sorted(_skill_ancestors):
-        for child in anc.iterdir():
+    for cat in sorted(_skill_categories):
+        for child in cat.iterdir():
             if not child.is_dir() or child in _skill_ancestors:
                 continue
             if (child / "SKILL.md").exists():
                 continue  # standalone skill, already synced
-            # Only capture if there's something inside (files or subdirs)
             if any(True for _ in child.iterdir()):
                 _supplementary_dirs.append(child)
 
