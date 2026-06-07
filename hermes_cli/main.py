@@ -11504,32 +11504,58 @@ def _cmd_update_impl(args, gateway_mode: bool):
             # --- Launchd services (macOS) ---
             if is_macos():
                 try:
-                    from hermes_cli.gateway import (
-                        launchd_restart,
-                        get_launchd_label,
-                        get_launchd_plist_path,
-                    )
-
-                    # Default gateway: canonical restart path (works reliably).
-                    plist_path = get_launchd_plist_path()
-                    if plist_path.exists():
-                        check = subprocess.run(
-                            ["launchctl", "list", get_launchd_label()],
-                            capture_output=True,
-                            text=True,
-                            timeout=5,
+                    # Unified restart for default + per-profile launchd gateways.
+                    # ``launchctl kickstart -k`` is unreliable (~20% success) so we
+                    # use the proven ``kill PID`` pattern: SIGUSR1 for a short
+                    # graceful drain, then SIGTERM, then poll until launchd
+                    # respawns a new process (KeepAlive=True guarantees this).
+                    def _restart_launchd_gateway(label: str, old_pid: int) -> bool:
+                        """Kill a launchd-managed gateway PID and verify relaunch."""
+                        # Short graceful drain — don't block the update for the
+                        # full 75s budget when restarting many profiles.
+                        _graceful_restart_via_sigusr1(
+                            old_pid,
+                            drain_timeout=min(_drain_budget, 10.0),
                         )
-                        if check.returncode == 0:
-                            try:
-                                launchd_restart()
-                                restarted_services.append(get_launchd_label())
-                            except subprocess.CalledProcessError as e:
-                                stderr = (getattr(e, "stderr", "") or "").strip()
-                                print(f"  ⚠ Gateway restart failed: {stderr}")
+                        try:
+                            os.kill(old_pid, _signal.SIGTERM)
+                        except (ProcessLookupError, PermissionError):
+                            pass
 
-                    # Per-profile gateways: kickstart -k is unreliable (20% success).
-                    # Enumerate all ai.hermes.gateway-* services and use graceful
-                    # SIGUSR1 drain + PID kill, letting launchd auto-restart.
+                        # Wait for old PID to exit
+                        _deadline = _time.monotonic() + 8.0
+                        while _time.monotonic() < _deadline:
+                            try:
+                                os.kill(old_pid, 0)
+                            except (ProcessLookupError, PermissionError, OSError):
+                                break
+                            _time.sleep(0.3)
+
+                        # Verify relaunch: launchd KeepAlive should have respawned
+                        _verify_deadline = _time.monotonic() + 10.0
+                        while _time.monotonic() < _verify_deadline:
+                            try:
+                                _chk = subprocess.run(
+                                    ["launchctl", "list", label],
+                                    capture_output=True,
+                                    text=True,
+                                    timeout=5,
+                                )
+                                if _chk.returncode == 0:
+                                    _parts = _chk.stdout.strip().splitlines()[0].split()
+                                    if len(_parts) >= 3:
+                                        try:
+                                            _new_pid = int(_parts[0])
+                                            if _new_pid > 0 and _new_pid != old_pid:
+                                                return True
+                                        except ValueError:
+                                            pass
+                            except Exception:
+                                pass
+                            _time.sleep(0.5)
+                        return False
+
+                    # Collect all ai.hermes.gateway* services (default + profiles)
                     _launchd_list = subprocess.run(
                         ["launchctl", "list"],
                         capture_output=True,
@@ -11538,35 +11564,26 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     )
                     for line in _launchd_list.stdout.strip().splitlines():
                         parts = line.split()
-                        if len(parts) < 3 or not parts[2].startswith("ai.hermes.gateway-"):
+                        if len(parts) < 3:
                             continue
                         _svc_label = parts[2]
+                        if not _svc_label.startswith("ai.hermes.gateway"):
+                            continue
                         try:
                             _svc_pid = int(parts[0])
                         except ValueError:
                             continue
                         if _svc_pid <= 0:
                             continue
-                        _drained = _graceful_restart_via_sigusr1(
-                            _svc_pid,
-                            drain_timeout=_drain_budget,
-                        )
-                        if not _drained:
-                            try:
-                                os.kill(_svc_pid, _signal.SIGTERM)
-                            except (ProcessLookupError, PermissionError):
-                                pass
-                        # Wait for the specific PID to exit (can't use
-                        # _wait_for_gateway_exit which only checks the default
-                        # gateway's PID file).
-                        _svc_deadline = _time.monotonic() + 5.0
-                        while _time.monotonic() < _svc_deadline:
-                            try:
-                                os.kill(_svc_pid, 0)
-                            except (ProcessLookupError, PermissionError, OSError):
-                                break
-                            _time.sleep(0.3)
-                        restarted_services.append(_svc_label)
+
+                        _ok = _restart_launchd_gateway(_svc_label, _svc_pid)
+                        if _ok:
+                            restarted_services.append(_svc_label)
+                        else:
+                            print(
+                                f"  ⚠ {_svc_label}: restart did not verify — "
+                                f"may need manual restart"
+                            )
                 except (FileNotFoundError, subprocess.TimeoutExpired, ImportError):
                     pass
 
