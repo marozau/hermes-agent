@@ -612,6 +612,38 @@ def sync_skills(quiet: bool = False) -> dict:
             except (OSError, IOError) as e:
                 logger.debug("Could not copy %s: %s", desc_md, e)
 
+    # Also copy supplementary directories — directories that sit alongside
+    # skill directories inside a category but don't themselves contain a
+    # SKILL.md (e.g. templates/, _shared/tea-knowledge/).  These are shared
+    # resources referenced by skills but never discovered by rglob("SKILL.md").
+    _skill_ancestors = set()
+    for _, skill_src in bundled_skills:
+        p = skill_src
+        while p != bundled_dir:
+            _skill_ancestors.add(p)
+            p = p.parent
+
+    _supplementary_dirs = []
+    for anc in sorted(_skill_ancestors):
+        for child in anc.iterdir():
+            if not child.is_dir() or child in _skill_ancestors:
+                continue
+            if (child / "SKILL.md").exists():
+                continue  # standalone skill, already synced
+            # Only capture if there's something inside (files or subdirs)
+            if any(True for _ in child.iterdir()):
+                _supplementary_dirs.append(child)
+
+    for supp_dir in _supplementary_dirs:
+        rel = supp_dir.relative_to(bundled_dir)
+        dest_supp = SKILLS_DIR / rel
+        if not dest_supp.exists():
+            try:
+                dest_supp.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copytree(supp_dir, dest_supp)
+            except (OSError, IOError) as e:
+                logger.debug("Could not copy supplementary dir %s: %s", supp_dir, e)
+
     _write_manifest(manifest)
     optional_provenance_backfilled = _backfill_optional_provenance(quiet=quiet)
 
