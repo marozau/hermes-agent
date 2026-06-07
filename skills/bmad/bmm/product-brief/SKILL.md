@@ -1,7 +1,6 @@
 ---
 name: bmad:product-brief
-description: "Analysis-phase skill for creating product briefs — problem statement, current state, proposed solution, target users, success metrics, competitive landscape, risks. Trigger on: create product brief, product brief, problem statement, discovery."
-
+description: "Analysis-phase skill for creating product briefs — problem statement, target audience, proposed solution, success metrics, competitive landscape. Trigger on: create product brief, product brief, problem statement, discovery."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
 platforms: [linux, macos, windows]
@@ -11,85 +10,138 @@ metadata:
     category: bmad
 ---
 
-# Create Product Brief
+# /bmad:product-brief — Product Brief
 
-## Overview
+**Goal:** Produce a 1-2 page executive product brief that frames problem,
+audience, solution, success criteria, and competitive context — the
+foundation for downstream PRD creation.
 
-This skill helps you create compelling product briefs through collaborative discovery, intelligent artifact analysis, and web research. Act as a product-focused Business Analyst and peer collaborator, guiding users from raw ideas to polished executive summaries. Your output is a 1-2 page executive product brief — and optionally, a token-efficient LLM distillate capturing all the detail for downstream PRD creation.
+**Phase:** 1 - Analysis
 
-The user is the domain expert. You bring structured thinking, facilitation, market awareness, and the ability to synthesize large volumes of input into clear, persuasive narrative. Work together as equals.
+---
 
-**Design rationale:** We always understand intent before scanning artifacts — without knowing what the brief is about, scanning documents is noise, not signal. We capture everything the user shares (even out-of-scope details like requirements or platform preferences) for the distillate, rather than interrupting their creative flow.
+## Execution
 
-## Activation Mode Detection
+### Step 1: Gather inputs
 
-Check activation context immediately:
+Before writing, confirm:
+- Project config exists at `bmad/config.yaml`
+- User has shared the problem they're trying to solve (raw idea OK)
+- Any existing market research or competitive analysis docs
 
-1. **Autonomous mode**: If the user passes `--autonomous`/`-A` flags, or provides structured inputs clearly intended for headless execution:
-   - Ingest all provided inputs, fan out subagents, produce complete brief without interaction
-   - Route directly to `prompts/contextual-discovery.md` with `{mode}=autonomous`
+Ask 1-2 clarifying questions ONLY if scope is wildly unclear. Otherwise
+proceed — the brief is iterative.
 
-2. **Yolo mode**: If the user passes `--yolo` or says "just draft it" / "draft the whole thing":
-   - Ingest everything, draft complete brief upfront, then walk user through refinement
-   - Route to Stage 1 below with `{mode}=yolo`
+### Step 2: Load template
 
-3. **Guided mode** (default): Conversational discovery with soft gates
-   - Route to Stage 1 below with `{mode}=guided`
+Read `skills/bmad/templates/product-brief.template.md` for the output
+structure. **Follow this template exactly**, substituting placeholders with
+actual content.
 
-## On Activation
+### Step 3: Draft sections
 
-1. Load config from `.claude/bmad.local.md` and resolve::
-   - Use `{user_name}` for greeting
-   - Use `{communication_language}` for all communications
-   - Use `{document_output_language}` for output documents
-   - Use `{planning_artifacts}` for output location and artifact scanning
-   - Use `{project_knowledge}` for additional context scanning
+Populate each section with specific, decision-grade content:
 
-2. **Greet user** as `{user_name}`, speaking in `{communication_language}`. Be warm but efficient — dream builder energy.
+| Section | Required | Quality bar |
+|---------|----------|-------------|
+| Frontmatter | ✓ | project_name, date, author, version, status |
+| Problem Statement | ✓ | Clear problem + why now + impact if unsolved |
+| Target Audience | ✓ | Primary + secondary users with personas or roles |
+| Proposed Solution | ✓ | Key features + differentiation |
+| Success Metrics | ✓ | ≥3 measurable criteria with targets |
+| Competitive Landscape | ✓ | ≥2 competitors analyzed with differentiation |
 
-3. **Stage 1: Understand Intent** (handled here in SKILL.md)
+### Step 4: Validate
 
-### Stage 1: Understand Intent
+Self-check before output:
+- Problem statement names the cost of inaction, not just the pain
+- Target audience is segmented (primary vs secondary; persona name + role)
+- Solution is concrete enough that engineering can scope it
+- Every success metric has a number + timeframe
+- Competitors are real (named) and the differentiation is honest
 
-**Goal:** Know WHY the user is here and WHAT the brief is about before doing anything else.
+### Step 5: Output
 
-**Brief type detection:** Understand what kind of thing is being briefed — product, internal tool, research project, or something else. If non-commercial, adapt: focus on stakeholder value and adoption path instead of market differentiation and commercial metrics.
+Save to: `planning-artifacts/product-brief-{date}.md`
 
-**Multi-idea disambiguation:** If the user presents multiple competing ideas or directions, help them pick one focus for this brief session. Note that others can be briefed separately.
+Return the file path and a 1-paragraph executive summary.
 
-**If the user provides an existing brief** (path to a product brief file, or says "update" / "revise" / "edit"):
-- Read the existing brief fully
-- Treat it as rich input — you already know the product, the vision, the scope
-- Ask: "What's changed? What do you want to update or improve?"
-- The rest of the workflow proceeds normally — contextual discovery may pull in new research, elicitation focuses on gaps or changes, and draft-and-review produces an updated version
+---
 
-**If the user already provided context** when launching the skill (description, docs, brain dump):
-- Acknowledge what you received — but **DO NOT read document files yet**. Note their paths for Stage 2's subagents to scan contextually. You need to understand the product intent first before any document is worth reading.
-- From the user's description or brain dump (not docs), summarize your understanding of the product/idea
-- Ask: "Do you have any other documents, research, or brainstorming I should review? Anything else to add before I dig in?"
+## Template Reference
 
-**If the user provided nothing beyond invoking the skill:**
-- Ask what their product or project idea is about
-- Ask if they have any existing documents, research, brainstorming reports, or other materials
-- Let them brain dump — capture everything
+```markdown
+---
+project_name: '{{project_name}}'
+date: '{{date}}'
+author: '{{user_name}}'
+version: '0.1.0'
+status: 'draft'
+---
 
-**The "anything else?" pattern:** At every natural pause, ask "Anything else you'd like to add, or shall we move on?" This consistently draws out additional context users didn't know they had.
+# Product Brief: {{project_name}}
 
-**Capture-don't-interrupt:** If the user shares details beyond brief scope (requirements, platform preferences, technical constraints, timeline), capture them silently for the distillate. Don't redirect or stop their flow.
+**Date:** {{date}}
+**Author:** {{user_name}}
+**Status:** Draft v0.1
 
-**When you have enough to understand the product intent**, route to `prompts/contextual-discovery.md` with the current mode.
+---
 
-## Stages
+## Executive Summary
 
-| # | Stage | Purpose | Prompt |
-|---|-------|---------|--------|
-| 1 | Understand Intent | Know what the brief is about | SKILL.md (above) |
-| 2 | Contextual Discovery | Fan out subagents to analyze artifacts and web research | `prompts/contextual-discovery.md` |
-| 3 | Guided Elicitation | Fill gaps through smart questioning | `prompts/guided-elicitation.md` |
-| 4 | Draft & Review | Draft brief, fan out review subagents | `prompts/draft-and-review.md` |
-| 5 | Finalize | Polish, output, offer distillate | `prompts/finalize.md` |
+[2-3 sentences: what the product is, who it's for, what problem it solves.]
 
-## External Skills
+## Problem Statement
 
-This workflow uses:
-- `bmad-init` — Configuration loading (module: bmm)
+[The problem in plain language. Include:
+- The pain (what's broken or missing today)
+- Why now (timing, market shift, urgency)
+- The impact if unsolved (cost, risk, opportunity lost)]
+
+## Target Audience
+
+[Who will use this. Segment into:
+- **Primary users**: persona + role + key job-to-be-done
+- **Secondary users**: persona + role + supporting use case]
+
+## Proposed Solution
+
+[How the product addresses the problem. Include:
+- Key features (3-5 bullets)
+- Differentiation vs existing approaches
+- High-level user flow]
+
+## Success Metrics
+
+[At least 3 measurable criteria with targets and timeframes:
+- Metric 1: target, by when
+- Metric 2: target, by when
+- Metric 3: target, by when]
+
+## Competitive Landscape
+
+[At least 2 competitors with:
+- Competitor name + one-line description
+- Their strengths and limits
+- How this product differs / wins]
+
+## Risks & Mitigations
+
+[Top 3 risks (technical, market, execution) with mitigation approaches.]
+
+## Out of Scope
+
+[Explicit non-goals for this version. Prevents scope creep.]
+```
+
+---
+
+## Anti-patterns
+
+- DO NOT write a wishlist disguised as a problem statement
+- DO NOT skip the "why now" framing — without it, the brief reads as
+  optional
+- DO NOT name a single "everyone" audience — segment primary vs secondary
+- DO NOT leave success metrics qualitative ("delightful", "fast")
+- DO NOT pretend there are no competitors — every product has alternatives,
+  even if "the status quo" is one of them
