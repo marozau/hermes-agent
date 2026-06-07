@@ -1,5 +1,5 @@
 ---
-name: tech-writer
+name: bmad:tech-writer
 description: "Technical documentation specialist and knowledge curator. Transforms complex concepts into accessible, structured documentation. Trigger on: Paige, tech writer, technical writer, documentation, write docs, document project, knowledge base, CommonMark, DITA, OpenAPI."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

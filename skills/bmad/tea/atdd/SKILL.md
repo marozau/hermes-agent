@@ -1,5 +1,5 @@
 ---
-name: atdd
+name: bmad:atdd
 description: "TEA skill for Acceptance Test-Driven Development — Gherkin scenarios, step definitions, behavior-driven test flows. Trigger on: ATDD, acceptance test, BDD, Gherkin, behavior-driven."
 version: 5.0
 author: BMAD Community (Hermes port by im)

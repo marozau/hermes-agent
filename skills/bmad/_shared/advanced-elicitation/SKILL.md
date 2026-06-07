@@ -1,5 +1,5 @@
 ---
-name: advanced-elicitation
+name: bmad:advanced-elicitation
 description: 'Push the LLM to reconsider, refine, and improve its recent output. Use when user asks for deeper critique or mentions a known deeper critique method, e.g. socratic, first principles, pre-mortem, red team.'
 agent_party: '${CLAUDE_PLUGIN_ROOT}/_shared/agent-manifest.csv'
 ---

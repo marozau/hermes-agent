@@ -1,5 +1,5 @@
 ---
-name: presentation
+name: bmad:presentation
 description: "Presentation design and delivery coach. Use for slide design, pitch crafting, visual storytelling, presentation structure. Persona: Caravaggio — presentation master."
 version: 5.0
 author: BMAD Community (Hermes port by im)

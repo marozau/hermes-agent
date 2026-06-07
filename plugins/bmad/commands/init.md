@@ -7,77 +7,80 @@ spec:
     - "BMAD project initialized"
     - "Config created"
     - "Directory structure set up"
+    - "Worktrees created (workspace mode)"
+    - "AGENTS.md authored (workspace mode)"
+    - "WORKTREES.md authored (workspace mode)"
 ---
 
 # /bmad:init
 
-Scaffold a new BMAD project or workspace.
+The mechanical bootstrap has already run. Your job now is to plan and
+execute the remaining setup based on the user's intent.
 
-## Usage
+## What's already done
 
-### Standard (single-repo)
+{% if '--workspace' in args %}
+- `bmad/config.yaml` created with `workspace_mode: true`
+- `planning-artifacts/` scaffolded at workspace root
+- `worktree/<name>/` git worktrees created for each repo
+{% else %}
+- `bmad/config.yaml` created
+- `planning-artifacts/` scaffolded
+- `implementation-artifacts/` scaffolded
+{% endif %}
 
-```
-/bmad:init [--force]
-```
+## What you need to do next
 
-Creates:
-- `bmad/config.yaml` — project configuration
-- `planning-artifacts/workflow-status.yaml` — state ledger
-- `planning-artifacts/research/`
-- `implementation-artifacts/stories/`
+### 1. Understand the user's goal
 
-### Workspace mode (multi-repo)
+Read their original request (in `{{args}}`). Extract:
+- What projects/repos they're working on
+- What feature or goal they're pursuing
+- Any specific branch or worktree preferences
 
-When the user mentions working on multiple repos, projects, or worktrees — OR passes `--workspace` — use workspace mode.
+{% if '--workspace' in args %}
+### 2. Author AGENTS.md
 
-```
-/bmad:init --workspace --worktree NAME:UPSTREAM:BRANCH [--worktree ...]
-```
+Create `AGENTS.md` at the workspace root. It should contain:
+- Project overview and goal
+- Workspace layout (which worktree is which)
+- Conventions for the feature work
+- How to use the worktrees (cd into `worktree/<name>/` for code changes)
+- Planning artifacts location (`planning-artifacts/` at workspace root)
 
-Creates:
-- `bmad/config.yaml` — workspace configuration (workspace_mode: true)
-- `planning-artifacts/` — canonical plan (workspace root, never inside a worktree)
-- `worktree/<name>/` — git worktrees for each --worktree spec
-- `AGENTS.md` — agent orientation (generated from template)
-- `CLAUDE.md` — symlink to AGENTS.md (Unix)
-- `WORKTREES.md` — live session manifest
+### 3. Create CLAUDE.md symlink
 
-#### How to parse user intent
+On Unix: `ln -s AGENTS.md CLAUDE.md`
 
-When the user describes a workspace in natural language, extract:
+### 4. Author WORKTREES.md
 
-1. **NAME** — the repo/project name (e.g. "hermes-agent", "hermes-workspace")
-2. **UPSTREAM** — the path to the existing repo clone (e.g. `~/usr-local/hermes`)
-3. **BRANCH** — the branch to work on (default: `main` if not specified)
+Create `WORKTREES.md` with:
+- Table of worktrees: name, upstream, branch, status
+- Claim/release protocol for multi-agent coordination
+- Current assignments (if any)
 
-Common patterns the user might say:
-- "work on hermes-agent and hermes-workspace" → look for repos at `~/usr-local/hermes-agent` and `~/usr-local/hermes-workspace`
-- "hermes-agent (usr-local/hermes)" → NAME=hermes-agent, UPSTREAM=~/usr-local/hermes
-- "branch feat/swarm" → BRANCH=feat/swarm
-- "to improve hermes-swarm" → this is the feature goal, not a repo name
+### 5. Verify
 
-If UPSTREAM is not specified, try `~/usr-local/<NAME>` as default.
-If BRANCH is not specified, use `main`.
+After setup, verify:
+- `bmad/config.yaml` exists and has `workspace_mode: true`
+- Each worktree directory exists and is a valid git worktree
+- `AGENTS.md` exists and covers the workspace layout
+- `CLAUDE.md` is a symlink to `AGENTS.md`
+- `WORKTREES.md` exists with worktree manifest
+{% else %}
+### 2. Verify
 
-Construct the full args string and call the handler with:
-```
---workspace --worktree <NAME>:<UPSTREAM>:<BRANCH> [--worktree ...]
-```
+After setup, verify:
+- `bmad/config.yaml` exists and is valid
+- `planning-artifacts/` directory exists
+- `implementation-artifacts/` directory exists
+{% endif %}
 
-#### Options
+### Next steps
 
-- `--workspace` — Enable workspace mode (opt-in, per WI-1)
-- `--worktree NAME:UPSTREAM:BRANCH` — Add a worktree (repeatable)
-- `--force` — Overwrite existing config
-
-#### Examples
-
-User says: "set up a workspace for hermes-swarm across hermes-agent and hermes-workspace"
-→ Call: `/bmad:init --workspace --worktree hermes-agent:~/usr-local/hermes:main --worktree hermes-workspace:~/usr-local/hermes-workspace:main`
-
-User says: "i want to work on hermes-agent (branch feat/swarm) and hermes-workspace"
-→ Call: `/bmad:init --workspace --worktree hermes-agent:~/usr-local/hermes:feat/swarm --worktree hermes-workspace:~/usr-local/hermes-workspace:main`
-
-If the directory already contains a `bmad/config.yaml` the command will
-refuse to overwrite it unless `--force` is passed.
+Suggest what the user should do next:
+- `/bmad:create-prd` to start planning
+- `/bmad:epics-stories` to decompose work
+{% if '--workspace' in args %}
+- Direct code exploration in worktrees
+{% endif %}

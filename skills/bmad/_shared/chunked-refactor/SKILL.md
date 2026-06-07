@@ -1,5 +1,5 @@
 ---
-name: chunked-refactor
+name: bmad:chunked-refactor
 description: |
   Pattern for safely rewriting many disjoint blocks of one file. Use when
   an Edit fails twice in a row on a wide change, when the planned change

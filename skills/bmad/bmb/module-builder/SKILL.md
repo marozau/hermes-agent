@@ -1,5 +1,5 @@
 ---
-name: module-builder
+name: bmad:module-builder
 description: "Create and scaffold BMAD modules: module planning, setup skill generation, standalone module templates, validation. Use for: creating new modules, scaffolding setup skills, module validation."
 version: 5.0
 author: BMAD Community (Hermes port by im)

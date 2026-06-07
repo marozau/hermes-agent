@@ -1,5 +1,5 @@
 ---
-name: qa
+name: bmad:qa
 description: "QA engineer for test automation and coverage. Pragmatic test automation specialist who generates tests quickly for existing features. Trigger on: QA, Quinn, QA engineer, test automation, test coverage, generate tests, E2E tests."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

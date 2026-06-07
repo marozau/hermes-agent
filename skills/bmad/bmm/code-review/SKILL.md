@@ -1,5 +1,5 @@
 ---
-name: code-review
+name: bmad:code-review
 description: "Implementation-phase skill for code review — functional correctness, code quality, test coverage, security, edge cases. Trigger on: code review, review code, CR, pull request review."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

@@ -10,7 +10,6 @@ import logging
 
 logger = logging.getLogger(__name__)
 
-
 def _catch_all(handler_name: str) -> callable:
     """Decorator factory: wrap hook callbacks so they NEVER raise.
 
@@ -28,7 +27,6 @@ def _catch_all(handler_name: str) -> callable:
         wrapper.__qualname__ = fn.__qualname__
         return wrapper
     return decorator
-
 
 def register(ctx) -> None:
     """Register BMAD plugin: hooks, slash commands, CLI commands.
@@ -63,8 +61,12 @@ def register(ctx) -> None:
     # TypeError("missing 1 required positional argument: 'ctx'") and the
     # _catch_all wrapper swallows it but floods errors.log.
     def _bind_hook_ctx(handler_fn):
+        import inspect as _inspect
+        _has_ctx = "ctx" in _inspect.signature(handler_fn).parameters
         def wrapped(*args, **kwargs):
-            return handler_fn(ctx, *args, **kwargs)
+            if _has_ctx:
+                return handler_fn(ctx, *args, **kwargs)
+            return handler_fn(*args, **kwargs)
         wrapped.__name__ = getattr(handler_fn, "__name__", "wrapped")
         wrapped.__qualname__ = getattr(handler_fn, "__qualname__", "wrapped")
         return wrapped
@@ -129,9 +131,18 @@ def register(ctx) -> None:
             "--non-interactive", action="store_true", default=False,
             help="Fail if config exists or required fields are missing.",
         )
+        subparser.add_argument(
+            "--workspace", action="store_true", default=False,
+            help="Enable workspace mode (planning at root, code in worktrees).",
+        )
+        subparser.add_argument(
+            "--worktree", action="append", default=[],
+            metavar="NAME:UPSTREAM:BRANCH",
+            help="Add a git worktree (repeatable). Requires --workspace.",
+        )
 
     def _run_bmad_init(args):
-        """Thin wrapper: pass Namespace values to bootstrap().
+        """Thin wrapper: pass Namespace values to bootstrap() or bootstrap_workspace().
 
         M-2 fix (code-review 2026-05-21): the non-interactive guard now
         fires BEFORE any input() call. Previously, the project-name input()
@@ -139,44 +150,76 @@ def register(ctx) -> None:
         """
         import sys
         from pathlib import Path
-        from plugins.bmad.scripts.bmad_init import bootstrap
+        from plugins.bmad.scripts.bmad_init import bootstrap, bootstrap_workspace
 
         non_interactive = bool(getattr(args, "non_interactive", False))
+        workspace_mode = bool(getattr(args, "workspace", False))
+        worktree_specs = list(getattr(args, "worktree", []) or [])
 
         # Resolve project_name with the non-interactive guard fired BEFORE
         # any blocking input() call.
         project_name = args.project_name
         if not project_name:
-            if non_interactive:
-                print(
-                    "Error: --project-name is required under --non-interactive",
-                    file=sys.stderr,
-                )
-                sys.exit(3)
-            try:
-                project_name = input("Project name: ").strip()
-            except (EOFError, KeyboardInterrupt):
-                print(
-                    "Error: project name required (stdin closed or interrupted)",
-                    file=sys.stderr,
-                )
-                sys.exit(3)
-            if not project_name:
-                print("Error: project name required", file=sys.stderr)
-                sys.exit(3)
+            if non_interactive or workspace_mode:
+                project_name = Path.cwd().name
+            else:
+                try:
+                    project_name = input("Project name: ").strip()
+                except (EOFError, KeyboardInterrupt):
+                    print(
+                        "Error: project name required (stdin closed or interrupted)",
+                        file=sys.stderr,
+                    )
+                    sys.exit(3)
+                if not project_name:
+                    print("Error: project name required", file=sys.stderr)
+                    sys.exit(3)
 
         try:
-            config = bootstrap(
-                Path.cwd(),
-                project_name=project_name,
-                project_type=args.project_type,
-                project_level=args.project_level,
-                user_name=args.user_name or "",
-                force=args.force,
-                interactive=not non_interactive,
-            )
-            print(f"✅ BMAD project '{config['project_name']}' initialized at {Path.cwd()}")
-            print(f"   Level: {config['project_level']}  |  Type: {config['project_type']}")
+            if workspace_mode:
+                if not worktree_specs:
+                    print(
+                        "Error: --workspace requires at least one --worktree NAME:UPSTREAM:BRANCH",
+                        file=sys.stderr,
+                    )
+                    sys.exit(3)
+                worktrees = []
+                for spec in worktree_specs:
+                    parts = spec.split(":")
+                    if len(parts) != 3:
+                        print(
+                            f"Error: invalid --worktree format: {spec}\n"
+                            "Expected: NAME:UPSTREAM:BRANCH",
+                            file=sys.stderr,
+                        )
+                        sys.exit(3)
+                    worktrees.append({
+                        "name": parts[0],
+                        "upstream": parts[1],
+                        "branch": parts[2],
+                    })
+                config = bootstrap_workspace(
+                    Path.cwd(),
+                    project_name=project_name,
+                    worktrees=worktrees,
+                    project_type=args.project_type,
+                    project_level=args.project_level,
+                    user_name=args.user_name or "",
+                )
+                print(f"✅ BMAD workspace '{config['project_name']}' initialized at {Path.cwd()}")
+                print(f"   Mode: workspace  |  Worktrees: {len(worktrees)}")
+            else:
+                config = bootstrap(
+                    Path.cwd(),
+                    project_name=project_name,
+                    project_type=args.project_type,
+                    project_level=args.project_level,
+                    user_name=args.user_name or "",
+                    force=args.force,
+                    interactive=not non_interactive,
+                )
+                print(f"✅ BMAD project '{config['project_name']}' initialized at {Path.cwd()}")
+                print(f"   Level: {config['project_level']}  |  Type: {config['project_type']}")
         except RuntimeError as exc:
             print(f"Error: {exc}", file=sys.stderr)
             sys.exit(3)
@@ -232,78 +275,48 @@ def register(ctx) -> None:
         ),
     )
 
+    # bmad-status CLI — used by /bmad:status skill
+    def _run_bmad_status(args):
+        from pathlib import Path
+        # The handler needs ctx, but CLI doesn't have one. Create a minimal mock.
+        class _MinimalCtx:
+            working_directory = str(Path.cwd())
+        return _status_handler(_MinimalCtx(), "")
+
+    ctx.register_cli_command(
+        name="bmad-status",
+        help="Show current BMAD workflow status",
+        handler_fn=_run_bmad_status,
+        description="Display current BMAD workflow phase state and next recommended action.",
+    )
+
     # ── Slash commands ─────────────────────────────────
-    from plugins.bmad.commands.init import handler as _init_handler
-    from plugins.bmad.commands.status import handler as _status_handler
     from plugins.bmad.commands.help import handler as _help_handler
     from plugins.bmad.commands.dashboard import handler as _dashboard_handler
 
     # Analysis phase
-    from plugins.bmad.commands.product_brief import handler as _product_brief_handler
-    from plugins.bmad.commands.research import handler as _research_handler
-    from plugins.bmad.commands.brainstorm import handler as _brainstorm_handler
-    from plugins.bmad.commands.document_project import handler as _document_project_handler
-    from plugins.bmad.commands.quick_spec import handler as _quick_spec_handler
 
     # Planning phase
-    from plugins.bmad.commands.create_prd import handler as _create_prd_handler
-    from plugins.bmad.commands.validate_prd import handler as _validate_prd_handler
-    from plugins.bmad.commands.edit_prd import handler as _edit_prd_handler
-    from plugins.bmad.commands.create_ux_design import handler as _create_ux_design_handler
 
     # Solutioning phase
-    from plugins.bmad.commands.create_architecture import handler as _create_architecture_handler
-    from plugins.bmad.commands.epics_stories import handler as _epics_stories_handler
-    from plugins.bmad.commands.solutioning_gate_check import handler as _solutioning_gate_check_handler
 
     # Implementation phase
-    from plugins.bmad.commands.sprint_planning import handler as _sprint_planning_handler
-    from plugins.bmad.commands.create_story import handler as _create_story_handler
     from plugins.bmad.commands.dev_story import handler as _dev_story_handler
-    from plugins.bmad.commands.code_review import handler as _code_review_handler
-    from plugins.bmad.commands.correct_course import handler as _correct_course_handler
-    from plugins.bmad.commands.quick_dev import handler as _quick_dev_handler
 
     # TEA phase (ungated)
-    from plugins.bmad.commands.test_framework import handler as _test_framework_handler
-    from plugins.bmad.commands.atdd import handler as _atdd_handler
-    from plugins.bmad.commands.test_design import handler as _test_design_handler
-    from plugins.bmad.commands.test_review import handler as _test_review_handler
-    from plugins.bmad.commands.trace import handler as _trace_handler
-    from plugins.bmad.commands.nfr import handler as _nfr_handler
-    from plugins.bmad.commands.ci import handler as _ci_handler
-    from plugins.bmad.commands.automate import handler as _automate_handler
 
     # CIS phase (ungated)
-    from plugins.bmad.commands.brainstorming import handler as _brainstorming_handler
-    from plugins.bmad.commands.design_thinking import handler as _design_thinking_handler
-    from plugins.bmad.commands.problem_solving import handler as _problem_solving_handler
-    from plugins.bmad.commands.innovation_strategy import handler as _innovation_strategy_handler
-    from plugins.bmad.commands.storytelling import handler as _storytelling_handler
-    from plugins.bmad.commands.presentation import handler as _presentation_handler
 
     # BMB phase (ungated)
-    from plugins.bmad.commands.agent_builder import handler as _agent_builder_handler
-    from plugins.bmad.commands.module_builder import handler as _module_builder_handler
-    from plugins.bmad.commands.workflow_builder import handler as _workflow_builder_handler
 
     # Meta — multi-persona round table (ungated)
-    from plugins.bmad.commands.party_mode import handler as _party_mode_handler
 
     # Epic 9 — Doctor + Migrate
-    from plugins.bmad.commands.doctor import handler as _doctor_handler
-    from plugins.bmad.commands.migrate import handler as _migrate_handler
 
-    ctx.register_command(
-        name="bmad:init",
-        handler=_bind_ctx(_init_handler),
-        args_hint="[--force]",
-    )
-    ctx.register_command(
-        name="bmad:status",
-        handler=_bind_ctx(_status_handler),
-        args_hint="",
-    )
+    # bmad:init is now a skill (~/.hermes/skills/bmad/init/SKILL.md)
+    # so the LLM continues planning after bootstrap.
+    # bmad:status is now a skill (~/.hermes/skills/bmad/status/SKILL.md)
+    # so the LLM can analyze status and suggest next steps.
     ctx.register_command(
         name="bmad:help",
         handler=_bind_ctx(_help_handler),
@@ -316,236 +329,20 @@ def register(ctx) -> None:
     )
 
     # Analysis commands
-    ctx.register_command(
-        name="bmad:product-brief",
-        handler=_bind_ctx(_product_brief_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:research",
-        handler=_bind_ctx(_research_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:brainstorm",
-        handler=_bind_ctx(_brainstorm_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:document-project",
-        handler=_bind_ctx(_document_project_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:quick-spec",
-        handler=_bind_ctx(_quick_spec_handler),
-        args_hint="",
-    )
+    # bmad:research is now a skill (~/.hermes/skills/bmad/research/SKILL.md)
+    # so the LLM continues planning after research setup.
 
     # Planning commands
-    ctx.register_command(
-        name="bmad:create-prd",
-        handler=_bind_ctx(_create_prd_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:validate-prd",
-        handler=_bind_ctx(_validate_prd_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:edit-prd",
-        handler=_bind_ctx(_edit_prd_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:create-ux-design",
-        handler=_bind_ctx(_create_ux_design_handler),
-        args_hint="",
-    )
 
     # Solutioning commands
-    ctx.register_command(
-        name="bmad:create-architecture",
-        handler=_bind_ctx(_create_architecture_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:epics-stories",
-        handler=_bind_ctx(_epics_stories_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:solutioning-gate-check",
-        handler=_bind_ctx(_solutioning_gate_check_handler),
-        args_hint="",
-    )
 
     # Implementation commands
-    ctx.register_command(
-        name="bmad:sprint-planning",
-        handler=_bind_ctx(_sprint_planning_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:create-story",
-        handler=_bind_ctx(_create_story_handler),
-        args_hint="",
-    )
     ctx.register_command(
         name="bmad:dev-story",
         handler=_bind_ctx(_dev_story_handler),
         args_hint="",
     )
-    ctx.register_command(
-        name="bmad:code-review",
-        handler=_bind_ctx(_code_review_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:correct-course",
-        handler=_bind_ctx(_correct_course_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:quick-dev",
-        handler=_bind_ctx(_quick_dev_handler),
-        args_hint="",
-    )
 
     # TEA commands (ungated)
-    ctx.register_command(
-        name="bmad:test-framework",
-        handler=_bind_ctx(_test_framework_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:atdd",
-        handler=_bind_ctx(_atdd_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:test-design",
-        handler=_bind_ctx(_test_design_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:test-review",
-        handler=_bind_ctx(_test_review_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:trace",
-        handler=_bind_ctx(_trace_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:nfr",
-        handler=_bind_ctx(_nfr_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:ci",
-        handler=_bind_ctx(_ci_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:automate",
-        handler=_bind_ctx(_automate_handler),
-        args_hint="",
-    )
 
     # CIS commands (ungated)
-    ctx.register_command(
-        name="bmad:brainstorming",
-        handler=_bind_ctx(_brainstorming_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:design-thinking",
-        handler=_bind_ctx(_design_thinking_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:problem-solving",
-        handler=_bind_ctx(_problem_solving_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:innovation-strategy",
-        handler=_bind_ctx(_innovation_strategy_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:storytelling",
-        handler=_bind_ctx(_storytelling_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:presentation",
-        handler=_bind_ctx(_presentation_handler),
-        args_hint="",
-    )
-
-    # BMB commands (ungated)
-    ctx.register_command(
-        name="bmad:agent-builder",
-        handler=_bind_ctx(_agent_builder_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:module-builder",
-        handler=_bind_ctx(_module_builder_handler),
-        args_hint="",
-    )
-    ctx.register_command(
-        name="bmad:workflow-builder",
-        handler=_bind_ctx(_workflow_builder_handler),
-        args_hint="",
-    )
-
-    # Meta: party-mode (multi-persona round table; ungated)
-    ctx.register_command(
-        name="bmad:party-mode",
-        handler=_bind_ctx(_party_mode_handler),
-        args_hint="[--fan-out] <topic>",
-    )
-
-    # Epic 9: doctor + migrate
-    ctx.register_command(
-        name="bmad:doctor",
-        handler=_bind_ctx(_doctor_handler),
-        args_hint="[project_dir]",
-    )
-    ctx.register_command(
-        name="bmad:migrate",
-        handler=_bind_ctx(_migrate_handler),
-        args_hint="[--plan|--apply|--dry-run] [--wave N]",
-    )
-
-    # Epic 7: orchestrate + migration
-    from plugins.bmad.commands.orchestrate import handler as _orchestrate_handler
-    from plugins.bmad.commands.migrate_stories import handler as _migrate_stories_handler
-
-    ctx.register_command(
-        name="bmad:orchestrate",
-        handler=_bind_ctx(_orchestrate_handler),
-        args_hint="<epic-number-or-path> [--resume] [--dry-run] [--story X.Y] [--wave N]",
-    )
-    ctx.register_command(
-        name="bmad:migrate-stories-to-epic",
-        handler=_bind_ctx(_migrate_stories_handler),
-        args_hint="--epic N [--dry-run]",
-    )
-
-    # Story 7.10: standalone Prefect export CLI
-    from plugins.bmad.commands.orchestrate_export import handler as _export_handler
-    ctx.register_cli_command(
-        name="bmad-orchestrate-export",
-        help="Export an orchestrate run as a Prefect flow file",
-        setup_fn=lambda subparser: subparser.add_argument("epic", nargs="?", default=""),
-        handler_fn=_export_handler,
-        description="Generate a standalone Prefect flow .py for an epic.",
-    )
-
-    logger.info("[bmad] plugin registered: hooks=8, cli=2, slash=42")

@@ -1,5 +1,5 @@
 ---
-name: dev-story
+name: bmad:dev-story
 description: "Implementation-phase skill for implementing a user story end-to-end with TDD — RED/GREEN/REFACTOR. Trigger on: implement story, dev story, develop story, TDD."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
@@ -22,7 +22,7 @@ same error message (e.g. `"old_string not found"`, `"file already exists"`,
 ### 1. Chunk the change
 
 If the failure is an Edit on a large block, invoke the **`chunked-refactor`**
-skill (`~/.hermes/skills/bmad/_shared/chunked-refactor/SKILL.md`). The chances
+skill (`skills/bmad/_shared/chunked-refactor/SKILL.md`). The chances
 the third retry succeeds are < 10% if the first two failed identically. The
 chunked-refactor pattern brings the per-edit success rate back to normal by
 keeping each Edit at single-block scale.

@@ -30,6 +30,8 @@ Spec references:
     FR-12 (deferred) raw-layer pairing arrives with Epic 2.
     NFR-16 Secret-scanner pre-check aborts writes with secrets.
 """
+import atexit
+import concurrent.futures
 import logging
 import json
 import os
@@ -40,6 +42,80 @@ from pathlib import Path
 from typing import Literal, Optional
 
 logger = logging.getLogger(__name__)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Async sidecar embedding writer (Story 11.2, NFR-29)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_EMBED_EXECUTOR = concurrent.futures.ThreadPoolExecutor(
+    max_workers=2, thread_name_prefix="embed"
+)
+_EMBED_FUTURES: list = []
+
+
+def _shutdown_embed_executor():
+    """F15: drain in-flight writes with a 5s timeout + orphan tmp cleanup."""
+    _EMBED_EXECUTOR.shutdown(wait=False)
+    if _EMBED_FUTURES:
+        done, not_done = concurrent.futures.wait(_EMBED_FUTURES, timeout=5.0)
+        # Cancel futures that didn't complete in time
+        for fut in not_done:
+            fut.cancel()
+    # F15: clean up any orphan .vec.tmp files
+    try:
+        mem_dir = _resolve_memory_dir()
+        for tmp in mem_dir.glob("*.vec.tmp"):
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
+    except Exception:
+        pass
+
+
+atexit.register(_shutdown_embed_executor)
+
+
+def _queue_embedding_write(entry_id: str, body: str, entry_path: Path) -> None:
+    """Submit background embedding job; non-blocking (NFR-29)."""
+    fut = _EMBED_EXECUTOR.submit(_compute_and_write_sidecar, entry_id, body, entry_path)
+    _EMBED_FUTURES.append(fut)
+
+
+def _compute_and_write_sidecar(entry_id: str, body: str, entry_path: Path) -> None:
+    """Compute embedding and write .vec sidecar file atomically."""
+    tmp = None
+    try:
+        import numpy
+        from lib.hermes_llm import llm_embed, load_providers_config
+
+        providers = load_providers_config()
+        wl = providers.get("recall_embed")
+        if not wl:
+            return
+        provider = wl.primary.provider
+        model = wl.primary.model.lower().replace("/", "-")
+        result = llm_embed([body])
+        if not result or result[0] is None:
+            return
+        vec = result[0]
+        sidecar = entry_path.parent / f"{entry_id}.{provider}-{model}.vec"
+        tmp = sidecar.with_suffix(".vec.tmp")
+        numpy.array(vec, dtype=numpy.float32).tofile(str(tmp))
+        os.replace(tmp, sidecar)
+        tmp = None  # os.replace succeeded; tmp no longer exists
+        logger.debug("Sidecar wrote %s (%d dims)", sidecar.name, len(vec))
+    except Exception as e:
+        # F9: WARNING level so failures are visible (not silently DEBUG)
+        logger.warning("Sidecar write failed for %s: %s", entry_id, e)
+    finally:
+        # F15: clean up orphan .vec.tmp on failure
+        if tmp is not None:
+            try:
+                tmp.unlink(missing_ok=True)
+            except OSError:
+                pass
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,6 +471,11 @@ def add_entry(
         raise
 
     logger.debug("add_entry: wrote %s (type=%s, source=%s)", filepath, type, source)
+
+    # ── Story 11.2: async sidecar embedding for trajectories (NFR-29) ──
+    if type == "trajectory":
+        _queue_embedding_write(entry_id, body, filepath)
+
     return entry_id
 
 

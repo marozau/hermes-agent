@@ -1,5 +1,5 @@
 ---
-name: innovation-strategy
+name: bmad:innovation-strategy
 description: "Innovation strategy and foresight coach. Use for strategic innovation, future-casting, market disruption, opportunity mapping. Persona: Victor — innovation strategist."
 version: 5.0
 author: BMAD Community (Hermes port by im)

@@ -1,0 +1,6 @@
+name: verify_capture
+version: 1.0.0
+description: "Post-LLM-call plugin that parses agent self-report YAML blocks and dispatches to canonical memory writers. Closes the substrate feedstock gap (Epic 12)."
+author: "Hermes Agent"
+provides_hooks:
+  - post_llm_call

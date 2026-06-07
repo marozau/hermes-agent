@@ -23,7 +23,7 @@ logger = logging.getLogger(__name__)
 _skill_commands: Dict[str, Dict[str, Any]] = {}
 _skill_commands_platform: Optional[str] = None
 # Patterns for sanitizing skill names into clean hyphen-separated slugs.
-_SKILL_INVALID_CHARS = re.compile(r"[^a-z0-9-]")
+_SKILL_INVALID_CHARS = re.compile(r"[^a-z0-9-:]")
 _SKILL_MULTI_HYPHEN = re.compile(r"-{2,}")
 
 

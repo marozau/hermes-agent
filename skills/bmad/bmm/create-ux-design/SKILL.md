@@ -1,5 +1,5 @@
 ---
-name: create-ux-design
+name: bmad:create-ux-design
 description: "Planning-phase skill for creating UX designs — user flows, wireframes, accessibility assessments, design tokens, responsive patterns. Trigger on: create UX design, UX design, wireframes, user flows, mockups, create-ux-design."
 
 version: 6.6.0

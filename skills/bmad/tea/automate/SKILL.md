@@ -1,5 +1,5 @@
 ---
-name: automate
+name: bmad:automate
 description: "TEA skill for test automation — framework setup, test generation, CI integration. Trigger on: automate, test automation, generate tests, test scripts."
 version: 5.0
 author: BMAD Community (Hermes port by im)

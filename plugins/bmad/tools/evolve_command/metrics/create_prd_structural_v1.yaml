@@ -1,0 +1,73 @@
+version: 1
+name: create_prd_structural_v1
+description: >
+  Structural scoring rubric for BMAD create-prd skill outputs.
+  Measures presence and quality of required PRD sections.
+  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-01"
+
+weights:
+  frontmatter_complete: 0.15
+  executive_summary: 0.15
+  product_goals: 0.15
+  functional_requirements: 0.25
+  non_functional_requirements: 0.15
+  success_metrics: 0.15
+
+hard_gates:
+  - name: has_prd_title
+    pattern: "# Product Requirements Document|# PRD|## Product Requirements"
+  - name: has_executive_summary
+    pattern: "## Executive Summary|# Executive Summary"
+  - name: has_requirements
+    pattern: "## Functional Requirements|## Requirements|# Requirements"
+  - name: has_success_metrics
+    pattern: "## Success Metrics|### Success Metrics|success metric"
+
+scoring:
+  frontmatter_complete:
+    - score: 1.0
+      when: "all of [project_name, date, author, version, status] present"
+    - score: 0.7
+      when: "3-4 fields present"
+    - score: 0.3
+      when: "1-2 fields present"
+    - score: 0.0
+      when: "no frontmatter"
+  executive_summary:
+    - score: 1.0
+      when: "summary with ≥3 sentences covering what, why, and scope"
+    - score: 0.5
+      when: "1-2 sentence summary"
+    - score: 0.0
+      when: "no executive summary"
+  product_goals:
+    - score: 1.0
+      when: "business objectives + user goals explicitly listed"
+    - score: 0.5
+      when: "goals mentioned inline"
+    - score: 0.0
+      when: "no goals section"
+  functional_requirements:
+    - score: 1.0
+      when: "≥5 distinct requirements with IDs and descriptions"
+    - score: 0.7
+      when: "3-4 requirements"
+    - score: 0.4
+      when: "1-2 requirements"
+    - score: 0.0
+      when: "no requirements"
+  non_functional_requirements:
+    - score: 1.0
+      when: "performance, security, reliability, scalability addressed"
+    - score: 0.5
+      when: "1-2 NFR categories mentioned"
+    - score: 0.0
+      when: "no NFRs"
+  success_metrics:
+    - score: 1.0
+      when: "≥3 measurable success criteria with targets"
+    - score: 0.5
+      when: "1-2 metrics"
+    - score: 0.0
+      when: "no metrics"

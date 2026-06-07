@@ -1,0 +1,69 @@
+version: 1
+name: create_architecture_structural_v1
+description: >
+  Structural scoring rubric for BMAD create-architecture skill outputs.
+  Measures presence and quality of required architecture sections.
+  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-01"
+
+weights:
+  frontmatter_complete: 0.15
+  architectural_drivers: 0.15
+  system_overview: 0.2
+  component_model: 0.25
+  data_model: 0.15
+  deployment_architecture: 0.1
+
+hard_gates:
+  - name: has_architecture_title
+    pattern: "# System Architecture|# Architecture|## Architecture"
+  - name: has_component_diagram
+    pattern: "## Component|### Component|component diagram|Component Model"
+  - name: has_data_model
+    pattern: "## Data Model|### Data Model|data model|database schema"
+
+scoring:
+  frontmatter_complete:
+    - score: 1.0
+      when: "all of [project_name, date, architect, version, status] present"
+    - score: 0.7
+      when: "3-4 fields present"
+    - score: 0.0
+      when: "no frontmatter"
+  architectural_drivers:
+    - score: 1.0
+      when: "≥3 drivers listed with rationale"
+    - score: 0.5
+      when: "1-2 drivers"
+    - score: 0.0
+      when: "no drivers"
+  system_overview:
+    - score: 1.0
+      when: "high-level description with diagram or structured components"
+    - score: 0.5
+      when: "brief overview paragraph"
+    - score: 0.0
+      when: "no overview"
+  component_model:
+    - score: 1.0
+      when: "≥3 components with responsibilities and interfaces"
+    - score: 0.6
+      when: "2 components"
+    - score: 0.3
+      when: "1 component"
+    - score: 0.0
+      when: "no component model"
+  data_model:
+    - score: 1.0
+      when: "entities, relationships, and storage strategy defined"
+    - score: 0.5
+      when: "entities listed but no relationships"
+    - score: 0.0
+      when: "no data model"
+  deployment_architecture:
+    - score: 1.0
+      when: "deployment topology with environments and scaling strategy"
+    - score: 0.5
+      when: "brief deployment mention"
+    - score: 0.0
+      when: "no deployment section"

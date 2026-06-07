@@ -249,19 +249,19 @@ def register() -> None:
 
 def embeddings(
     provider: "ProviderSpec",
-    text: str,
-) -> list[float]:
-    """Call an OpenAI-compatible /embeddings API endpoint.
+    texts: list[str],
+) -> list[list[float]]:
+    """Call an OpenAI-compatible /embeddings API endpoint (batched).
 
     Works for DeepSeek (deepseek-embed-v2) and OpenAI (text-embedding-3-small)
     since both use the same POST /embeddings JSON schema.
 
     Args:
         provider: ProviderSpec from providers.yaml (model, timeout, base_url).
-        text: The text to embed.
+        texts: List of texts to embed.
 
     Returns:
-        list[float] — the embedding vector.
+        list[list[float]] — one embedding vector per input text.
 
     Raises:
         ValueError: On missing API key, HTTP error, or unexpected response shape.
@@ -275,7 +275,7 @@ def embeddings(
 
     body = {
         "model": provider.model,
-        "input": text,
+        "input": texts,
     }
 
     headers = {
@@ -338,12 +338,18 @@ def embeddings(
 
     data = resp.json()
     embeddings_list = data.get("data", [])
-    if not embeddings_list:
+    if not embeddings_list or len(embeddings_list) < len(texts):
         raise ValueError(
             f"Embeddings response ({provider.provider}) has no data: "
             f"{json.dumps(data)[:500]}"
         )
-    return embeddings_list[0].get("embedding", [])
+    # F2: Prefer input-order (OpenAI spec guarantees it). If ALL items have
+    # distinct `index` values, sort by index as a defensive measure for
+    # non-OpenAI providers that may reorder.
+    indices = [item.get("index") for item in embeddings_list[:len(texts)]]
+    if all(isinstance(i, int) for i in indices) and len(set(indices)) == len(texts):
+        embeddings_list.sort(key=lambda item: item["index"])
+    return [item["embedding"] for item in embeddings_list[:len(texts)]]
 
 
 def _register_embedding_one(provider_name: str) -> None:

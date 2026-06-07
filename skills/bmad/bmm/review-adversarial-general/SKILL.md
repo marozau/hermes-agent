@@ -1,5 +1,5 @@
 ---
-name: review-adversarial-general
+name: bmad:review-adversarial-general
 description: |
   Perform a cynical adversarial review and produce a findings report. Used as
   the "Blind Hunter" reviewer in bmad-code-review's 3-agent fan-out: receives

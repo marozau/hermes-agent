@@ -1,5 +1,5 @@
 ---
-name: sm
+name: bmad:sm
 description: "Manages sprint planning, creates user stories with acceptance criteria, estimates story points, tracks velocity and burndown. Trigger on: sprint planning, user stories, story points, estimation, velocity, burndown, sprint, backlog, epic breakdown."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

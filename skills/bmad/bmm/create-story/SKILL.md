@@ -1,5 +1,5 @@
 ---
-name: create-story
+name: bmad:create-story
 description: "Implementation-phase skill for creating rich story specifications — technical notes, implementation plan, testing strategy, edge cases. Trigger on: create story, story spec, user story, write story."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
@@ -48,7 +48,7 @@ refactor_regions:
 ```
 
 AND require the dev agent to use the **`chunked-refactor`** skill
-(`~/.hermes/skills/bmad/_shared/chunked-refactor/SKILL.md`). Mention this
+(`skills/bmad/_shared/chunked-refactor/SKILL.md`). Mention this
 explicitly in the story's "Implementation notes" section so the dev agent
 sees it on story open.
 

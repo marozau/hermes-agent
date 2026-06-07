@@ -1,5 +1,5 @@
 ---
-name: brainstorm
+name: bmad:brainstorm
 description: "Analysis-phase brainstorming skill — generate ideas, explore possibilities, creative ideation. Trigger on: brainstorm, ideation, creative thinking, generate ideas."
 
 version: 6.6.0

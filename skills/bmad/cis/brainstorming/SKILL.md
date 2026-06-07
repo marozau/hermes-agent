@@ -1,5 +1,5 @@
 ---
-name: brainstorming
+name: bmad:brainstorming
 description: "Creative brainstorming and ideation coach. Use for divergent thinking, idea generation, creative blocks, ideation sessions. Persona: Carson — YES AND facilitator."
 version: 5.0
 author: BMAD Community (Hermes port by im)

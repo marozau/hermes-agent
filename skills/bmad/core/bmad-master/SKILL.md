@@ -1,5 +1,5 @@
 ---
-name: bmad-master
+name: bmad:bmad-master
 description: "Master BMAD orchestrator — project initialization, workflow routing, phase progression, and multi-agent coordination. Trigger on: BMAD, workflow-init, project status, initialization, orchestrate, bmad master, guide me."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
@@ -68,7 +68,7 @@ metadata:
 
 ### Skill Creation Checklist
 
-- [ ] Skills directory: `~/.hermes/skills/bmad/{skill-name}/`
+- [ ] Skills directory: `skills/bmad/{skill-name}/`
 - [ ] SKILL.md with proper YAML frontmatter
 - [ ] Clear trigger keywords in description
 - [ ] Core workflow with numbered steps

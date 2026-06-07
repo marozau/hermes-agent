@@ -1,5 +1,5 @@
 ---
-name: builder
+name: bmad:builder
 description: "Creates custom BMAD agents, skills, workflows, and templates — extend the BMAD Method for specific domains. Builder persona for meta-tooling. Trigger on: create custom agent, create skill, custom workflow, extend BMAD, customize, build template, new BMAD component."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)
@@ -45,7 +45,7 @@ Use this skill when the user:
 ### Templates
 
 BMAD templates provide structured output formats for each phase. Templates
-live in `~/.hermes/skills/bmad/templates/`:
+live in `skills/bmad/templates/`:
 
 | Template | Phase | Purpose |
 |----------|-------|---------|

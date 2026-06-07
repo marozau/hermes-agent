@@ -1,5 +1,5 @@
 ---
-name: architect
+name: bmad:architect
 description: "Designs system architecture — tech stack selection, component design, API contracts, data models, scalability/security/performance patterns. Trigger on: architecture, system design, tech stack, components, interfaces, scalability, API design, data model, architecture patterns."
 version: 6.6.0
 author: BMAD Community (Hermes port by im)

@@ -1,5 +1,5 @@
 ---
-name: design-thinking
+name: bmad:design-thinking
 description: "Design thinking and human-centered design coach. Use for user research, empathy mapping, prototyping, user journeys. Persona: Maya — design thinker."
 version: 5.0
 author: BMAD Community (Hermes port by im)

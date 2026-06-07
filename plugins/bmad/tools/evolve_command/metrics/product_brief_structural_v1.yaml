@@ -1,0 +1,69 @@
+version: 1
+name: product_brief_structural_v1
+description: >
+  Structural scoring rubric for BMAD product-brief skill outputs.
+  Measures presence and quality of required product brief sections.
+  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-01"
+
+weights:
+  frontmatter_complete: 0.1
+  problem_statement: 0.25
+  target_audience: 0.2
+  proposed_solution: 0.2
+  success_metrics: 0.15
+  competitive_landscape: 0.1
+
+hard_gates:
+  - name: has_brief_title
+    pattern: "# Product Brief|# Brief|## Product Brief"
+  - name: has_problem_statement
+    pattern: "## Problem|## Problem Statement|# Problem"
+  - name: has_solution
+    pattern: "## Solution|## Proposed Solution|# Solution"
+
+scoring:
+  frontmatter_complete:
+    - score: 1.0
+      when: "all of [project_name, date, author, version] present"
+    - score: 0.5
+      when: "2-3 fields present"
+    - score: 0.0
+      when: "no frontmatter"
+  problem_statement:
+    - score: 1.0
+      when: "clear problem + why now + impact if unsolved"
+    - score: 0.6
+      when: "problem stated but missing why_now or impact"
+    - score: 0.3
+      when: "vague problem mention"
+    - score: 0.0
+      when: "no problem statement"
+  target_audience:
+    - score: 1.0
+      when: "primary + secondary users with personas or roles"
+    - score: 0.5
+      when: "users mentioned but not segmented"
+    - score: 0.0
+      when: "no audience section"
+  proposed_solution:
+    - score: 1.0
+      when: "solution described with key features and differentiation"
+    - score: 0.5
+      when: "solution mentioned briefly"
+    - score: 0.0
+      when: "no solution"
+  success_metrics:
+    - score: 1.0
+      when: "≥3 measurable success criteria"
+    - score: 0.5
+      when: "1-2 metrics"
+    - score: 0.0
+      when: "no metrics"
+  competitive_landscape:
+    - score: 1.0
+      when: "≥2 competitors analyzed with differentiation"
+    - score: 0.5
+      when: "competitors mentioned but not analyzed"
+    - score: 0.0
+      when: "no competitive section"

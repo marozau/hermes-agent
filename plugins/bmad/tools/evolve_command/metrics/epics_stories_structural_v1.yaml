@@ -1,0 +1,61 @@
+version: 1
+name: epics_stories_structural_v1
+description: >
+  Structural scoring rubric for BMAD epics-stories skill outputs.
+  Measures presence and quality of epic and user story decomposition.
+  FROZEN as of v1 — changes require a new version number.
+freeze_date: "2026-06-01"
+
+weights:
+  frontmatter_complete: 0.1
+  epic_decomposition: 0.3
+  user_stories: 0.3
+  acceptance_criteria: 0.2
+  prioritization: 0.1
+
+hard_gates:
+  - name: has_epics_heading
+    pattern: "## Epics|# Epics|### Epics"
+  - name: has_stories_heading
+    pattern: "## User Stories|# User Stories|### User Stories|## Stories"
+  - name: has_acceptance_criteria
+    pattern: "Acceptance Criteria|Given.*When.*Then|AC[0-9]"
+
+scoring:
+  frontmatter_complete:
+    - score: 1.0
+      when: "project name, date, version present"
+    - score: 0.0
+      when: "no frontmatter"
+  epic_decomposition:
+    - score: 1.0
+      when: "≥3 epics with clear scope and business value"
+    - score: 0.7
+      when: "2 epics"
+    - score: 0.4
+      when: "1 epic"
+    - score: 0.0
+      when: "no epics"
+  user_stories:
+    - score: 1.0
+      when: "≥5 stories in As a/I want/So that format"
+    - score: 0.7
+      when: "3-4 stories"
+    - score: 0.4
+      when: "1-2 stories"
+    - score: 0.0
+      when: "no stories"
+  acceptance_criteria:
+    - score: 1.0
+      when: "every story has ≥2 acceptance criteria"
+    - score: 0.5
+      when: "some stories have criteria"
+    - score: 0.0
+      when: "no acceptance criteria"
+  prioritization:
+    - score: 1.0
+      when: "stories ranked by priority (must/should/could/won't or P0-P2)"
+    - score: 0.5
+      when: "priority mentioned informally"
+    - score: 0.0
+      when: "no prioritization"
