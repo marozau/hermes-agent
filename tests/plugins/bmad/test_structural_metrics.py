@@ -302,8 +302,8 @@ Kubernetes with 3 replicas.
         assert "not found" in result.stderr.lower() or "not found" in result.stdout
 
     def test_composite_score_range(self):
-        """Composite score must be in [0, 1]."""
-        for metric_file in METRICS_DIR.glob("*.yaml"):
+        """Composite score must be in [0, 1]. Skip legacy metrics (schema guard rejects them)."""
+        for metric_file in METRICS_DIR.glob("*_structural_v1.yaml"):
             metric_name = metric_file.stem
             # Test with empty text
             result = self._run(metric_name, "")

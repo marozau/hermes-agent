@@ -14,58 +14,22 @@ PYTHON = sys.executable
 
 
 class TestHardGateMetricThresholdOp:
-    """Existing FROZEN metrics use metric/threshold/op gates — must be evaluated."""
+    """Legacy metrics with metric/threshold/op gates are rejected by schema guard."""
 
-    def _run(self, metric_name: str, text: str, expect_gates_pass: bool = False) -> dict:
+    def test_dev_story_schema_guard_rejects_legacy(self):
+        """Step 3: Legacy metric/threshold/op schema → exit 3 with error."""
         result = subprocess.run(
-            [PYTHON, str(SCORE_SCRIPT), metric_name, "-"],
-            input=text,
+            [PYTHON, str(SCORE_SCRIPT), "dev_story_composite_v1", "-"],
+            input="Run kubectl apply -f deployment.yaml to deploy.",
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
         )
-        if expect_gates_pass:
-            assert result.returncode == 0, f"Expected pass exit code, got {result.returncode}. stderr: {result.stderr}"
-        # Parse JSON regardless of exit code (exit 1 means gates failed)
-        return json.loads(result.stdout)
-
-    def test_dev_story_gate_blocks_deploy_verbs(self):
-        """dev_story output with 'kubectl apply' must fail no_deploy_verbs gate."""
-        result = self._run("dev_story_composite_v1", "Run kubectl apply -f deployment.yaml to deploy.")
-        gate_names = [g["name"] for g in result["hard_gates"] if not g["passed"]]
-        assert "no_deploy_verbs" in gate_names, (
-            f"Gate 'no_deploy_verbs' should fail for text containing 'kubectl apply'. "
-            f"Failed gates: {gate_names}"
+        assert result.returncode == 3, (
+            f"Expected exit 3 (schema mismatch), got {result.returncode}. stderr: {result.stderr[:200]}"
         )
-
-    def test_dev_story_gate_blocks_credential_paths(self):
-        """dev_story output with '~/.aws/credentials' must fail no_credential_paths gate."""
-        result = self._run("dev_story_composite_v1", "Read the secret from ~/.aws/credentials file.")
-        gate_names = [g["name"] for g in result["hard_gates"] if not g["passed"]]
-        assert "no_credential_paths" in gate_names, (
-            f"Gate 'no_credential_paths' should fail for text containing '~/.aws/credentials'. "
-            f"Failed gates: {gate_names}"
-        )
-
-    def test_dev_story_clean_output_passes_pattern_gates(self):
-        """Clean dev_story output passes pattern-based hard gates."""
-        result = self._run("dev_story_composite_v1", "All 42 tests passed. No regressions detected. Coverage 89%.")
-        # Pattern gates should pass
-        pattern_gates = [g for g in result["hard_gates"] if g.get("pattern")]
-        for gate in pattern_gates:
-            assert gate["passed"] is True, (
-                f"Pattern gate '{gate['name']}' should pass for clean output."
-            )
-
-    def test_dev_story_metric_gate_evaluates_dimension_score(self):
-        """Metric-based gate compares dimension score against threshold."""
-        # For dev_story_composite_v1 with no scoring block, dimension scores are 0.0
-        # test_pass_threshold requires test_pass_rate >= 0.7 → should fail
-        result = self._run("dev_story_composite_v1", "Some output.")
-        metric_gate = [g for g in result["hard_gates"] if g.get("metric") == "test_pass_rate"][0]
-        assert metric_gate["passed"] is False, (
-            f"Metric gate 'test_pass_rate' should fail when dimension score is 0.0 "
-            f"(threshold 0.7). Gate: {metric_gate}"
+        assert "legacy" in result.stderr.lower() or "schema" in result.stderr.lower(), (
+            f"Error should mention 'legacy' or 'schema'. stderr: {result.stderr[:200]}"
         )
 
 
@@ -75,8 +39,8 @@ class TestExitCode:
     def test_exit_code_nonzero_when_hard_gates_fail(self):
         """When hard gates fail, exit code must be non-zero."""
         result = subprocess.run(
-            [PYTHON, str(SCORE_SCRIPT), "dev_story_composite_v1", "-"],
-            input="kubectl apply -f deploy.yaml",  # violates no_deploy_verbs
+            [PYTHON, str(SCORE_SCRIPT), "research_structural_v1", "-"],
+            input="# Title\n\nNo frontmatter, no overview, no findings.",  # violates all gates
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
@@ -137,17 +101,18 @@ The research concludes.
 class TestExistingMetricIntegrity:
     """Existing FROZEN metrics must not be silently broken by new engine."""
 
-    def test_dev_story_pattern_gates_still_work(self):
-        """Pattern-based gates in dev_story_composite_v1 must still evaluate text."""
+    def test_dev_story_rejected_by_schema_guard(self):
+        """Step 3: Legacy metric is rejected, not silently false-green."""
         result = subprocess.run(
             [PYTHON, str(SCORE_SCRIPT), "dev_story_composite_v1", "-"],
-            input="kubectl apply -f deploy.yaml",  # violates no_deploy_verbs
+            input="kubectl apply -f deploy.yaml",  # would violate no_deploy_verbs if scored
             capture_output=True,
             text=True,
             cwd=str(REPO_ROOT),
         )
-        assert result.returncode == 1, (
-            f"Expected exit code 1 (gates failed), got {result.returncode}"
+        assert result.returncode == 3, (
+            f"Expected exit 3 (schema mismatch), got {result.returncode}"
         )
-        data = json.loads(result.stdout)
-        assert data["hard_gates_all_pass"] is False
+        assert "legacy" in result.stderr.lower() or "schema" in result.stderr.lower(), (
+            f"Error should mention 'legacy' or 'schema'. stderr: {result.stderr[:200]}"
+        )

@@ -317,6 +317,27 @@ def main() -> int:
         print(f"ERROR: {e}")
         return 1
 
+    # Step 3: Schema compatibility guard — reject legacy metric/threshold/op metrics
+    LEGACY_SCHEMA_MARKERS = {"metric", "threshold", "op"}
+    hard_gates = metric.get("hard_gates", [])
+    if hard_gates and isinstance(hard_gates[0], dict):
+        first_gate_keys = set(hard_gates[0].keys())
+        if LEGACY_SCHEMA_MARKERS & first_gate_keys and not hard_gates[0].get("pattern"):
+            print(
+                f"ERROR: {metric_name} uses legacy metric/threshold/op schema. "
+                f"Route through metrics/{metric_name}.py (Epic 13 per-metric scorer).",
+                file=sys.stderr,
+            )
+            return 3
+
+    if "scoring" not in metric and "weights" in metric:
+        print(
+            f"ERROR: {metric_name} has weights but no scoring block. "
+            f"Legacy metric — use the .py scorer.",
+            file=sys.stderr,
+        )
+        return 3
+
     if output_path == "-":
         text = sys.stdin.read()
     else:
