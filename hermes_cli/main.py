@@ -11511,12 +11511,47 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     # respawns a new process (KeepAlive=True guarantees this).
                     def _restart_launchd_gateway(label: str, old_pid: int) -> bool:
                         """Kill a launchd-managed gateway PID and verify relaunch."""
+                        # Derive the profile's HERMES_HOME from the launchd label so
+                        # we can pre-emptively remove the PID file / runtime lock
+                        # before launchd respawns.  Without this cleanup, the new
+                        # gateway may see the old PID file (the dying process's
+                        # atexit handler hasn't run yet) and exit with "Another
+                        # gateway instance started during our startup", causing a
+                        # launchd restart loop.
+                        from pathlib import Path as _Path
+                        from hermes_constants import get_hermes_home as _get_hermes_home
+                        if label == "ai.hermes.gateway":
+                            _svc_home = _Path(_get_hermes_home())
+                        elif label.startswith("ai.hermes.gateway-"):
+                            _profile_name = label[len("ai.hermes.gateway-"):]
+                            _svc_home = _Path(_get_hermes_home()).parent / "profiles" / _profile_name
+                        else:
+                            _svc_home = _Path(_get_hermes_home())
+                        _svc_pid_path = _svc_home / "gateway.pid"
+                        _svc_lock_path = _svc_home / "gateway.lock"
+
                         # Short graceful drain — don't block the update for the
                         # full 75s budget when restarting many profiles.
                         _graceful_restart_via_sigusr1(
                             old_pid,
                             drain_timeout=min(_drain_budget, 10.0),
                         )
+
+                        # Pre-emptively remove the PID file and lock file so the
+                        # respawned gateway starts with a clean slate.  The old
+                        # process's atexit handler will safely no-op if the files
+                        # are already gone.  Do this BEFORE sending SIGTERM so
+                        # launchd's KeepAlive respawn doesn't race against stale
+                        # on-disk metadata.
+                        try:
+                            _svc_pid_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+                        try:
+                            _svc_lock_path.unlink(missing_ok=True)
+                        except Exception:
+                            pass
+
                         try:
                             os.kill(old_pid, _signal.SIGTERM)
                         except (ProcessLookupError, PermissionError):

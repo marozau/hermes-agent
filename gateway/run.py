@@ -19981,13 +19981,40 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # cleanly before touching any external service.
     import atexit
     from gateway.status import write_pid_file, remove_pid_file, get_running_pid
-    _current_pid = get_running_pid()
-    if _current_pid is not None and _current_pid != os.getpid():
-        logger.error(
-            "Another gateway instance (PID %d) started during our startup. "
-            "Exiting to avoid double-running.", _current_pid
-        )
-        return False
+    # Startup race tolerance: when a service manager (launchd/systemd) respawns
+    # us immediately after the old process exits, the old PID file / runtime
+    # lock may still be visible for a brief window while the old process's
+    # atexit handlers run.  Retry a few times before concluding another
+    # instance is truly alive.
+    _startup_retry_attempts = 5
+    _startup_retry_delay = 1.0
+    _current_pid = None
+    for _startup_retry in range(_startup_retry_attempts):
+        _current_pid = get_running_pid()
+        if _current_pid is None:
+            break
+        if _current_pid == os.getpid():
+            break
+        # Another PID is still registered.  Wait briefly and retry so that
+        # a just-died predecessor has time to clean up its PID file/lock.
+        if _startup_retry < _startup_retry_attempts - 1:
+            logger.info(
+                "Startup race: PID %d still registered (attempt %d/%d). "
+                "Waiting %.1fs for cleanup...",
+                _current_pid,
+                _startup_retry + 1,
+                _startup_retry_attempts,
+                _startup_retry_delay,
+            )
+            time.sleep(_startup_retry_delay)
+        else:
+            logger.error(
+                "Another gateway instance (PID %d) is still running after %d "
+                "retries. Exiting to avoid double-running.",
+                _current_pid,
+                _startup_retry_attempts,
+            )
+            return False
     if not acquire_gateway_runtime_lock():
         logger.error(
             "Gateway runtime lock is already held by another instance. Exiting."
