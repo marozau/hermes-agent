@@ -84,7 +84,7 @@ These are AI-agent-consistency anchors. An implementer **could decide differentl
 ## Canonical helpers (build these first, use everywhere)
 
 ```python
-# ~/.hermes/lib/hermes_memory.py
+# ~/.hermes/autodream/memory.py
 def add_entry(type: Literal["preference","fact","procedure","episode","superseded","trajectory","unknown"],
               body: str, source: str, *,
               evidence: str | None = None,
@@ -103,7 +103,7 @@ def expire_entry(id: str) -> None: ...                       # sets valid_until=
 ```
 
 ```python
-# ~/.hermes/lib/hermes_llm.py
+# ~/.hermes/autodream/llm.py
 class LLMSpec(BaseModel):
     workload: str             # key into ~/.hermes/dreams/providers.yaml
     messages: list[dict]
@@ -274,8 +274,8 @@ After editing any `lib/*.py` or `plugins/preflight/*.py` file in this worktree, 
 
 ```bash
 # From this worktree root:
-cp lib/hermes_<file>.py ~/.hermes/lib/hermes_<file>.py
-rm -f ~/.hermes/lib/__pycache__/hermes_<file>.cpython-*.pyc
+cp lib/hermes_<file>.py ~/.hermes/hermes-agent/autodream/hermes_<file>.py
+rm -f ~/.hermes/hermes-agent/autodream/__pycache__/hermes_<file>.cpython-*.pyc
 
 cp plugins/preflight/__init__.py ~/.hermes/hermes-agent/plugins/preflight/__init__.py
 rm -f ~/.hermes/hermes-agent/plugins/preflight/__pycache__/__init__.cpython-*.pyc

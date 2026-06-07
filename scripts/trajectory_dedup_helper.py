@@ -18,14 +18,15 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-from lib.hermes_memory import (
+from autodream.memory import (
     build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
 )
 
 def _emit_telemetry(outcome: str, manifest_size: int, entry_id: str = "") -> None:
     """Emit trajectory_outcome telemetry row to preflight log."""
     import os
-    hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    from autodream._paths import resolve_hermes_home
+    hermes_home = str(resolve_hermes_home())
     log_dir = Path(hermes_home) / "preflight" / "log"
     log_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")

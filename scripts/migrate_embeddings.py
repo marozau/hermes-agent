@@ -46,8 +46,8 @@ def main():
     # Add project root to path
     sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-    from lib.hermes_llm import llm_embed, load_providers_config
-    from lib.hermes_memory import _resolve_memory_dir
+    from autodream.llm import llm_embed, load_providers_config
+    from autodream.memory import _resolve_memory_dir
 
     mem_dir = _resolve_memory_dir(args.memory_dir)
     providers = load_providers_config()

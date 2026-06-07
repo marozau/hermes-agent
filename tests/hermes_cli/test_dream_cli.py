@@ -3,7 +3,7 @@
 Covers `hermes_cli.dream`:
   * register_cli() wires create/status/diff/apply/discard subcommands
   * Each subcommand parses args correctly via the top-level parser
-  * Verb handlers translate args → lib.hermes_dream.* calls correctly
+  * Verb handlers translate args → autodream.dream.* calls correctly
   * Error paths: dream-not-found → exit 2, apply-refused → exit 3,
     regression-blocked → exit 4
 """
@@ -141,7 +141,7 @@ class TestCreateHandler:
 
         with patch.object(dream_mod, "_cmd_create") as _:
             pass  # ensure we test the real handler below
-        with patch("lib.hermes_dream.create_dream_artifact",
+        with patch("autodream.dream.create_dream_artifact",
                    return_value="01TEST") as mock_create:
             dream_mod._cmd_create(args)
 
@@ -165,7 +165,7 @@ class TestCreateHandler:
         args.dry_run = True
         args.json = True
 
-        with patch("lib.hermes_dream.create_dream_artifact",
+        with patch("autodream.dream.create_dream_artifact",
                    return_value="01ABC"):
             dream_mod._cmd_create(args)
 
@@ -186,7 +186,7 @@ class TestCreateHandler:
         args.dry_run = True
         args.json = False
 
-        with patch("lib.hermes_dream.create_dream_artifact",
+        with patch("autodream.dream.create_dream_artifact",
                    side_effect=RuntimeError("attestation pre-flight failed")):
             with pytest.raises(SystemExit) as exc:
                 dream_mod._cmd_create(args)
@@ -204,7 +204,7 @@ class TestStatusHandler:
         args.dreams_dir = "/d"
         args.json = False
 
-        with patch("lib.hermes_dream.list_dreams", return_value=[]):
+        with patch("autodream.dream.list_dreams", return_value=[]):
             dream_mod._cmd_status(args)
 
         out = capsys.readouterr().out
@@ -224,7 +224,7 @@ class TestStatusHandler:
             "regression": "pass",
             "applied": False,
         }]
-        with patch("lib.hermes_dream.list_dreams", return_value=fake):
+        with patch("autodream.dream.list_dreams", return_value=fake):
             dream_mod._cmd_status(args)
 
         out = capsys.readouterr().out
@@ -241,7 +241,7 @@ class TestStatusHandler:
         args.json = True
 
         fake = [{"dream_id": "01X", "scope": "default"}]
-        with patch("lib.hermes_dream.list_dreams", return_value=fake):
+        with patch("autodream.dream.list_dreams", return_value=fake):
             dream_mod._cmd_status(args)
 
         out = capsys.readouterr().out
@@ -256,7 +256,7 @@ class TestDiffHandler:
         args.dream_id = "01XYZ"
         args.dreams_dir = None
 
-        with patch("lib.hermes_dream.dream_diff",
+        with patch("autodream.dream.dream_diff",
                    return_value="# Dream Report\n...") as mock_diff:
             dream_mod._cmd_diff(args)
 
@@ -271,7 +271,7 @@ class TestDiffHandler:
         args.dream_id = "missing"
         args.dreams_dir = None
 
-        with patch("lib.hermes_dream.dream_diff",
+        with patch("autodream.dream.dream_diff",
                    side_effect=FileNotFoundError()):
             with pytest.raises(SystemExit) as exc:
                 dream_mod._cmd_diff(args)
@@ -297,7 +297,7 @@ class TestApplyHandler:
     def test_refused_exits_3(self, capsys):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.apply_dream",
+        with patch("autodream.dream.apply_dream",
                    return_value={"status": "refused", "operations": 0,
                                  "reason": "needs --accept"}):
             with pytest.raises(SystemExit) as exc:
@@ -310,7 +310,7 @@ class TestApplyHandler:
     def test_regression_blocked_exits_4(self, capsys):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.apply_dream",
+        with patch("autodream.dream.apply_dream",
                    return_value={"status": "regression_blocked",
                                  "operations": 0, "reason": "recall regressed"}):
             with pytest.raises(SystemExit) as exc:
@@ -323,7 +323,7 @@ class TestApplyHandler:
     def test_applied_exit_0(self, capsys):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.apply_dream",
+        with patch("autodream.dream.apply_dream",
                    return_value={"status": "applied", "operations": 5}):
             dream_mod._cmd_apply(self._args(accept=True))
 
@@ -334,7 +334,7 @@ class TestApplyHandler:
     def test_not_found_exits_2(self):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.apply_dream",
+        with patch("autodream.dream.apply_dream",
                    side_effect=FileNotFoundError()):
             with pytest.raises(SystemExit) as exc:
                 dream_mod._cmd_apply(self._args(accept=True))
@@ -344,7 +344,7 @@ class TestApplyHandler:
     def test_passes_force_recall_with_reason(self):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.apply_dream",
+        with patch("autodream.dream.apply_dream",
                    return_value={"status": "applied", "operations": 1}) as mock:
             dream_mod._cmd_apply(self._args(
                 accept=True,
@@ -369,7 +369,7 @@ class TestDiscardHandler:
     def test_discarded_ok(self, capsys):
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.discard_dream",
+        with patch("autodream.dream.discard_dream",
                    return_value={"status": "discarded"}):
             dream_mod._cmd_discard(self._args())
 
@@ -380,7 +380,7 @@ class TestDiscardHandler:
         """Idempotent: discarding a missing dream is success, per FR-21."""
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.discard_dream",
+        with patch("autodream.dream.discard_dream",
                    return_value={"status": "not_found"}):
             # No raise; exit code 0.
             dream_mod._cmd_discard(self._args())
@@ -389,7 +389,7 @@ class TestDiscardHandler:
         """Symlink refusal etc. surface as exit 2."""
         from hermes_cli import dream as dream_mod
 
-        with patch("lib.hermes_dream.discard_dream",
+        with patch("autodream.dream.discard_dream",
                    side_effect=RuntimeError("symlink refused")):
             with pytest.raises(SystemExit) as exc:
                 dream_mod._cmd_discard(self._args())

@@ -2,7 +2,7 @@
 
 Story 12.2: post_llm_call hook that scans the assistant response for a fenced
 ```yaml self_report: block, validates it through Pydantic, and dispatches to
-the canonical writers via lib.verify_dispatch (Story 12.3).
+the canonical writers via autodream.verify_dispatch (Story 12.3).
 
 Fail-open everywhere. No exception escapes the hook.
 """
@@ -113,7 +113,7 @@ def on_post_llm_call(
 
     # Dispatch to canonical writers
     try:
-        from lib.verify_dispatch import dispatch_self_report
+        from autodream.verify_dispatch import dispatch_self_report
         dispatch_self_report(report, session_id=session_id)
     except Exception as e:
         logger.warning("verify_capture: dispatch failed: %s", e)

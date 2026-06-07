@@ -1,10 +1,10 @@
-"""hermes preflight plugin — wires lib.hermes_preflight to hermes-agent hooks."""
+"""hermes preflight plugin — wires autodream.preflight to hermes-agent hooks."""
 from __future__ import annotations
 
 import logging
 from typing import Any, Optional
 
-from lib.hermes_preflight import should_run_preflight
+from autodream.preflight import should_run_preflight
 
 logger = logging.getLogger(__name__)
 

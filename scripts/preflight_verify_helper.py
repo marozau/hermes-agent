@@ -27,7 +27,8 @@ from pathlib import Path
 
 def _preflight_dir() -> Path:
     import os
-    home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    from autodream._paths import resolve_hermes_home
+    home = str(resolve_hermes_home())
     return Path(home) / "preflight"
 
 
@@ -80,7 +81,7 @@ def _record_verify_citation(
     session_id: str, intent_hash: str, cited_ids: list[str]
 ) -> None:
     """Append a verify_citation event row. Schema matches
-    lib.hermes_preflight.record_verify_citations so the dev-tree library
+    autodream.preflight.record_verify_citations so the dev-tree library
     function can be a drop-in replacement once it's importable here."""
     log = _today_log()
     log.parent.mkdir(parents=True, mode=0o700, exist_ok=True)
@@ -127,7 +128,7 @@ def emit(session_id: str, verify_cited: list[str] | None = None, match: str | No
     # P6: each ID wrapped individually — one failure doesn't abort the batch.
     if match == "hit" and verify_cited:
         try:
-            from lib.hermes_memory import reinforce_entry
+            from autodream.memory import reinforce_entry
             for cited_id in verify_cited:
                 if cited_id and cited_id.strip():
                     try:

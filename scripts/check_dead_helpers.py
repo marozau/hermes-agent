@@ -21,19 +21,19 @@ from pathlib import Path
 # Known public API functions called from outside lib/ (CLI, plugins, agent runtime).
 # These are entry points by design — not dead code.
 ALLOWED_PUBLIC_API = {
-    # hermes_dream.py — called by `hermes dream` CLI
+    # autodream.dream.py — called by `hermes dream` CLI
     "create_dream_artifact", "list_dreams", "dream_diff", "apply_dream", "discard_dream",
-    # hermes_preflight.py — called by preflight plugin
+    # autodream.preflight.py — called by preflight plugin
     "should_run_preflight", "record_verify_citations", "read_citations", "persist_citations",
     "get_or_create_gate", "write_preflight_telemetry",
-    # hermes_llm.py — called by provider dispatch
+    # autodream.llm.py — called by provider dispatch
     "load_providers_config", "classify_exception",
-    # hermes_providers_*.py — called by register_all
+    # autodream.providers_*.py — called by register_all
     "anthropic_chat", "chat_completions", "embeddings",
-    # hermes_recall.py — called by dream CLI + tests
+    # autodream.recall.py — called by dream CLI + tests
     "build_recall_set", "run_regression_check", "memory_token_count",
     "recall_artifact_path", "write_recall_artifact",
-    # hermes_trust.py — called by dream apply + audit CLI
+    # autodream.trust.py — called by dream apply + audit CLI
     "verify_signature", "append_audit_row", "write_advisory",
 }
 
@@ -99,7 +99,7 @@ def main():
             exclude_patterns.append(sys.argv[i + 1])
 
     repo_root = Path(__file__).resolve().parent.parent
-    lib_dir = repo_root / "lib"
+    lib_dir = repo_root / "autodream"
     scripts_dir = repo_root / "scripts"
 
     if not lib_dir.exists():

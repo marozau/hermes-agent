@@ -27,7 +27,7 @@ _LIB_ROOT = _SCRIPT_DIR.parent  # ~/.hermes/
 if str(_LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIB_ROOT))
 
-from lib.hermes_dream import (
+from autodream.dream import (
     apply_dream, create_dream_artifact, discard_dream, dream_diff, list_dreams,
 )
 

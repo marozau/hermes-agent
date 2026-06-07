@@ -21,7 +21,7 @@ fi
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 echo "Deploying lib modules from $SCRIPT_DIR/lib/ to $LIVE_DIR/"
 
-for f in "$SCRIPT_DIR"/lib/hermes_providers*.py; do
+for f in "$SCRIPT_DIR"/autodream/providers*.py; do
     cp -v "$f" "$LIVE_DIR/"
 done
 

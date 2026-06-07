@@ -35,7 +35,7 @@ def check_new_functions_have_tests(repo_root: Path, diff_ref: str = "HEAD~1") ->
     """
     try:
         result = subprocess.run(
-            ["git", "diff", diff_ref, "--name-only", "--", "lib/"],
+            ["git", "diff", diff_ref, "--name-only", "--", "autodream/"],
             capture_output=True, text=True, cwd=repo_root,
         )
         changed_files = [f for f in result.stdout.strip().split("\n") if f.endswith(".py")]

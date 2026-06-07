@@ -309,7 +309,7 @@ class MemoryStore:
         # any disk write. The legacy scanner above and the typed scanner below
         # have different rule sets; we honour the union, fail-closed.
         try:
-            from lib.hermes_memory import _scan_for_secrets as _typed_secret_scan
+            from autodream.memory import _scan_for_secrets as _typed_secret_scan
             typed_hit = _typed_secret_scan(content)
             if typed_hit:
                 return {
@@ -320,7 +320,7 @@ class MemoryStore:
                     ),
                 }
         except ImportError:
-            # lib.hermes_memory unavailable (e.g. during early bootstrap); fall
+            # autodream.memory unavailable (e.g. during early bootstrap); fall
             # back to the legacy scanner only.
             _typed_secret_scan = None  # noqa: F841
 
@@ -364,7 +364,7 @@ class MemoryStore:
             # ImportError is non-fatal — lib/ may not be reachable from every
             # entrypoint during early bootstrap.
             try:
-                from lib.hermes_memory import add_entry as _typed_add_entry
+                from autodream.memory import add_entry as _typed_add_entry
             except ImportError:
                 _typed_add_entry = None
             if _typed_add_entry is not None:

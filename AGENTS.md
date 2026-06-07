@@ -530,7 +530,7 @@ explicitly (it's idempotent).
 Thin `pre_llm_call` shim that wires `lib/hermes_preflight.should_run_preflight()`
 into the model dispatch path. The plugin is intentionally minimal — all gate
 state, classification, retrieval, ranking, dedupe, formatting, telemetry,
-and citation persistence live in `lib/hermes_preflight.py`. The plugin is
+and citation persistence live in `autodream/preflight.py`. The plugin is
 just the registration glue.
 
 **Files** (bundled, version-controlled here in the fork):
@@ -580,7 +580,7 @@ works from any checkout. Override `HERMES_PREFLIGHT_CLI` /
 `HERMES_VENV_PYTHON` to point at the runtime-installed copy if desired.
 
 **CI:** `.github/workflows/preflight-ci.yml` triggers on changes to any
-preflight-related path (`lib/hermes_preflight.py`, `plugins/preflight/**`,
+preflight-related path (`autodream/preflight.py`, `plugins/preflight/**`,
 `bin/hermes-preflight`, `tests/lib/test_hermes_preflight*.py`,
 `scripts/smoke-test-preflight.sh`). Runs unit + integration tests on
 Python 3.11 + 3.12, asserts ≥80% coverage on `lib.hermes_preflight`, then
@@ -1108,12 +1108,12 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 
 ### Canonical helpers — chokepoints
 
-Imports use the dev tree's `lib/` package; at runtime, deployed copies are picked up from `~/.hermes/lib/`.
+Imports use the dev tree's `lib/` package; at runtime, deployed copies are picked up from `~/.hermes/hermes-agent/autodream/`.
 
 **Hard Invariant #1 — `hermes_memory.add_entry()` is the only writer of typed memory entries** (FR-3):
 
 ```python
-from lib.hermes_memory import add_entry
+from autodream.memory import add_entry
 add_entry(
     type="preference|fact|procedure|episode|superseded|trajectory|unknown",
     body="...",
@@ -1128,7 +1128,7 @@ Siblings: `update_entry`, `supersede_entry`, `expire_entry`. **No direct file wr
 **Hard Invariant #2 — `hermes_llm.llm_call(LLMSpec)` is the only LLM call site** (FR-37, NFR-23):
 
 ```python
-from lib.hermes_llm import LLMSpec, llm_call
+from autodream.llm import LLMSpec, llm_call
 result = llm_call(LLMSpec(
     workload="memory_dream_consolidate",   # key into runtime dreams/providers.yaml
     messages=[...],

@@ -28,7 +28,7 @@ _LIB_ROOT = _SCRIPT_DIR.parent  # ~/.hermes/
 if str(_LIB_ROOT) not in sys.path:
     sys.path.insert(0, str(_LIB_ROOT))
 
-from lib.hermes_preflight import (  # noqa: E402
+from autodream.preflight import (  # noqa: E402
     _preflight_dir, _resolve_mode, should_run_preflight,
 )
 
