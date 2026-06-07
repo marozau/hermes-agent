@@ -23,21 +23,6 @@ for _p in (str(_DEV_LIB), str(_DEV_ROOT)):                         # insert in r
     if _p not in sys.path:                                          # so _DEV_ROOT ends up first.
         sys.path.insert(0, _p)
 
-# Runtime lib/ as a fallback for top-level imports (e.g. `import hermes_X`),
-# kept AFTER the dev-tree entries so dev-tree wins on namespace-package
-# resolution.
-_RUNTIME_LIB_CANDIDATES = [
-    Path.home() / ".hermes" / "lib",                                # normal case
-    Path.home().parent.parent / ".hermes" / "lib",                  # profile case: ~/.hermes/profiles/*/home/
-    Path("/Users/im/.hermes/lib"),                                  # fallback
-]
-for _candidate in _RUNTIME_LIB_CANDIDATES:
-    if _candidate.is_dir():
-        lib_str = str(_candidate)
-        if lib_str not in sys.path:
-            sys.path.append(lib_str)                                # append, not insert: dev tree wins
-        break
-
 # HERMES_ROOT is the runtime workspace root — where dreams/, raw/, observability/,
 # memory/, memories/, preflight/ live. Tests use this to locate runtime config
 # (notably ~/.hermes/dreams/providers.yaml). Independent of the dev tree.

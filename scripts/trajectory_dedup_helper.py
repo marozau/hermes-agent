@@ -18,15 +18,9 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def _ensure_lib():
-    """Add hermes lib to sys.path."""
-    import os
-    hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
-    lib_parent = os.path.dirname(os.path.join(hermes_home, "lib"))
-    if lib_parent not in sys.path:
-        sys.path.insert(0, lib_parent)
-
+from lib.hermes_memory import (
+    build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+)
 
 def _emit_telemetry(outcome: str, manifest_size: int, entry_id: str = "") -> None:
     """Emit trajectory_outcome telemetry row to preflight log."""
@@ -54,11 +48,6 @@ def main():
     parser.add_argument("failure_pattern", help="The failure pattern text to classify")
     parser.add_argument("--session-id", default="", help="Session ID for idempotency")
     args = parser.parse_args()
-
-    _ensure_lib()
-    from lib.hermes_memory import (
-        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
-    )
 
     # 1. Build manifest
     manifest = build_manifest()

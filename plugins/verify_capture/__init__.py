@@ -9,24 +9,8 @@ Fail-open everywhere. No exception escapes the hook.
 from __future__ import annotations
 
 import logging
-import os
 import re
-import sys
-from pathlib import Path
 from typing import Any, Literal, Optional
-
-# Ensure ~/.hermes/lib/ is importable regardless of HERMES_HOME value.
-_candidate = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))).resolve()
-for _anchor in [_candidate, _candidate.parent, _candidate.parent.parent, _candidate.parent.parent.parent]:
-    _lib = _anchor / "lib"
-    if _lib.is_dir():
-        if str(_anchor) not in sys.path:
-            sys.path.insert(0, str(_anchor))
-        break
-else:
-    _real_root = Path(os.path.expanduser("~/.hermes")).resolve()
-    if str(_real_root) not in sys.path:
-        sys.path.insert(0, str(_real_root))
 
 logger = logging.getLogger(__name__)
 

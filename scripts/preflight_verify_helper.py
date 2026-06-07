@@ -127,12 +127,6 @@ def emit(session_id: str, verify_cited: list[str] | None = None, match: str | No
     # P6: each ID wrapped individually — one failure doesn't abort the batch.
     if match == "hit" and verify_cited:
         try:
-            import sys as _sys
-            import os as _os
-            _hermes_home = _os.environ.get("HERMES_HOME") or str(_os.path.expanduser("~/.hermes"))
-            _lib_parent = _os.path.dirname(_os.path.join(_hermes_home, "lib"))
-            if _lib_parent not in _sys.path:
-                _sys.path.insert(0, _lib_parent)
             from lib.hermes_memory import reinforce_entry
             for cited_id in verify_cited:
                 if cited_id and cited_id.strip():
@@ -143,6 +137,7 @@ def emit(session_id: str, verify_cited: list[str] | None = None, match: str | No
                             session_id=session_id,
                         )
                     except Exception as e:
+                        import sys as _sys
                         print(f"[verify] reinforce {cited_id} failed: {e}", file=_sys.stderr)
         except Exception as e:
             # Fail-open: reinforcement is an improvement, not a blocker
