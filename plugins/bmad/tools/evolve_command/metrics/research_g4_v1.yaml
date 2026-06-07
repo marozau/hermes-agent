@@ -1,0 +1,66 @@
+# FROZEN metric for Epic 15 G4 — research command body tuning
+# Frozen: 2026-06-07 (Stage 1 of G4 plan)
+# Source: 11 GOLD reference docs (technical-*-2026-06-* under hermes-bmad/planning-artifacts/research/)
+# Revisions policy: ship as research_structural_v2; never retrofit (per Epic 15 OI-1)
+
+name: research_g4_v1
+freeze_date: 2026-06-07
+provenance:
+  reference_docs_n: 11
+  source_dir: /Users/im/usr-local/hermes-bmad/planning-artifacts/research/
+  reference_pattern: "technical-*-2026-06-*.md (gold tier — full frontmatter)"
+  silver_n: 18    # older docs without frontmatter — used for discrimination check
+
+dimensions:
+  yaml_frontmatter:
+    weight: 0.30
+    fields_required: [title, type, status, scope, agent, date, confidence, inputs]
+    scoring: "1.0 if all 8 fields present; 0.5 if 4-7; 0.0 if <4"
+
+  numbered_sections:
+    weight: 0.15
+    min_count: 8
+    bonus_count: 10
+    scoring: "1.0 if >=10; 0.7 if >=8; 0.3 if >=5; 0.0 if <5"
+
+  falsification_section:
+    weight: 0.10
+    detect: 'regex "Falsification welcome" OR "falsifi" (case-insensitive)'
+    scoring: "1.0 present; 0.0 absent"
+
+  numeric_confidence:
+    weight: 0.10
+    detect: 'regex "[Cc]onfidence[:\\s\\*]+(0\\.\\d+|\\d{2,3}%)"'
+    scoring: "1.0 present; 0.0 absent"
+
+  sources_block:
+    weight: 0.10
+    detect: 'regex "##\\s+\\d+\\.\\s+(Sources|Inputs and sources)" — must be a numbered section'
+    scoring: "1.0 present; 0.0 absent"
+
+  methodology_section:
+    weight: 0.05
+    detect: '"Methodology" or "methodology:" appears in body'
+    scoring: "1.0 present; 0.0 absent"
+
+  headline_section:
+    weight: 0.10
+    detect: 'regex "^## 1\\.\\s+Headline"'
+    scoring: "1.0 present; 0.0 absent"
+
+  min_word_count:
+    weight: 0.10
+    threshold: 800
+    scoring: "1.0 if >=800 words; 0.5 if 500-799; 0.0 if <500"
+
+hard_gates:
+  - "yaml_frontmatter_present_at_all"
+  - "min_word_count: 500"
+
+formula: weighted_sum
+output_range: [0.0, 1.0]
+target_for_g4_ship: 0.85
+g4_kill_thresholds:
+  composite_delta_kill: 0.0
+  judge_variance_kill: 0.3
+  constraint_fail_rate_kill: 0.5
