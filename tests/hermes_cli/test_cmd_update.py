@@ -9,11 +9,50 @@ import pytest
 from hermes_cli.main import cmd_update, PROJECT_ROOT
 
 
-def _make_run_side_effect(branch="main", verify_ok=True, commit_count="0"):
-    """Build a side_effect function for subprocess.run that simulates git commands."""
+def _make_run_side_effect(
+    branch="main",
+    verify_ok=True,
+    commit_count="0",
+    pre_fetch_origin_sha=None,
+    post_fetch_origin_sha=None,
+):
+    """Build a side_effect function for subprocess.run that simulates git commands.
+
+    ``pre_fetch_origin_sha`` / ``post_fetch_origin_sha`` stub the SHAs returned
+    by ``git rev-parse --verify --quiet origin/<branch>``, which cmd_update now
+    calls BEFORE and AFTER ``git fetch`` to detect whether the fetch actually
+    advanced the remote-tracking ref. The first matching call returns the
+    pre-fetch SHA; subsequent matching calls return the post-fetch SHA. When
+    a SHA is None the call returns exit 128 + empty stdout (matches an
+    unknown / never-fetched ref).
+
+    Both default to None — backwards-compatible with tests written before the
+    SHA-capture logic existed; ``fetch_advanced_origin`` evaluates False
+    (None == None) and the no-op fast path is preserved.
+    """
+
+    call_state = {"verify_quiet_origin_calls": 0}
 
     def side_effect(cmd, **kwargs):
         joined = " ".join(str(c) for c in cmd)
+
+        # git rev-parse --verify --quiet origin/<branch>  (pre/post-fetch SHA capture)
+        # Must come BEFORE the generic --verify handler below.
+        if (
+            "rev-parse" in joined
+            and "--verify" in joined
+            and "--quiet" in joined
+            and "origin/" in joined
+        ):
+            call_state["verify_quiet_origin_calls"] += 1
+            sha = (
+                pre_fetch_origin_sha
+                if call_state["verify_quiet_origin_calls"] == 1
+                else post_fetch_origin_sha
+            )
+            if sha is None:
+                return subprocess.CompletedProcess(cmd, 128, stdout="", stderr="")
+            return subprocess.CompletedProcess(cmd, 0, stdout=f"{sha}\n", stderr="")
 
         # git rev-parse --abbrev-ref HEAD  (get current branch)
         if "rev-parse" in joined and "--abbrev-ref" in joined:
@@ -329,6 +368,116 @@ class TestCmdUpdateBranchFallback:
             captured = capsys.readouterr()
             assert "applying safe config migrations" in captured.out
             assert "API keys require manual entry" in captured.out
+
+
+class TestCmdUpdateForceDeploy:
+    """cmd_update falls through to the deploy pipeline when (a) the fetch
+    advanced origin/<branch> from a prior stale ref, or (b) the user passed
+    --force-deploy. The pure no-op fast path now requires BOTH "no new
+    commits AND no fetch advance AND no force-deploy" — anything else means
+    runtime state may be drifted from source and must redeploy.
+    """
+
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_update_falls_through_when_fetch_advanced_origin(
+        self, mock_run, _mock_which, mock_args, capsys
+    ):
+        """If git fetch advanced origin/main during this run, the deploy
+        pipeline must run even when HEAD..origin/main rev-list returns 0.
+        That can happen when an external actor (manual pull, another
+        process) advanced HEAD between fetch and rev-list.
+        """
+        from hermes_cli import main as hm
+
+        mock_run.side_effect = _make_run_side_effect(
+            branch="main",
+            verify_ok=True,
+            commit_count="0",
+            pre_fetch_origin_sha="aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            post_fetch_origin_sha="bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+        )
+
+        # Block the post-pull syntax guard so the deploy pipeline can
+        # continue without trying to compile the real source tree.
+        with patch.object(
+            hm, "_validate_critical_files_syntax", return_value=(True, None, None)
+        ):
+            cmd_update(mock_args)
+
+        captured = capsys.readouterr()
+        assert "Already up to date!" not in captured.out
+        assert "advanced during fetch" in captured.out
+
+        commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
+        pull_cmds = [c for c in commands if "pull" in c]
+        assert len(pull_cmds) >= 1, "expected git pull to run on fall-through"
+
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_force_deploy_runs_all_steps_when_up_to_date(
+        self, mock_run, _mock_which, mock_args, capsys
+    ):
+        """--force-deploy bypasses the no-op fast path so the deploy
+        pipeline can re-converge runtime state (pip deps, deployed skills,
+        gateway) with current source even when no new commits exist.
+        """
+        from hermes_cli import main as hm
+
+        mock_args.force_deploy = True
+        mock_run.side_effect = _make_run_side_effect(
+            branch="main",
+            verify_ok=True,
+            commit_count="0",
+            pre_fetch_origin_sha="cccccccccccccccccccccccccccccccccccccccc",
+            post_fetch_origin_sha="cccccccccccccccccccccccccccccccccccccccc",
+        )
+
+        with patch.object(
+            hm, "_validate_critical_files_syntax", return_value=(True, None, None)
+        ):
+            cmd_update(mock_args)
+
+        captured = capsys.readouterr()
+        assert "Already up to date!" not in captured.out
+        assert "--force-deploy" in captured.out
+
+        commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
+        pull_cmds = [c for c in commands if "pull" in c]
+        assert len(pull_cmds) >= 1, "expected git pull on --force-deploy fall-through"
+
+    @patch("shutil.which", return_value=None)
+    @patch("subprocess.run")
+    def test_no_op_banner_shows_sha_and_force_hint(
+        self, mock_run, _mock_which, mock_args, capsys
+    ):
+        """When the pure no-op fast path fires, the banner names the
+        verified SHA and points at --force-deploy as the escape hatch.
+        This makes the silent failure mode of the prior implementation
+        — "Already up to date" without verifying runtime state — visible
+        and recoverable.
+        """
+        sha = "1234567890abcdef1234567890abcdef12345678"
+        mock_run.side_effect = _make_run_side_effect(
+            branch="main",
+            verify_ok=True,
+            commit_count="0",
+            pre_fetch_origin_sha=sha,
+            post_fetch_origin_sha=sha,
+        )
+
+        cmd_update(mock_args)
+
+        captured = capsys.readouterr()
+        assert "Already up to date!" in captured.out
+        # Display is the first 10 chars of the SHA
+        assert f"HEAD = origin/main = {sha[:10]}" in captured.out
+        assert "--force-deploy" in captured.out
+
+        # No pull should have been issued on the no-op path.
+        commands = [" ".join(str(a) for a in c.args[0]) for c in mock_run.call_args_list]
+        pull_cmds = [c for c in commands if "pull" in c]
+        assert len(pull_cmds) == 0
 
 
 class TestCmdUpdateMigrationPrompt:

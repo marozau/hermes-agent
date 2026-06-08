@@ -182,3 +182,42 @@ class TestAcceptHooksOnAgentSubparsers:
             f"stderr: {result.stderr[:300]}"
         )
         assert "unrecognized arguments" not in result.stderr
+
+
+class TestUpdateForceDeployFlag:
+    """`hermes update --force-deploy` must be parseable, distinct from the
+    pre-existing `--force` flag (Windows concurrent-process flag), and must
+    set ``args.force_deploy`` so the update implementation can read it.
+    """
+
+    def test_force_deploy_help_text_appears(self):
+        """`hermes update --help` lists --force-deploy among the options."""
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "hermes_cli.main", "update", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0, (
+            f"update --help returned {result.returncode}\n"
+            f"stderr: {result.stderr[:300]}"
+        )
+        assert "--force-deploy" in result.stdout, (
+            "expected --force-deploy in `hermes update --help` output; "
+            f"got: {result.stdout[:500]}"
+        )
+
+    def test_force_deploy_does_not_collide_with_force(self):
+        """`hermes update --force-deploy --help` must succeed without
+        being interpreted as a typo for the pre-existing --force flag.
+        """
+        import subprocess
+        result = subprocess.run(
+            [sys.executable, "-m", "hermes_cli.main", "update", "--force-deploy", "--help"],
+            capture_output=True,
+            text=True,
+            timeout=15,
+        )
+        assert result.returncode == 0
+        assert "unrecognized arguments" not in result.stderr

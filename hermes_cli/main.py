@@ -6856,6 +6856,32 @@ def _capture_head_sha(git_cmd, cwd) -> str | None:
         return None
 
 
+def _read_ref_sha(git_cmd, cwd, ref: str) -> str | None:
+    """Return the SHA the given ref points at, or None if it doesn't exist.
+
+    Used by ``hermes update`` to capture the local ``origin/<branch>`` ref
+    before and after ``git fetch origin``. If the SHA changed, the fetch
+    actually advanced the remote-tracking branch and the post-pull pipeline
+    must run regardless of any later ``HEAD..origin/<branch>`` rev-list
+    result (which can read pre-fetch state under certain failure modes).
+
+    Returns None for never-fetched refs (--quiet + non-zero exit), which
+    the caller treats as ``!= "<sha>"`` — first fetch ever IS new state.
+    """
+    try:
+        result = subprocess.run(
+            git_cmd + ["rev-parse", "--verify", "--quiet", ref],
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+        )
+        if result.returncode != 0:
+            return None
+        return result.stdout.strip() or None
+    except OSError:
+        return None
+
+
 def _validate_critical_files_syntax(root) -> tuple[bool, str | None, str | None]:
     """Compile each file in ``_UPDATE_CRITICAL_FILES`` to catch SyntaxErrors.
 
@@ -10357,6 +10383,11 @@ def _cmd_update_impl(args, gateway_mode: bool):
         else None
     )
     assume_yes = bool(getattr(args, "yes", False))
+    # --force-deploy: bypass the "Already up to date" early-exit and run the
+    # full post-pull pipeline (pip install, web build, skills sync, config
+    # migration, gateway restart) even when no new commits are available.
+    # Use after a manual git pull or when runtime state drifted from source.
+    force_deploy = bool(getattr(args, "force_deploy", False))
 
     # Whether this update is running without a human at the keyboard.
     # Interactive terminal updates always stash-and-ask (unchanged behavior);
@@ -10469,6 +10500,22 @@ def _cmd_update_impl(args, gateway_mode: bool):
     # Fetch and pull
     try:
 
+        # Resolve target branch BEFORE fetch so we can capture the local
+        # `origin/<branch>` SHA pre- and post-fetch. Comparing them tells us
+        # whether the fetch actually advanced the remote-tracking ref —
+        # the only authoritative signal that this run has new source to
+        # deploy. Without this, a silently-no-op fetch followed by a
+        # rev-list against the (stale) pre-fetch ref produces a false
+        # "Already up to date" verdict and skips the full deploy pipeline.
+        # _resolve_update_branch is idempotent (reads args + config only);
+        # the existing call further down at line ~10515 still runs and
+        # returns the same value — kept for code locality with the auto-
+        # stash / branch-switch block.
+        _pre_fetch_branch = _resolve_update_branch(args)
+        pre_fetch_origin_sha = _read_ref_sha(
+            git_cmd, PROJECT_ROOT, f"origin/{_pre_fetch_branch}"
+        )
+
         print("→ Fetching updates...")
         fetch_result = subprocess.run(
             git_cmd + ["fetch", "origin"],
@@ -10492,6 +10539,16 @@ def _cmd_update_impl(args, gateway_mode: bool):
                 if stderr:
                     print(f"  {stderr.splitlines()[0]}")
             sys.exit(1)
+
+        # Did the fetch advance the local ``origin/<branch>`` ref? This is
+        # the authoritative signal for "new source landed during this run",
+        # independent of any HEAD-vs-origin comparison that might read stale
+        # ref state. See the matching pre_fetch_origin_sha capture above
+        # for the failure mode this defends against.
+        post_fetch_origin_sha = _read_ref_sha(
+            git_cmd, PROJECT_ROOT, f"origin/{_pre_fetch_branch}"
+        )
+        fetch_advanced_origin = pre_fetch_origin_sha != post_fetch_origin_sha
 
         # Get current branch (returns literal "HEAD" when detached)
         result = subprocess.run(
@@ -10573,7 +10630,20 @@ def _cmd_update_impl(args, gateway_mode: bool):
         )
         commit_count = int(result.stdout.strip())
 
-        if commit_count == 0:
+        # Two gates must BOTH be true to take the no-op fast path:
+        #   1. The fetch did not advance origin/<branch> (rules out silent
+        #      fetch failure + ensures we don't trust a stale rev-list).
+        #   2. The user did not pass --force-deploy.
+        # When either fails, fall through to the existing post-pull pipeline
+        # (which is idempotent on a no-op pull) so runtime state can
+        # re-converge with source.
+        no_op = (
+            commit_count == 0
+            and not fetch_advanced_origin
+            and not force_deploy
+        )
+
+        if no_op:
             _invalidate_update_cache()
 
             # Even if origin is up to date, the fork may be behind upstream
@@ -10597,10 +10667,29 @@ def _cmd_update_impl(args, gateway_mode: bool):
                     text=True,
                     check=False,
                 )
-            print("✓ Already up to date!")
+            sha_display = (post_fetch_origin_sha or "unknown")[:10]
+            print(
+                f"✓ Already up to date! (HEAD = origin/{branch} = {sha_display})"
+            )
+            print(
+                "  (runtime deps + skills + gateway not re-verified; "
+                "re-run with --force-deploy to redeploy)"
+            )
             return
 
-        print(f"→ Found {commit_count} new commit(s)")
+        if commit_count == 0:
+            # Fall-through case: source SHA didn't move past HEAD, but
+            # either the fetch advanced origin/<branch> from a prior stale
+            # ref (so the deploy pipeline genuinely has new code to push
+            # through), OR the user explicitly requested a redeploy.
+            if force_deploy:
+                print("→ --force-deploy: re-running deploy pipeline without new commits")
+            else:
+                print(
+                    f"→ origin/{branch} advanced during fetch — running deploy pipeline"
+                )
+        else:
+            print(f"→ Found {commit_count} new commit(s)")
 
         # Snapshot critical state (state.db, config, pairing JSONs, etc.)
         # before pulling so a user can recover if something goes wrong.
@@ -15667,6 +15756,17 @@ Examples:
         action="store_true",
         default=False,
         help="Windows: proceed with the update even when another hermes.exe is detected. The concurrent process will likely cause WinError 32 warnings and may leave a reboot-deferred .exe replacement.",
+    )
+    update_parser.add_argument(
+        "--force-deploy",
+        action="store_true",
+        default=False,
+        help=(
+            "Re-run the full deploy pipeline (pip install, web build, skills "
+            "sync, config migration, gateway restart) even when no new commits "
+            "are available. Use after a manual `git pull` or when runtime "
+            "state has drifted from source."
+        ),
     )
     update_parser.set_defaults(func=cmd_update)
 
