@@ -51,6 +51,17 @@ dependencies = [
   "pyyaml==6.0.3",
   "ruamel.yaml==0.18.17",
   "requests==2.33.0",  # CVE-2026-25645
+  # Bridges Python's stdlib ssl module to the native OS trust store
+  # (macOS Security framework, Windows Schannel, Linux p11-kit/system CAs)
+  # instead of certifi's static bundle.  Without this, mkcert / corporate
+  # private CAs that the OS trusts are invisible to httpx / requests /
+  # openai / aiohttp / urllib3 — every Python TLS handshake to a private
+  # cert fails with `APIConnectionError` even though `curl` works.
+  # Activated globally via `sitecustomize.py` at the venv level
+  # (`import truststore; truststore.inject_into_ssl()`).  Pip itself
+  # uses truststore as the default backend since 23.2.  ~50 KB, zero
+  # transitive deps; maintained by Seth Larson (urllib3 maintainer).
+  "truststore==0.10.4",
   "jinja2==3.1.6",
   # Bumped from 2.12.5 to 2.13.4 to pull in pydantic-core 2.46.4.
   # pydantic-core 2.41.5 (pulled by 2.12.5) segfaults when the OpenAI SDK's
