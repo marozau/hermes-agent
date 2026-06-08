@@ -235,15 +235,21 @@ rm ~/.hermes/profiles/<profile>/SOUL.md.bak.<date>
 
 ## Sweep mode — auditing all profile SOULs
 
+Quick read-only snapshot of every profile's conformance:
+
 ```bash
-for p in $(ls -d ~/.hermes/profiles/*/); do
-  profile=$(basename $p)
-  ~/.hermes/skills/profile-soul-author/scripts/verify-soul.sh $profile 2>&1 \
-    | head -20 | sed "s/^/[$profile] /"
-done
+~/.hermes/skills/profile-soul-author/scripts/smoke-test.sh --sweep-only
 ```
 
-Triage results into "rewrite now" (≥3 failures) vs. "leave for now" (1–2 cosmetic failures). Don't try to fix all profiles in one session — each one is a separate judgment call about persona + skill loadout + sources-of-truth.
+Output is one line per profile: `<profile>: N failure(s)`. Triage into "rewrite now" (≥3 failures) vs. "leave for now" (1–2 cosmetic failures). Don't try to fix all profiles in one session — each one is a separate judgment call about persona + skill loadout + sources-of-truth.
+
+## Smoke test — validating the skill itself
+
+```bash
+~/.hermes/skills/profile-soul-author/scripts/smoke-test.sh
+```
+
+Runs seven checks: skill artifacts present, frontmatter parses, template has the required sections, deployed to every profile, positive case (a known-conforming SOUL passes), negative case (a synthetic rotted SOUL is correctly flagged with ≥ 4 violations), and the cross-profile sweep. Safe to run anytime; exits non-zero on any failure. Use post-deploy or on a cron to detect drift.
 
 ## References
 
