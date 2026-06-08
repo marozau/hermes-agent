@@ -451,6 +451,23 @@ def _backfill_optional_provenance(quiet: bool = False) -> List[str]:
     return backfilled
 
 
+def _sync_supplementary_files(src_dir: Path, dest_dir: Path) -> None:
+    """Additive file sync: copy files from src_dir to dest_dir that are missing.
+
+    Does NOT overwrite existing files — users may have customized templates.
+    Does NOT delete files that exist in dest but not in src.
+    Recurses into subdirectories.
+    """
+    for src_file in sorted(src_dir.rglob("*")):
+        if not src_file.is_file():
+            continue
+        rel = src_file.relative_to(src_dir)
+        dest_file = dest_dir / rel
+        if not dest_file.exists():
+            dest_file.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(src_file, dest_file)
+
+
 def sync_skills(quiet: bool = False) -> dict:
     """
     Sync bundled skills into ~/.hermes/skills/ using the manifest.
@@ -640,12 +657,36 @@ def sync_skills(quiet: bool = False) -> dict:
     for supp_dir in _supplementary_dirs:
         rel = supp_dir.relative_to(bundled_dir)
         dest_supp = SKILLS_DIR / rel
-        if not dest_supp.exists():
-            try:
+        try:
+            if not dest_supp.exists():
                 dest_supp.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copytree(supp_dir, dest_supp)
-            except (OSError, IOError) as e:
-                logger.debug("Could not copy supplementary dir %s: %s", supp_dir, e)
+            else:
+                # Directory already exists — do additive file sync so new
+                # files added to the bundled source are picked up on update.
+                # Existing files are NOT overwritten (users may have customized).
+                _sync_supplementary_files(supp_dir, dest_supp)
+        except (OSError, IOError) as e:
+            logger.debug("Could not sync supplementary dir %s: %s", supp_dir, e)
+
+    # Also copy supplementary files at category level — files that sit
+    # alongside skill directories but aren't inside a skill or supplementary
+    # directory (e.g. agent-manifest.yaml, tea-index.yaml).
+    _supplementary_file_roots = set(_supplementary_dirs)
+    for cat in sorted(_skill_categories):
+        for child in cat.iterdir():
+            if child.is_dir():
+                continue
+            if child in _supplementary_file_roots:
+                continue
+            rel = child.relative_to(bundled_dir)
+            dest_file = SKILLS_DIR / rel
+            if not dest_file.exists():
+                try:
+                    dest_file.parent.mkdir(parents=True, exist_ok=True)
+                    shutil.copy2(child, dest_file)
+                except (OSError, IOError) as e:
+                    logger.debug("Could not copy supplementary file %s: %s", child, e)
 
     _write_manifest(manifest)
     optional_provenance_backfilled = _backfill_optional_provenance(quiet=quiet)
