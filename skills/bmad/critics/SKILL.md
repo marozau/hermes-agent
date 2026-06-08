@@ -241,3 +241,13 @@ Format the JSON for human review. Group by severity, then by critic. Include a
 JSON array (≤15 findings) + executive summary + per-finding artifact_location.
 Suitable for downstream consumption by /code-review (when reviewing a code
 artifact) or BMAD's fix-round commit pattern (D-48 line-number attestation).
+
+## References
+
+- `references/architecture-review-patterns.md` — Common critic findings when
+  reviewing BMAD architecture documents: high-yield lenses, recurring bug
+  patterns in pseudo-code, design smells, and a focused 2-batch critic plan
+  optimized for architecture review.
+- `references/parallel-document-composition.md` — Pattern for composing large
+  planning documents (architecture, PRD) via parallel sub-agents: section
+  boundaries, shared context, merge/dedup, and post-merge critics workflow.

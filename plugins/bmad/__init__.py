@@ -348,6 +348,14 @@ def register(ctx) -> None:
         args_hint="",
     )
 
+    # Orchestration commands (Epic 7)
+    from plugins.bmad.commands.orchestrate import handler as _orchestrate_handler
+    ctx.register_command(
+        name="bmad:orchestrate",
+        handler=_bind_ctx(_orchestrate_handler),
+        args_hint="<epic-number-or-path> [--resume] [--dry-run]",
+    )
+
     # TEA commands (ungated)
 
     # CIS commands (ungated)
