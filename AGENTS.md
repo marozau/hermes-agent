@@ -46,7 +46,7 @@ hermes-agent/
 │   ├── hermes-achievements/  # Gamified achievement tracking
 │   ├── observability/    # Metrics / traces / logs plugin
 │   ├── image_gen/        # Image-generation providers
-│   ├── preflight/        # FAMA Tier-2 #3 / Epic 7 — pre_llm_call shim that calls lib/hermes_preflight
+│   ├── preflight/        # FAMA Tier-2 #3 / Epic 7 — pre_llm_call shim that calls autodream.preflight
 │   └── <others>/         # disk-cleanup, example-dashboard, google_meet, platforms,
 │                         #   spotify, strike-freedom-cockpit, ...
 ├── optional-skills/      # Heavier/niche skills shipped but NOT active by default
@@ -527,10 +527,10 @@ explicitly (it's idempotent).
 
 ### Preflight plugin (`plugins/preflight/` — FAMA Tier-2 #3 / Epic 7)
 
-Thin `pre_llm_call` shim that wires `lib/hermes_preflight.should_run_preflight()`
+Thin `pre_llm_call` shim that wires `autodream.preflight.should_run_preflight()`
 into the model dispatch path. The plugin is intentionally minimal — all gate
 state, classification, retrieval, ranking, dedupe, formatting, telemetry,
-and citation persistence live in `lib/hermes_preflight.py`. The plugin is
+and citation persistence live in `autodream/preflight.py`. The plugin is
 just the registration glue.
 
 **Files** (bundled, version-controlled here in the fork):
@@ -538,7 +538,7 @@ just the registration glue.
 ```
 plugins/preflight/
 ├── __init__.py    # register(ctx) → ctx.register_hook("pre_llm_call", on_pre_llm_call)
-└── plugin.yaml    # manifest (name, version, requires lib.hermes_preflight)
+└── plugin.yaml    # manifest (name, version, requires autodream.preflight)
 ```
 
 **Runtime state lives elsewhere** (per the dev tree vs runtime split in the
@@ -580,10 +580,10 @@ works from any checkout. Override `HERMES_PREFLIGHT_CLI` /
 `HERMES_VENV_PYTHON` to point at the runtime-installed copy if desired.
 
 **CI:** `.github/workflows/preflight-ci.yml` triggers on changes to any
-preflight-related path (`lib/hermes_preflight.py`, `plugins/preflight/**`,
-`bin/hermes-preflight`, `tests/lib/test_hermes_preflight*.py`,
+preflight-related path (`autodream/preflight.py`, `plugins/preflight/**`,
+`bin/hermes-preflight`, `tests/autodream/test_hermes_preflight*.py`,
 `scripts/smoke-test-preflight.sh`). Runs unit + integration tests on
-Python 3.11 + 3.12, asserts ≥80% coverage on `lib.hermes_preflight`, then
+Python 3.11 + 3.12, asserts ≥80% coverage on `autodream.preflight`, then
 the smoke test.
 
 ### BMAD plugin (`plugins/bmad/`)
@@ -969,7 +969,7 @@ confined to `<dream_id>/.hermes-private/` inside each dream artifact.
 |---|---|---|
 | Source code (Python modules, plugins, skills) | `~/usr-local/hermes/{lib,plugins,skills,...}/` | **Yes — only here** |
 | Version-controlled config (e.g. `providers.yaml`) | `~/usr-local/hermes/dreams/providers.yaml` (target — currently at `~/.hermes/dreams/providers.yaml`, mirror to dev tree when stable) | Yes |
-| Tests | `~/usr-local/hermes/tests/lib/`, `~/usr-local/hermes/tests/tools/`, ... | Yes |
+| Tests | `~/usr-local/hermes/tests/autodream/`, `~/usr-local/hermes/tests/tools/`, ... | Yes |
 | Planning artifacts (PRD, architecture, epics, status, stories) | `~/usr-local/hermes/{planning,implementation}-artifacts/` | Yes |
 | **Runtime state** — dream artifacts, audit log, raw entries, memory store, telemetry, logs, per-instance preflight config | `~/.hermes/{dreams,raw,observability,memory,memories,preflight,logs}/` | **No — written by code at runtime** |
 | Per-instance / per-profile config | `~/.hermes/config.yaml`, `~/.hermes/preflight/config.yaml`, `~/.hermes/.env` | Operator-edited, not version-controlled |
@@ -1024,19 +1024,19 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 
 ```
 ~/usr-local/hermes/
-├── lib/                                # Substrate helpers (fork-only; NOT upstream hermes-agent)
-│   ├── hermes_memory.py                # FR-3 chokepoint — add_entry / update_entry / supersede_entry / expire_entry / read_entries
-│   ├── hermes_llm.py                   # LLMSpec + llm_call (Prefect @task; cache_policy=INPUTS) — sole LLM call site
-│   ├── hermes_dream.py                 # create_dream_artifact / apply_dream / discard_dream (lock + COW)
-│   ├── hermes_recall.py                # run_regression_check — dry-run gate for proposals
-│   ├── hermes_trust.py                 # attestation pre-flight + rebaseline
-│   ├── hermes_preflight.py             # pre_task_start classification + retrieval (≤200ms p95)
-│   ├── hermes_providers.py             # register_all() — Story 3.8 dispatcher entry point
-│   ├── hermes_providers_anthropic.py   # Story 3.6: Anthropic Messages API + cache_control breakpoints
-│   ├── hermes_providers_chat.py        # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
-│   └── README.md                       # Provider adapter architecture + deploy.sh + fixtures
-├── tests/lib/                          # Substrate + provider adapter tests
-│   ├── conftest.py                     # Dev-tree lib/ on sys.path + HERMES_ROOT
+├── autodream/                          # Substrate helpers (fork-only; NOT upstream hermes-agent)
+│   ├── memory.py                       # FR-3 chokepoint — add_entry / update_entry / supersede_entry / expire_entry / read_entries
+│   ├── llm.py                          # LLMSpec + llm_call (Prefect @task; cache_policy=INPUTS) — sole LLM call site
+│   ├── dream.py                        # create_dream_artifact / apply_dream / discard_dream (lock + COW)
+│   ├── recall.py                       # run_regression_check — dry-run gate for proposals
+│   ├── trust.py                        # attestation pre-flight + rebaseline
+│   ├── preflight.py                    # pre_task_start classification + retrieval (≤200ms p95)
+│   ├── providers.py                    # register_all() — Story 3.8 dispatcher entry point
+│   ├── providers_anthropic.py          # Story 3.6: Anthropic Messages API + cache_control breakpoints
+│   ├── providers_chat.py               # Story 3.7: shared /chat/completions adapter (DeepSeek + OpenAI)
+│   └── README.md                       # Provider adapter architecture + fixtures
+├── tests/autodream/                          # Substrate + provider adapter tests
+│   ├── conftest.py                     # Dev-tree autodream/ package + HERMES_ROOT
 │   ├── test_hermes_memory.py
 │   ├── test_hermes_llm.py
 │   ├── test_hermes_dream.py
@@ -1101,19 +1101,19 @@ A standalone **V1 Definition-of-Done audit** against PRD §18 found:
 ├── observability/
 │   ├── llm_calls.jsonl                 # Per-call telemetry (workload, model, tokens, cache_read, latency, schema_status)
 │   └── advisory.jsonl
-├── memory/typed/                       # Frontmattered typed entries (written by lib/hermes_memory.add_entry)
+├── memory/typed/                       # Frontmattered typed entries (written by autodream.memory.add_entry)
 ├── memories/                           # LEGACY § -delimited memory (Story 1.5 follow-up will retire)
 └── logs/                               # agent.log / errors.log / gateway.log
 ```
 
 ### Canonical helpers — chokepoints
 
-Imports use the dev tree's `lib/` package; at runtime, deployed copies are picked up from `~/.hermes/lib/`.
+Imports use the dev tree's `lib/` package; at runtime, deployed copies are picked up from `~/.hermes/hermes-agent/autodream/`.
 
 **Hard Invariant #1 — `hermes_memory.add_entry()` is the only writer of typed memory entries** (FR-3):
 
 ```python
-from lib.hermes_memory import add_entry
+from autodream.memory import add_entry
 add_entry(
     type="preference|fact|procedure|episode|superseded|trajectory|unknown",
     body="...",
@@ -1128,7 +1128,7 @@ Siblings: `update_entry`, `supersede_entry`, `expire_entry`. **No direct file wr
 **Hard Invariant #2 — `hermes_llm.llm_call(LLMSpec)` is the only LLM call site** (FR-37, NFR-23):
 
 ```python
-from lib.hermes_llm import LLMSpec, llm_call
+from autodream.llm import LLMSpec, llm_call
 result = llm_call(LLMSpec(
     workload="memory_dream_consolidate",   # key into runtime dreams/providers.yaml
     messages=[...],
@@ -1159,7 +1159,7 @@ result = llm_call(LLMSpec(
 
 The dream bundle (`[system | skills bundle | trajectories | human turn]`) **must be byte-stable within a flow run.** Mutations on message dicts re-hash the block and invalidate `cache_control`. Adapter code MUST build new dicts; never mutate in place. Bundle is assembled **once per flow run** — building it mid-flow is the cache-break trap.
 
-Cross-references: this is the doctrine CLAUDE.md cites and that the provider adapters in `lib/hermes_providers_anthropic.py` gate on. Story 3.8's end-to-end smoke test asserts the cache-warm second run pays zero provider cost.
+Cross-references: this is the doctrine CLAUDE.md cites and that the provider adapters in `autodream/providers_anthropic.py` gate on. Story 3.8's end-to-end smoke test asserts the cache-warm second run pays zero provider cost.
 
 ### Provider routing (workload-keyed)
 
@@ -1232,7 +1232,7 @@ hermes-runtime-update && hermes gateway restart
 
 **Why no file-copy script.** The two checkouts are two working copies of the same private repo (dev tree → `origin = hermes-agent-private`; runtime → `private = hermes-agent-private`). `git pull` already moves code; `hermes update` wraps it with the skills-sync and dep-install steps you need anyway. Earlier file-copy scripts (`deploy.sh`, `deploy-skills.sh`) were removed because they introduced a parallel deployment path that could `rsync --delete` user-customized skills.
 
-Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/lib/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last `hermes update` there.
+Tests run against the dev tree (source-of-truth), NOT against the runtime checkout — `pytest tests/autodream/` from `~/usr-local/hermes/` exercises the version you're about to push. Don't `pytest` against `~/.hermes/hermes-agent/` either; its state lags the dev tree by however long since the last `hermes update` there.
 
 ### Definition-of-Done (V1)
 

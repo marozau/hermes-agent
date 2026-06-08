@@ -2,31 +2,15 @@
 
 Story 12.2: post_llm_call hook that scans the assistant response for a fenced
 ```yaml self_report: block, validates it through Pydantic, and dispatches to
-the canonical writers via lib.verify_dispatch (Story 12.3).
+the canonical writers via autodream.verify_dispatch (Story 12.3).
 
 Fail-open everywhere. No exception escapes the hook.
 """
 from __future__ import annotations
 
 import logging
-import os
 import re
-import sys
-from pathlib import Path
 from typing import Any, Literal, Optional
-
-# Ensure ~/.hermes/lib/ is importable regardless of HERMES_HOME value.
-_candidate = Path(os.environ.get("HERMES_HOME", os.path.expanduser("~/.hermes"))).resolve()
-for _anchor in [_candidate, _candidate.parent, _candidate.parent.parent, _candidate.parent.parent.parent]:
-    _lib = _anchor / "lib"
-    if _lib.is_dir():
-        if str(_anchor) not in sys.path:
-            sys.path.insert(0, str(_anchor))
-        break
-else:
-    _real_root = Path(os.path.expanduser("~/.hermes")).resolve()
-    if str(_real_root) not in sys.path:
-        sys.path.insert(0, str(_real_root))
 
 logger = logging.getLogger(__name__)
 
@@ -129,7 +113,7 @@ def on_post_llm_call(
 
     # Dispatch to canonical writers
     try:
-        from lib.verify_dispatch import dispatch_self_report
+        from autodream.verify_dispatch import dispatch_self_report
         dispatch_self_report(report, session_id=session_id)
     except Exception as e:
         logger.warning("verify_capture: dispatch failed: %s", e)

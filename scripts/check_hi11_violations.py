@@ -18,9 +18,9 @@ from pathlib import Path
 
 # Files to check (the three LLM-touching surfaces from the retrospective)
 CHECK_FILES = [
-    "lib/hermes_dream.py",
-    "lib/hermes_preflight.py",
-    "lib/hermes_memory.py",
+    "autodream/dream.py",
+    "autodream/preflight.py",
+    "autodream/memory.py",
 ]
 
 

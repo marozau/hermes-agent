@@ -8,7 +8,7 @@ Usage:
     hermes-dream apply DREAM_ID [--only GLOB] [--accept]
     hermes-dream discard DREAM_ID
 
-The verbs map 1:1 to the canonical helpers in lib/hermes_dream.py. Proper
+The verbs map 1:1 to the canonical helpers in autodream/dream.py. Proper
 integration into the `hermes` CLI (subparser registration) is tracked as
 Story 4.8 follow-up; this standalone script lets operators exercise the
 substrate today.
@@ -19,15 +19,12 @@ import os
 import sys
 from pathlib import Path
 
-# Resolve the module path from this script's install location, NOT from
-# HERMES_HOME — the env var controls where artifacts/memory live, not where
-# the python module is installed.
-_SCRIPT_DIR = Path(__file__).resolve().parent
-_LIB_ROOT = _SCRIPT_DIR.parent  # ~/.hermes/
-if str(_LIB_ROOT) not in sys.path:
-    sys.path.insert(0, str(_LIB_ROOT))
+# Fallback for stale editable install
+_src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
+if _src_root and _src_root not in sys.path:
+    sys.path.insert(0, _src_root)
 
-from lib.hermes_dream import (
+from autodream.dream import (
     apply_dream, create_dream_artifact, discard_dream, dream_diff, list_dreams,
 )
 

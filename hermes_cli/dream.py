@@ -1,7 +1,7 @@
 """hermes_cli.dream — CLI surface for the Auto-Dream substrate (Epic 4 / FR-13).
 
 Implements `hermes dream {create|status|diff|apply|discard}` by wrapping
-`lib.hermes_dream`. The library does the work; this module is argparse glue
+`autodream.dream`. The library does the work; this module is argparse glue
 + output formatting only — no business logic.
 
 Story 4.8 (deferred from initial Epic 4 ship): wires the dream verbs into
@@ -9,11 +9,11 @@ Story 4.8 (deferred from initial Epic 4 ship): wires the dream verbs into
 `status`, `chat`, `curator`, etc.
 
 Spec mapping:
-- create  → lib.hermes_dream.create_dream_artifact     (FR-13, FR-14, NFR-14)
-- status  → lib.hermes_dream.list_dreams               (FR-17)
-- diff    → lib.hermes_dream.dream_diff                (FR-18)
-- apply   → lib.hermes_dream.apply_dream               (FR-19, FR-20, FR-22, NFR-9, Hard #4/#9)
-- discard → lib.hermes_dream.discard_dream             (FR-21, NFR-19)
+- create  → autodream.dream.create_dream_artifact     (FR-13, FR-14, NFR-14)
+- status  → autodream.dream.list_dreams               (FR-17)
+- diff    → autodream.dream.dream_diff                (FR-18)
+- apply   → autodream.dream.apply_dream               (FR-19, FR-20, FR-22, NFR-9, Hard #4/#9)
+- discard → autodream.dream.discard_dream             (FR-21, NFR-19)
 """
 from __future__ import annotations
 
@@ -64,7 +64,7 @@ def register_cli(dream_parser: argparse.ArgumentParser) -> None:
     )
     create_p.add_argument(
         "--memory-dir",
-        help="Memory dir to read from (default: profile-aware via lib.hermes_memory).",
+        help="Memory dir to read from (default: profile-aware via autodream.memory).",
     )
     create_p.add_argument(
         "--dreams-dir",
@@ -201,12 +201,12 @@ def _resolve_actor(args: argparse.Namespace) -> Optional[str]:
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Verb implementations — thin wrappers around lib.hermes_dream
+# Verb implementations — thin wrappers around autodream.dream
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 def _cmd_create(args: argparse.Namespace) -> None:
-    from lib.hermes_dream import create_dream_artifact
+    from autodream.dream import create_dream_artifact
 
     try:
         dream_id = create_dream_artifact(
@@ -244,7 +244,7 @@ def _cmd_create(args: argparse.Namespace) -> None:
 
 
 def _cmd_status(args: argparse.Namespace) -> None:
-    from lib.hermes_dream import list_dreams
+    from autodream.dream import list_dreams
 
     dreams = list_dreams(dreams_dir=args.dreams_dir)
 
@@ -273,7 +273,7 @@ def _cmd_status(args: argparse.Namespace) -> None:
 
 
 def _cmd_diff(args: argparse.Namespace) -> None:
-    from lib.hermes_dream import dream_diff
+    from autodream.dream import dream_diff
 
     try:
         out = dream_diff(args.dream_id, dreams_dir=args.dreams_dir)
@@ -285,7 +285,7 @@ def _cmd_diff(args: argparse.Namespace) -> None:
 
 
 def _cmd_apply(args: argparse.Namespace) -> None:
-    from lib.hermes_dream import apply_dream
+    from autodream.dream import apply_dream
 
     try:
         result = apply_dream(
@@ -314,7 +314,7 @@ def _cmd_apply(args: argparse.Namespace) -> None:
 
 
 def _cmd_discard(args: argparse.Namespace) -> None:
-    from lib.hermes_dream import discard_dream
+    from autodream.dream import discard_dream
 
     try:
         result = discard_dream(

@@ -18,20 +18,30 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-
-def _ensure_lib():
-    """Add hermes lib to sys.path."""
-    import os
-    hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
-    lib_parent = os.path.dirname(os.path.join(hermes_home, "lib"))
-    if lib_parent not in sys.path:
-        sys.path.insert(0, lib_parent)
-
+try:
+    from autodream.memory import (
+        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+    )
+except ImportError:
+    # Fallback for environments without editable install
+    _src_root = os.environ.get("HERMES_PYTHON_SRC_ROOT", "")
+    if _src_root and _src_root not in sys.path:
+        sys.path.insert(0, _src_root)
+    try:
+        from autodream.memory import (
+            build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
+        )
+    except ImportError as _e:
+        raise ImportError(
+            "autodream is not installed. Run 'pip install -e .' in ~/.hermes/hermes-agent/ "
+            "or set HERMES_PYTHON_SRC_ROOT to the repo root."
+        ) from _e
 
 def _emit_telemetry(outcome: str, manifest_size: int, entry_id: str = "") -> None:
     """Emit trajectory_outcome telemetry row to preflight log."""
     import os
-    hermes_home = os.environ.get("HERMES_HOME") or str(Path.home() / ".hermes")
+    from autodream._paths import resolve_hermes_home
+    hermes_home = str(resolve_hermes_home())
     log_dir = Path(hermes_home) / "preflight" / "log"
     log_dir.mkdir(parents=True, mode=0o700, exist_ok=True)
     today = datetime.now(timezone.utc).strftime("%Y-%m-%d")
@@ -54,11 +64,6 @@ def main():
     parser.add_argument("failure_pattern", help="The failure pattern text to classify")
     parser.add_argument("--session-id", default="", help="Session ID for idempotency")
     args = parser.parse_args()
-
-    _ensure_lib()
-    from lib.hermes_memory import (
-        build_manifest, classify_trajectory_with_manifest, reinforce_entry, add_entry,
-    )
 
     # 1. Build manifest
     manifest = build_manifest()

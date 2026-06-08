@@ -3,17 +3,17 @@ name: hermes-preflight
 on:
   push:
     paths:
-      - 'lib/hermes_preflight.py'
+      - 'autodream/preflight.py'
       - 'plugins/preflight/**'
       - 'bin/hermes-preflight'
-      - 'tests/lib/test_hermes_preflight*.py'
+      - 'tests/autodream/test_hermes_preflight*.py'
       - 'scripts/smoke-test-preflight.sh'
   pull_request:
     paths:
-      - 'lib/hermes_preflight.py'
+      - 'autodream/preflight.py'
       - 'plugins/preflight/**'
       - 'bin/hermes-preflight'
-      - 'tests/lib/test_hermes_preflight*.py'
+      - 'tests/autodream/test_hermes_preflight*.py'
 
 jobs:
   test:
@@ -29,8 +29,8 @@ jobs:
       - name: Install deps
         run: pip install pytest pytest-cov pyyaml
       - name: Unit + integration tests
-        run: python -m pytest tests/lib/test_hermes_preflight*.py -v --tb=short
+        run: python -m pytest tests/autodream/test_hermes_preflight*.py -v --tb=short
       - name: Coverage
-        run: python -m pytest tests/lib/test_hermes_preflight.py --cov=lib.hermes_preflight --cov-report=term --cov-fail-under=80 -q
+        run: python -m pytest tests/autodream/test_hermes_preflight.py --cov=autodream.preflight --cov-report=term --cov-fail-under=80 -q
       - name: Smoke test
         run: bash scripts/smoke-test-preflight.sh
