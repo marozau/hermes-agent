@@ -525,6 +525,23 @@ as a side effect of importing `model_tools.py`. Code paths that read plugin
 state without importing `model_tools.py` first must call `discover_plugins()`
 explicitly (it's idempotent).
 
+**Canonical hook signature** (drift here causes silent failures — the hook
+appears registered but never fires, with no error):
+
+```python
+def my_hook(tool_name, args, result, task_id, session_id,
+            tool_call_id, duration_ms, **kwargs):
+    ...
+```
+
+The parameter names are `args` and `result`, NOT `tool_args` / `tool_result`.
+A plugin written against the wrong names will silently no-op every
+invocation. Full hook list: `on_session_start`, `on_session_end`,
+`on_session_finalize`, `on_session_reset`, `pre_dispatch`, `pre_tool_call`,
+`post_tool_call`, `pre_api_request`, `post_api_request`, `pre_llm_call`,
+`post_llm_call`. Set `HERMES_PLUGINS_DEBUG=1` for verbose plugin-discovery
+logs to stderr when hooks aren't firing.
+
 ### Preflight plugin (`plugins/preflight/` — FAMA Tier-2 #3 / Epic 7)
 
 Thin `pre_llm_call` shim that wires `autodream.preflight.should_run_preflight()`
