@@ -61,6 +61,42 @@ Footer: `Contract reference: ~/.hermes/docs/PROFILE-FILE-CONTRACT.md`.
 
 ## Step-by-step procedure
 
+### Step 0 — Workspace check (before anything else)
+
+This procedure writes to two kinds of file:
+
+- **Runtime files** (`~/.hermes/profiles/<p>/SOUL.md`, the soul-guardian baseline at `~/.hermes/memory/soul-guardian/approved/profiles/<p>/SOUL.md`) — not in any git tree; edit live.
+- **Source-tree files** (`<repo>/AGENTS.md`, `<repo>/docs/...`, in-repo skill files — Step 3's migration destinations) — IN git; need a feature branch.
+
+Before starting, verify two things:
+
+**A. You are NOT inside the live Hermes runtime at `~/.hermes/hermes-agent/`.**
+
+```bash
+pwd | grep -qE '(^|/)\.hermes/hermes-agent(/|$)' && {
+  echo "STOP. cwd is inside live runtime. cd to a worktree and rerun."; exit 1; }
+```
+
+The runtime is what's executing right now. Even though it is a git checkout, editing or committing there is forbidden (see `~/usr-local/hermes/AGENTS.md` §"Workspace Discipline"). The runtime syncs ONE-WAY from origin via `hermes update`. Commit there and you'll either mutate the running binary or lose the changes on the next update.
+
+**B. You are on a feature branch in a worktree, not on `main` in the dev tree.**
+
+If Step 3's migration list ends up empty (the SOUL had no operational content to migrate), the branch step is optional — but the cwd check (A) is mandatory regardless. When in doubt, branch:
+
+```bash
+cd <repo>                                # the source tree whose files Step 3 will touch
+                                         # for Hermes itself: ~/usr-local/hermes/
+git status                               # must be clean
+git branch --show-current                # must NOT be 'main' / 'master'
+
+# If on main → create a worktree (preferred over a same-tree branch):
+git worktree add ~/usr-local/<project>/worktree/<name> \
+                  -b refactor/profile-<p>-soul main
+cd ~/usr-local/<project>/worktree/<name>
+```
+
+Never commit Step 3 migrations to `main` directly. The procedure that follows assumes you're on a feature branch in a worktree from this point on.
+
 ### Step 1 — Decide what the profile IS (not what it knows)
 
 In one paragraph, in your head: what does this profile *operate*? What's its domain? How does it differ from its sibling profiles (so the persona statement can name the distinction)?
@@ -107,6 +143,8 @@ Common destinations:
 | Architectural decisions with rationale | `<repo>/docs/ARCHITECTURE.md` + `git log` |
 | Specific inviolable rules (e.g. "no IngressRoute") | `<repo>/AGENTS.md` |
 | Provider routing, workload-keyed model choice | `<repo>/dreams/providers.yaml` (or the equivalent project file) |
+
+Every `<repo>/...` destination in this table is a source-tree edit. Step 0 already established that you're on a feature branch in a worktree (NOT inside `~/.hermes/hermes-agent/`, NOT on `main`). All migration edits land on that branch. Open ONE PR for the whole migration — splitting per-file makes review harder (the reviewer needs to see what came out of SOUL and where it went, as one diff).
 
 Verify destinations *before* deletion:
 

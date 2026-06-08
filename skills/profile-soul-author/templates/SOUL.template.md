@@ -92,6 +92,7 @@ This file is profile *identity*. State that varies with the project, sprint, or 
 - Specific commit SHAs and "fixed in commit X" notes → `git log` or the relevant skill / runbook
 - Profile count, profile list, "5+ profiles" → query `ls ~/.hermes/profiles/`
 - Per-project "current focus" framing — project state, not persona
+- Workspace policies, branch conventions, "never commit to runtime"-style rules, any explicit git-workflow text → `<repo>/AGENTS.md` §"Workspace Discipline". If `git` or `worktree` appears in this file outside the Profile-Facts section, it's probably in the wrong file.
 - Anything that would change in under two weeks
 
 If you find yourself wanting to add such content here, you are looking for `<repo>/AGENTS.md` or a skill instead.

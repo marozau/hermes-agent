@@ -1340,6 +1340,38 @@ Full user-facing docs: `website/docs/user-guide/features/kanban.md`.
 
 ## Important Policies
 
+### Workspace Discipline — Where to Edit and Commit
+
+The Hermes codebase exists in three kinds of checkout. Edits and commits have different rules in each:
+
+| Tree | Path pattern | Edit + commit policy |
+|---|---|---|
+| **Live runtime** | `~/.hermes/hermes-agent/` | **NEVER edit or commit here.** This is what executes when you invoke `hermes`. Syncs one-way from origin via `hermes update` after a PR merges to main. Direct commits mutate the running binary and bypass every review gate. |
+| **Dev tree** | `~/usr-local/hermes/` | Read-only for routine agent work. Direct commits to `main` require explicit in-turn user instruction. Otherwise create a worktree (next row) and commit there. |
+| **Worktrees** | `~/usr-local/<project>/worktree/<name>/`, branch `feature/*`, `fix/*`, `refactor/*`, etc. | This is where agent work belongs. Each ongoing initiative gets its own worktree (e.g. Epic 13 lives at `~/usr-local/hermes-autodream/worktree/hermes-agent/` on `feature/epic-13-provider-consolidation`). |
+
+**Before any source-tree edit, verify your cwd:**
+
+```bash
+pwd | grep -qE '(^|/)\.hermes/hermes-agent(/|$)' && \
+  echo "REFUSE — inside live runtime; cd to a worktree" || \
+  echo "OK — outside live runtime"
+```
+
+If you find yourself inside `~/.hermes/hermes-agent/` for any reason (launched from there, navigated via a skill script, sourced a wrapper that `chdir`'d you), `cd` to a worktree before doing anything that would `git commit`, `git push`, or touch a file in the checkout.
+
+**Required flow for any source-tree change you author:**
+
+1. Confirm cwd is in a worktree (not the runtime, not dev-tree `main`).
+2. `git status` — branch is `feature/*` / `fix/*` / `refactor/*`, not `main`.
+3. Stage with `git add -p` (never `git add -A` — too easy to capture unrelated edits).
+4. Show user `git diff --staged`; wait for explicit "commit on this branch".
+5. `git push -u origin <branch>` and open a PR.
+
+The `Co-Authored-By: Claude` trailer is attribution, not consent. A commit you authored inside the runtime, or outside a worktree, or to `main` without explicit in-turn instruction is an incident — not a feature.
+
+**Exception:** read-only state mutations under `~/.hermes/profiles/<p>/` (runtime workspace files like SOUL.md, MEMORY.md, memory/, observability/) are not source-tree edits and don't need a branch. Source-tree files live under `~/usr-local/hermes/` and worktrees thereof.
+
 ### Prompt Caching Must Not Break
 
 Hermes-Agent ensures caching remains valid throughout a conversation. **Do NOT implement changes that would:**

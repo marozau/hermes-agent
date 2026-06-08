@@ -129,5 +129,22 @@ else
   fail "missing footer: 'Contract reference: ~/.hermes/docs/PROFILE-FILE-CONTRACT.md'"
 fi
 
+# 8. Git / workspace operational content — should live in <repo>/AGENTS.md, not SOUL.
+# WARN, not FAIL: the regex matches both persona-level mentions ("this profile
+# operates the `hermes update` deployment workflow" in a Domain bullet) and
+# directive content ("never commit; run `hermes update`" in Inviolable philosophy).
+# The first is fine; the second is a contract violation. Mechanical regex can't
+# distinguish — operator judgment per WARN line decides.
+# Exempts the soul-guardian `approve` command block (Profile facts).
+GIT_HITS=$(grep -nE '\b(git[[:space:]]+(commit|push|checkout|merge|rebase|branch|reset|worktree)|hermes[[:space:]]+update|worktree[[:space:]]+(add|list|remove))\b' "$SOUL" \
+  | grep -vE 'soul_guardian|--file profiles/|approve' || true)
+if [[ -n "$GIT_HITS" ]]; then
+  COUNT=$(echo "$GIT_HITS" | wc -l | tr -d ' ')
+  warn "$COUNT git/workspace mention(s) — review each: directive content belongs in <repo>/AGENTS.md, descriptive (Domain bullet) is OK"
+  echo "$GIT_HITS" | head -3 | sed 's/^/      /'
+else
+  ok "no git/workspace ops content"
+fi
+
 echo "=== $FAILURES failure(s) ==="
 exit $FAILURES

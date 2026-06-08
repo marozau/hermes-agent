@@ -140,10 +140,11 @@ if [[ -d "$SBX" ]]; then
   fail "sandbox dir already exists at $SBX — refusing to overwrite"
 else
   mkdir -p "$SBX"
-  # Write a minimal SOUL that violates the contract in 4 distinct ways:
+  # Write a minimal SOUL that violates the contract in 5 distinct ways:
   # (1) no required sections, (2) state-snapshot count ("8+ profiles"),
   # (3) wrong subcommand ('soul_guardian.py update-baseline'),
-  # (4) no contract-reference footer.
+  # (4) no contract-reference footer,
+  # (5) git-operation content (workspace-discipline anti-pattern from Check 8).
   cat > "$SBX/SOUL.md" <<'ROTTED'
 # Profile: smoke-test — rotted SOUL fixture
 
@@ -157,6 +158,10 @@ To bump the baseline, run:
     python3 ~/.hermes/skills/soul-guardian/scripts/soul_guardian.py update-baseline \
       --file profiles/smoke-test/SOUL.md --actor owner
 
+For day-to-day work, just `git commit` and `git push` to main directly —
+no branch needed. Run `hermes update` when production drifts. Use
+`git worktree add` only when explicitly told to.
+
 That's it. No structured sections. No mode line. No footer.
 ROTTED
 
@@ -168,11 +173,11 @@ ROTTED
   if (( EXIT == 0 )); then
     fail "rotted SOUL passed verify-soul.sh (should have failed)"
   else
-    # Require the script to catch at least the 4 deliberate violations.
-    if (( CAUGHT >= 4 )); then
+    # Require the script to catch at least the 5 deliberate violations.
+    if (( CAUGHT >= 5 )); then
       pass "rotted SOUL flagged ($CAUGHT failures, exit $EXIT)"
     else
-      fail "rotted SOUL flagged only $CAUGHT failures (expected ≥ 4)"
+      fail "rotted SOUL flagged only $CAUGHT failures (expected ≥ 5)"
     fi
     # Show the specific smells caught (capped at 6 lines for readability)
     echo "      Smells caught (sample):"
