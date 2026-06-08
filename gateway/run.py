@@ -10971,7 +10971,12 @@ class GatewayRunner:
         # exits when the gateway dies, taking the detached helper with it).
         _under_service = bool(os.environ.get("INVOCATION_ID"))  # systemd sets this
         _in_container = os.path.exists("/.dockerenv") or os.path.exists("/run/.containerenv")
-        if _under_service or _in_container:
+        # macOS launchd is PID 1 — same semantics as systemd for restart purposes.
+        # When the parent is launchd, the service manager will restart us on exit,
+        # so via_service=True ensures a clean SystemExit(75) instead of the
+        # non-service path that can stall inside asyncio.run() cleanup.
+        _under_launchd = sys.platform == "darwin" and os.getppid() == 1
+        if _under_service or _in_container or _under_launchd:
             self.request_restart(detached=False, via_service=True)
         else:
             self.request_restart(detached=True, via_service=False)
@@ -19833,6 +19838,19 @@ async def start_gateway(config: Optional[GatewayConfig] = None, replace: bool = 
     # Set up signal handlers
     def shutdown_signal_handler(received_signal=None):
         nonlocal _signal_initiated_shutdown
+        # Safety net: if shutdown was already completed by a previous signal
+        # or restart request, this is a repeated SIGTERM from a service manager
+        # trying to kill a stuck process.  On macOS/launchd, asyncio.run()
+        # cleanup can stall after non-service restarts, leaving the process
+        # alive in kevent but immune to further SIGTERMs (the handler
+        # re-schedules the already-completed _stop_task, which returns
+        # immediately at line 6475).  Force-exit to break the loop.
+        if runner._stop_task is not None and runner._stop_task.done():
+            logger.warning(
+                "Received signal but gateway shutdown is already complete — "
+                "force-exiting to break service-manager SIGTERM loop"
+            )
+            os._exit(1)
         # Planned --replace takeover check: when a sibling gateway is
         # taking over via --replace, it wrote a marker naming this PID
         # before sending SIGTERM. If present, treat the signal as a
